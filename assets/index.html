@@ -575,10 +575,18 @@
         <div class="container">
             <h1 class="fw-bold fs-3">渠道服账号管理系统</h1>
             <p class="lead fs-6 mb-0">轻松管理您的游戏账号和登录信息</p>
-            <p class="small" >
-                <a style="color: bisque;" href="https://www.yuque.com/keygen/kg2r5k/kdf5nsq90brxdzqi" target="_blank"
-                    class="text-decoration-none">⭐我正在参加评选，点击此处帮工具作者投一票吧⭐</a>
-            </p>
+            <div class="small" id="voterThankYou">
+                <span style="color: bisque;">感谢以下朋友在5.27-5.30日之间为我投票：</span>
+                <span id="voterNames" style="color: #ffd700;"></span>
+                <small class="d-block" style="color: #adb5bd;">每次刷新页面随机展示4位</small>
+            </div>
+            <script>
+                (function() {
+                    var names = ["西西兰","风雪归夜","弥生","北","絵","柚话说咩","宿伞梦男","莫奈","夏煜文","流星Light","加油","忆凯ovo"];
+                    var shuffled = names.slice().sort(function() { return Math.random() - 0.5; });
+                    document.getElementById('voterNames').textContent = shuffled.slice(0, 4).join('、');
+                })();
+            </script>
         </div>
     </div>
 
