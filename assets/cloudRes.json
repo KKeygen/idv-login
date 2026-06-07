@@ -1,5 +1,5 @@
 {
-  "lastModified": 1780493573,
+  "lastModified": 1780493574,
   "version": "v6.1.0-mac",
   "hotfix": [
     {
@@ -167,7 +167,8 @@
     {
       "need_hotfix_version": [
         "v6.1.0-mac",
-        "v6.0.4-stable"
+        "v6.0.4-stable",
+        "v6.1.0-stable"
       ],
       "target_module": "gamemgr",
       "target_commit": "732a8484fcca52d0620425a34291ccbe304ed436",
