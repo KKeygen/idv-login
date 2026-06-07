@@ -1,5 +1,5 @@
 {
-  "lastModified": 1780493572,
+  "lastModified": 1780493573,
   "version": "v6.1.0-mac",
   "hotfix": [
     {
@@ -163,6 +163,15 @@
       "target_module": "gamemgr",
       "target_commit": "1c64b652d3f71d211e055e04fbf047a634607215",
       "note": "【重要，请务必更新，如更新后出现问题建议直接升级工具】更新游戏启动方式，避免工具持有游戏句柄。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.1.0-mac",
+        "v6.0.4-stable"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "732a8484fcca52d0620425a34291ccbe304ed436",
+      "note": "修复了本次第五人格共研服无法正常下载的问题"
     },
     {
       "need_hotfix_version": [
