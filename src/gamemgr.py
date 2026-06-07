@@ -448,6 +448,7 @@ class Game:
             url=f"https://loadingbaycn.webapp.163.com/app/v1/file_distribution/download_app?app_id={distribution_id}"
             headers={
                 "User-Agent": "",
+                "channel": "mkt-h55"
             }
             session = requests.Session()
             session.trust_env = False
