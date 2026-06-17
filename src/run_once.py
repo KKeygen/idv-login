@@ -1,5 +1,7 @@
 import os
 
+from loguru import Logger
+
 from envmgr import genv
 from logutil import setup_logger
 
@@ -297,7 +299,7 @@ def _prepare_h55_game_path(game_mgr, logger):
     return game
 
 
-def _probe_h55_version_update_prompt(logger):
+def _probe_h55_version_update_prompt(logger:Logger):
     """当云端 h55 分发版本越过配置基准时，一次性提醒用户去启动器更新。"""
     import sys
     if sys.platform != "win32":
@@ -332,21 +334,24 @@ def _probe_h55_version_update_prompt(logger):
 
         genv.set(prompt_key, True, True)
         if _show_yesno(
-            "第五人格新版本提醒",
-            "检测到第五人格新引擎可能已有新版本。\n\n"
-            f"当前云端版本：{remote_version}\n"
-            f"工具内置基准版本：{checkpoint}\n\n"
-            "是否现在检查并更新第五人格？\n"
-            "本版本只提醒一次。"
+            "第五人格6.18新版本提醒",
+            "检测到游戏《第五人格》已有新版本。\n\n"
+            f"最新版本：{remote_version}\n"
+            f"您的版本：{checkpoint}\n\n"
+            "您收到此提示是因为您的工具保存有第五人格账号或第五人格游戏路径，此提示只会出现一次，如果选择以后更新，可以自行前往“渠道服管理界面”更新。"
+            "是否现在更新《第五人格》？\n"
         ):
             if h55_game:
-                logger.info(f"用户选择直接更新第五人格: {h55_game.game_id}")
+                logger.info(f"用户选择直接更新第五人格")
+                logger.warning(f"更新时会出现两个黑色窗口，进度条走到100%后更新即完成，此时再次启动工具或点击桌面上的专用快捷方式即可启动游戏。")
                 h55_game.try_update(73, max_concurrent_files=4)
             else:
                 h55_game = _prepare_h55_game_path(game_mgr, logger)
                 if h55_game:
-                    logger.info(f"用户选择安装/更新第五人格: {h55_game.game_id}")
+                    logger.info(f"用户选择安装/更新第五人格")
+                    logger.warning(f"更新时会出现两个黑色窗口，进度条走到100%后安装/更新即完成，此时再次启动工具或点击桌面上的专用快捷方式即可启动游戏。")
                     h55_game.try_update(73, max_concurrent_files=4)
+            sys.exit()
     except Exception as e:
         logger.error(f"第五人格版本更新提醒失败: {e}")
 
