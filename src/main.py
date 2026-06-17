@@ -898,6 +898,131 @@ def setup_shortcuts():
     shortcutMgr_instance = ShortcutMgr()
     shortcutMgr_instance.handle_shortcuts()
 
+def _format_size_debug(size):
+    if size is None:
+        return "N/A"
+    try:
+        size = float(size)
+    except (TypeError, ValueError):
+        return str(size)
+    units = ["B", "KiB", "MiB", "GiB"]
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    return f"{size:.2f} {units[idx]}"
+
+def _show_auto_start_size_diff_debug(auto_games):
+    """Debug: 启动自启游戏前检查安装目录文件 size 是否匹配远端清单。"""
+    if not auto_games:
+        return
+
+    result = {"warnings": []}
+    done_event = threading.Event()
+
+    def _worker():
+        try:
+            result["warnings"] = _collect_auto_start_size_diff_debug(auto_games)
+        finally:
+            done_event.set()
+
+    worker = threading.Thread(target=_worker, name="launcher-size-diff-debug", daemon=True)
+    worker.start()
+
+    try:
+        from PyQt6.QtCore import QEventLoop, QTimer
+        from PyQt6.QtWidgets import QApplication
+        if QApplication.instance() is not None:
+            wait_loop = QEventLoop()
+            timer = QTimer()
+            timer.setInterval(50)
+
+            def _check_done():
+                if done_event.is_set():
+                    wait_loop.quit()
+
+            timer.timeout.connect(_check_done)
+            timer.start()
+            if not done_event.is_set():
+                wait_loop.exec()
+            timer.stop()
+        else:
+            done_event.wait()
+    except Exception:
+        done_event.wait()
+
+    warnings = result.get("warnings", [])
+    if not warnings:
+        return
+
+    message = "\n\n".join(warnings)
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            None,
+            "DEBUG: 自启动游戏 size 差异",
+            "启动前检测到自启动游戏目录与远端文件清单存在 size 差异：\n\n" + message
+        )
+    except Exception:
+        print("DEBUG: 自启动游戏 size 差异")
+        print(message)
+
+def _collect_auto_start_size_diff_debug(auto_games):
+    """后台线程执行的自启动游戏 size 差异收集逻辑。"""
+    warnings = []
+    for game in auto_games:
+        try:
+            dist_id = game.get_default_distribution()
+            if dist_id == -1:
+                distributions = game.get_distributions()
+                dist_id = distributions[0] if distributions else -1
+            if dist_id == -1:
+                logger.debug(f"[启动器size检查] {game.name or game.game_id}: 无可用分发ID，跳过")
+                continue
+
+            result = game.get_size_diff_files(dist_id)
+            if not result:
+                logger.debug(f"[启动器size检查] {game.name or game.game_id}: 无法获取检查结果，跳过")
+                continue
+
+            diffs = result.get("diffs", [])
+            if not diffs:
+                logger.debug(f"[启动器size检查] {game.name or game.game_id}: size检查通过")
+                continue
+
+            logger.warning(
+                f"[启动器size检查] {game.name or game.game_id}: "
+                f"发现 {len(diffs)} 个size差异文件，distribution={dist_id}, "
+                f"target_version={result.get('target_version', '')}"
+            )
+            for item in diffs:
+                logger.warning(
+                    "[启动器size检查] "
+                    f"{item.get('size_check_status')}: {item.get('path', '')} "
+                    f"expected={item.get('expected_size')} actual={item.get('actual_size')}"
+                )
+
+            preview_lines = []
+            for item in diffs[:25]:
+                path = item.get("path", "")
+                status = item.get("size_check_status", "")
+                expected = _format_size_debug(item.get("expected_size"))
+                actual = _format_size_debug(item.get("actual_size"))
+                preview_lines.append(f"- [{status}] {path} ({actual} / {expected})")
+            if len(diffs) > 25:
+                preview_lines.append(f"... 还有 {len(diffs) - 25} 个文件，详见日志")
+
+            warnings.append(
+                f"{game.name or game.game_id}\n"
+                f"分发ID: {dist_id}\n"
+                f"目标版本: {result.get('target_version', '')}\n"
+                f"差异文件数: {len(diffs)}\n"
+                + "\n".join(preview_lines)
+            )
+        except Exception as e:
+            logger.exception(f"[启动器size检查] {game.name or game.game_id} 检查失败: {e}")
+    return warnings
+
 def setup_network_proxy(proxy_port):
     """Set up the mitmproxy-based network proxy.
 
@@ -1070,6 +1195,7 @@ def setup_network_proxy(proxy_port):
         elif auto_games:
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
+            _show_auto_start_size_diff_debug(auto_games)
             for g in auto_games:
                 g.start()
     elif uri_action == "start" and uri_game_id:
@@ -1091,6 +1217,7 @@ def setup_network_proxy(proxy_port):
             # 全局模式下也启动自启游戏（它们会继承代理环境变量）
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
+            _show_auto_start_size_diff_debug(auto_games)
             for g in auto_games:
                 g.start()
         else:
@@ -1099,6 +1226,7 @@ def setup_network_proxy(proxy_port):
         # 第三优先级：进程模式但有自启游戏 → 启动自启游戏（进程级代理）
         names = ", ".join(g.name for g in auto_games)
         logger.info(f"进程代理模式，启动自启游戏: {names}")
+        _show_auto_start_size_diff_debug(auto_games)
         for g in auto_games:
             g.start()
     else:

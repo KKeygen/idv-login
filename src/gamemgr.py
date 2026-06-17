@@ -603,6 +603,64 @@ class Game:
                 to_update.append(file_info)
         return len(to_update) == 0, to_update
 
+    def size_check(self, files: List[dict]) -> List[dict]:
+        """检查本地文件大小是否匹配，返回存在大小差异或缺失的文件列表。"""
+        root_path = self.get_root_path()
+        if not root_path or not os.path.exists(root_path):
+            return []
+
+        diffs = []
+        for file_info in files:
+            if file_info.get("op", 1) != 1:
+                continue
+            rel_path = file_info.get("path", "")
+            if not rel_path:
+                continue
+            expected_size = self._extract_file_size(file_info)
+            file_path = os.path.join(root_path, rel_path)
+            if not os.path.exists(file_path):
+                item = dict(file_info)
+                item["size_check_status"] = "missing"
+                item["expected_size"] = expected_size
+                item["actual_size"] = None
+                diffs.append(item)
+                continue
+            try:
+                actual_size = os.path.getsize(file_path)
+            except OSError as e:
+                item = dict(file_info)
+                item["size_check_status"] = "stat_error"
+                item["expected_size"] = expected_size
+                item["actual_size"] = None
+                item["error"] = str(e)
+                diffs.append(item)
+                continue
+            if actual_size != expected_size:
+                item = dict(file_info)
+                item["size_check_status"] = "size_mismatch"
+                item["expected_size"] = expected_size
+                item["actual_size"] = actual_size
+                diffs.append(item)
+        return diffs
+
+    def get_size_diff_files(self, distribution_id: int) -> Optional[dict]:
+        """获取指定分发下本地文件 size 差异列表。"""
+        if not self.path or not os.path.exists(self.path):
+            return None
+        if not CloudRes().is_downloadable(getShortGameId(self.game_id)):
+            return None
+        file_distribution_info = self.get_file_distribution_info(distribution_id)
+        if not file_distribution_info:
+            self.logger.error(f"未找到分发ID {distribution_id} 的文件分发信息")
+            return None
+        files = file_distribution_info.get("files", [])
+        diffs = self.size_check(files)
+        return {
+            "distribution_id": distribution_id,
+            "target_version": file_distribution_info.get("version_code", ""),
+            "diffs": diffs,
+        }
+
     def _extract_file_size(self, file_info: dict) -> int:
         for key in ["size", "file_size", "filesize", "length", "fileSize"]:
             value = file_info.get(key)
