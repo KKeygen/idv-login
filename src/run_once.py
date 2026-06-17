@@ -339,7 +339,7 @@ def _probe_h55_version_update_prompt(logger:Logger):
             f"最新版本：{remote_version}\n"
             f"您的版本：{checkpoint}\n\n"
             "您收到此提示是因为您的工具保存有第五人格账号或第五人格游戏路径，此提示只会出现一次，如果选择以后更新，可以自行前往“渠道服管理界面”更新。"
-            "是否现在更新《第五人格》？\n"
+            "是否现在更新《第五人格》（不需要安装发烧平台）？\n"
         ):
             if h55_game:
                 logger.info(f"用户选择直接更新第五人格")
