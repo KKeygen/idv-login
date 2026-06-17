@@ -237,6 +237,12 @@ class CloudRes:
         if not features:
             return ""
         return features.get('start_argument', "")
+
+    def get_version_code_checkpoint(self,shortGameId):
+        features = self.get_feature_by_game_id(shortGameId)
+        if not features:
+            return ""
+        return features.get('version_code_checkpoint', "")
     
     def get_download_distributions(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)

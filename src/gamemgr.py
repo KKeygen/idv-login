@@ -288,6 +288,28 @@ class Game:
             self.logger.error(f"验证快捷方式失败: {e}")
             return False
 
+    def _find_existing_tool_launch_shortcut(self, shortcut_dir: str, expected_target: str, expected_args: str) -> str:
+        try:
+            import win32com.client
+            shell = win32com.client.Dispatch("WScript.Shell")
+            expected_target_norm = os.path.normcase(os.path.normpath(expected_target or ""))
+            expected_args_normalized = (expected_args or "").strip()
+            for name in os.listdir(shortcut_dir):
+                if not name.lower().endswith(".lnk"):
+                    continue
+                shortcut_path = os.path.join(shortcut_dir, name)
+                try:
+                    shortcut = shell.CreateShortcut(shortcut_path)
+                    actual_target = os.path.normcase(os.path.normpath((shortcut.Targetpath or "").strip()))
+                    actual_args = (shortcut.Arguments or "").strip()
+                    if actual_target == expected_target_norm and actual_args == expected_args_normalized:
+                        return shortcut_path
+                except Exception:
+                    continue
+        except Exception as e:
+            self.logger.debug(f"扫描已有工具快捷方式失败: {e}")
+        return ""
+
     def create_tool_launch_shortcut(self, icon_source_path: str = "") -> bool:
         """创建通过工具启动游戏的桌面快捷方式。
         
@@ -346,15 +368,21 @@ class Game:
                         name_from_launcher = display_name
             name = name_from_launcher if name_from_launcher else (self.name if self.name else self.game_id)
             name = f"{name}(IDV-LOGIN)"
-            shortcut_path = self._build_unique_shortcut_path(desktop_path, name)
             
             shell = win32com.client.Dispatch("WScript.Shell")
+            uri_arg = f'idvlogin://start?game_id={self.game_id}'
+            expected_args = f'--uri "{uri_arg}"'
+            existing_shortcut = self._find_existing_tool_launch_shortcut(desktop_path, bat_path, expected_args)
+            if existing_shortcut:
+                self.logger.info(f"已存在工具启动快捷方式，跳过创建: {existing_shortcut}")
+                return True
+
+            shortcut_path = self._build_unique_shortcut_path(desktop_path, name)
             shortcut = shell.CreateShortCut(shortcut_path)
             
             # 目标和参数 - 使用 bat 文件
             shortcut.Targetpath = bat_path
-            uri_arg = f'idvlogin://start?game_id={self.game_id}'
-            shortcut.Arguments = f'--uri "{uri_arg}"'
+            shortcut.Arguments = expected_args
             shortcut.WorkingDirectory = os.path.dirname(bat_path)
             shortcut.Description = f"通过登录助手启动 {name}"
             

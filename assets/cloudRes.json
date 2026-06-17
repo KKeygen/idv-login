@@ -905,6 +905,7 @@
         73,
         134
       ],
+      "version_code_checkpoint": "v3_3534_cf8659174966818d25a3678c97adcc52",
       "downloadable": true,
       "convert_to_normal": true,
       "start_argument": "--start_from_launcher=1 --is_multi_start"

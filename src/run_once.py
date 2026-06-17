@@ -83,6 +83,27 @@ def _select_exe_file(title: str = "选择游戏可执行文件") -> str:
         return ""
 
 
+def _select_directory(title: str = "选择安装目录") -> str:
+    """打开目录选择对话框。"""
+    import sys
+    if sys.platform != "win32":
+        return ""
+    try:
+        from PyQt6.QtWidgets import QApplication, QFileDialog
+        app = QApplication.instance()
+        if app is None:
+            return ""
+        return QFileDialog.getExistingDirectory(None, title, os.path.expanduser("~"))
+    except Exception:
+        return ""
+
+
+def _is_drive_root(path: str) -> bool:
+    normalized = os.path.abspath(path)
+    drive, tail = os.path.splitdrive(normalized)
+    return bool(drive) and os.path.abspath(drive + os.sep) == normalized
+
+
 def _probe_game_setup(logger):
     """游戏设置引导：检查路径/自启配置并按数量应用策略。"""
     import sys
@@ -224,6 +245,110 @@ def _probe_game_setup(logger):
     
     # 情况 3：有游戏且有自启 → 什么都不提醒
     genv.set("game_setup_probe_done_0403", True, True)
+
+
+def _has_h55_account_record(logger) -> bool:
+    try:
+        from channelmgr import ChannelManager
+        from channelHandler.channelUtils import cmp_game_id, getShortGameId
+        channel_mgr = ChannelManager()
+        for channel in channel_mgr.channels:
+            game_id = getattr(channel, "game_id", "")
+            if game_id and (cmp_game_id(game_id, "aecfrt3rmaaaaajl-g-h55") or getShortGameId(game_id) == "h55"):
+                return True
+    except Exception as e:
+        logger.error(f"检查 h55 账号记录失败: {e}")
+    return False
+
+
+def _get_h55_path_game(game_mgr):
+    from channelHandler.channelUtils import getShortGameId
+    for game in game_mgr.games.values():
+        if getShortGameId(game.game_id) != "h55":
+            continue
+        if not game.path:
+            continue
+        if game.default_distribution not in (-1, 73):
+            continue
+        return game
+    return None
+
+
+def _prepare_h55_game_path(game_mgr, logger):
+    target_dir = _select_directory("选择第五人格新引擎安装目录")
+    if not target_dir:
+        logger.info("用户未选择第五人格安装目录")
+        return None
+    if _is_drive_root(target_dir):
+        _show_msgbox(
+            "安装目录无效",
+            "不能直接选择磁盘根目录（例如 E:\\）。\n请新建或选择一个专门的游戏安装目录。",
+            is_error=True,
+        )
+        return None
+
+    game_id = "aecfrt3rmaaaaajl-g-h55"
+    game = game_mgr.get_game(game_id)
+    game_path = os.path.join(target_dir, "dwrg.exe")
+    game_mgr.rename_game(game_id, "第五人格")
+    game_mgr.set_game_path(game_id, game_path)
+    game_mgr.set_game_default_distribution(game_id, 73)
+    logger.info(f"已设置第五人格启动路径: {game_path}")
+    return game
+
+
+def _probe_h55_version_update_prompt(logger):
+    """当云端 h55 分发版本越过配置基准时，一次性提醒用户去启动器更新。"""
+    import sys
+    if sys.platform != "win32":
+        return
+
+    try:
+        from cloudRes import CloudRes
+        from gamemgr import Game, GameManager
+
+        cloud_res = CloudRes()
+        checkpoint = cloud_res.get_version_code_checkpoint("h55")
+        if not checkpoint:
+            return
+
+        file_info = Game("aecfrt3rmaaaaajl-g-h55").get_file_distribution_info(73)
+        remote_version = file_info.get("version_code", "") if file_info else ""
+        if not remote_version or remote_version == checkpoint:
+            return
+
+        prompt_key = f"h55_version_update_prompted_{remote_version}"
+        if genv.get(prompt_key, False):
+            return
+
+        game_mgr = GameManager()
+        h55_game = _get_h55_path_game(game_mgr)
+        has_h55_account = _has_h55_account_record(logger)
+        if not h55_game and not has_h55_account:
+            return
+
+        if h55_game and h55_game.version == remote_version:
+            return
+
+        genv.set(prompt_key, True, True)
+        if _show_yesno(
+            "第五人格新版本提醒",
+            "检测到第五人格新引擎可能已有新版本。\n\n"
+            f"当前云端版本：{remote_version}\n"
+            f"工具内置基准版本：{checkpoint}\n\n"
+            "是否现在检查并更新第五人格？\n"
+            "本版本只提醒一次。"
+        ):
+            if h55_game:
+                logger.info(f"用户选择直接更新第五人格: {h55_game.game_id}")
+                h55_game.try_update(73, max_concurrent_files=4)
+            else:
+                h55_game = _prepare_h55_game_path(game_mgr, logger)
+                if h55_game:
+                    logger.info(f"用户选择安装/更新第五人格: {h55_game.game_id}")
+                    h55_game.try_update(73, max_concurrent_files=4)
+    except Exception as e:
+        logger.error(f"第五人格版本更新提醒失败: {e}")
 
 
 def _is_compat_port_available() -> bool:
@@ -374,6 +499,12 @@ def run_once():
         _probe_game_setup(logger)
     except Exception as e:
         logger.error(f"游戏设置引导失败: {e}")
+
+    # 第五人格新版本引导
+    try:
+        _probe_h55_version_update_prompt(logger)
+    except Exception as e:
+        logger.error(f"第五人格新版本引导失败: {e}")
     
     # 代理模式引导（多游戏有账号时）
     try:
