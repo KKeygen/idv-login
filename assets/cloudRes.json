@@ -1,5 +1,5 @@
 {
-  "lastModified": 1781705103,
+  "lastModified": 1781704397,
   "version": "v6.1.0-mac",
   "hotfix": [
     {
@@ -166,6 +166,16 @@
     },
     {
       "need_hotfix_version": [
+        "v6.1.0-mac",
+        "v6.0.4-stable",
+        "v6.1.0-stable"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "732a8484fcca52d0620425a34291ccbe304ed436",
+      "note": "修复了本次第五人格共研服无法正常下载的问题"
+    },
+    {
+      "need_hotfix_version": [
         "v6.0.0-beta",
         "v6.0.1-stable"
       ],
@@ -318,6 +328,14 @@
       "need_hotfix_version": [
         "v6.0.4-stable"
       ],
+      "target_module": "gamemgr",
+      "target_commit": "e5fffc69b6eac4a335b9614f4daed7f08e370d25",
+      "note": "移除自动关闭延迟的3秒下限"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.4-stable"
+      ],
       "target_module": "main",
       "target_commit": "57fef3d3c5ccbe8fb068010746631c830352d3f0",
       "note": "尝试修复某些情况下，关闭原生扫码时保存记录仍然只有三天的问题。一并修复可能造成误解的文案"
@@ -353,39 +371,6 @@
       "target_module": "channelHandler.oppoGameSdk.gamesdk_login_pb2",
       "target_commit": "02f7d67a19555e58b14e1a4e2bb558cf18302c9d",
       "note": "修复protobuf gencode/runtime版本不匹配导致OPPO渠道服崩溃"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.4-stable",
-        "v6.0.5-beta",
-        "v6.1.0-mac",
-        "v6.1.0-stable"
-      ],
-      "target_module": "cloudRes",
-      "target_commit": "a90046a9268b9fd0adeefdf6546c4441802dabc8",
-      "note": "适配第五人格6.18日客户端更新"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.4-stable",
-        "v6.0.5-beta",
-        "v6.1.0-mac",
-        "v6.1.0-stable"
-      ],
-      "target_module": "run_once",
-      "target_commit": "a90046a9268b9fd0adeefdf6546c4441802dabc8",
-      "note": "适配第五人格6.18日客户端更新"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.4-stable",
-        "v6.0.5-beta",
-        "v6.1.0-mac",
-        "v6.1.0-stable"
-      ],
-      "target_module": "gamemgr",
-      "target_commit": "a90046a9268b9fd0adeefdf6546c4441802dabc8",
-      "note": "适配第五人格6.18日客户端更新"
     }
   ],
   "shortcuts": [
