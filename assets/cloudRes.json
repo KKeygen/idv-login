@@ -1,5 +1,5 @@
 {
-  "lastModified": 1781705481,
+  "lastModified": 1781883785,
   "version": "v6.1.0-mac",
   "hotfix": [
     {
@@ -386,6 +386,17 @@
       "target_module": "gamemgr",
       "target_commit": "d004668959b077b66f213389a91216bff0ed983f",
       "note": "适配第五人格6.18日客户端更新"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable"
+      ],
+      "target_module": "mitm_proxy",
+      "target_commit": "c6db82fce30c682dbaca7a1517b6878388035a6f",
+      "note": "修复UDP 443端口被占用时工具无法启动的问题"
     }
   ],
   "shortcuts": [
