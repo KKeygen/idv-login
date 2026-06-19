@@ -1033,6 +1033,7 @@ class MitmProxyManager:
             # 客户端（游戏）的 DNS 被劫持到 127.0.0.1，会直接连接 127.0.0.1:443
             # 使用 reverse 模式将请求转发到默认目标服务器
             # _CompatModeAddon 会根据 Host 头将请求路由到正确的服务器
+            _patch_mitmproxy_reverse_https_tcp_only()
             default_target = genv.get("DOMAIN_TARGET", "service.mkey.163.com")
             opts = Options(
                 listen_host="127.0.0.1",
@@ -1117,6 +1118,27 @@ class MitmProxyManager:
             return ""
 
 
+def _patch_mitmproxy_reverse_https_tcp_only():
+    """Force mitmproxy reverse:https listeners to use TCP only in compat mode."""
+    from mitmproxy.proxy import mode_specs
+
+    reverse_mode = mode_specs.ReverseMode
+    if getattr(reverse_mode, "_idv_https_tcp_only_patched", False):
+        return
+
+    original_post_init = reverse_mode.__post_init__
+
+    def _idv_reverse_post_init(self):
+        original_post_init(self)
+        if getattr(self, "scheme", None) == "https":
+            self.transport_protocol = "tcp"
+
+    reverse_mode.__post_init__ = _idv_reverse_post_init
+    reverse_mode._idv_https_tcp_only_patched = True
+    reverse_mode._idv_original_post_init = original_post_init
+    logger.debug("已限制 mitmproxy reverse:https 仅监听 TCP，避免绑定 UDP 443")
+
+
 class _CompatModeAddon:
     """兼容模式的请求重写 addon。
 
@@ -1146,6 +1168,10 @@ class _CompatModeAddon:
             flow.request.host = host
             flow.request.port = 443
             flow.request.scheme = "https"
+
+    def responseheaders(self, flow):
+        if flow.response and "alt-svc" in flow.response.headers:
+            del flow.response.headers["alt-svc"]
 
 
 class _ResponseLogAddon:
