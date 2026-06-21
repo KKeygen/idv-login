@@ -1,5 +1,5 @@
 {
-  "lastModified": 1781883785,
+  "lastModified": 1782010005,
   "version": "v6.1.0-mac",
   "hotfix": [
     {
@@ -397,6 +397,14 @@
       "target_module": "mitm_proxy",
       "target_commit": "c6db82fce30c682dbaca7a1517b6878388035a6f",
       "note": "修复UDP 443端口被占用时工具无法启动的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.1.0-mac"
+      ],
+      "target_module": "main",
+      "target_commit": "fdb6149f94cd80d39f293b81b35a8c7166c68875",
+      "note": "修复macOS兼容模式下本地DNS端口冲突导致无法启动的问题"
     }
   ],
   "shortcuts": [
