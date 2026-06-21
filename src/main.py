@@ -1168,21 +1168,26 @@ def _setup_compat_mode(addon):
     method = "NRPT" if _dns_policy_mgr.is_using_nrpt else "Hosts 文件"
     logger.debug(f"DNS 策略已设置 (方式: {method})")
 
-    # 3. 启动本地 DNS 服务器
-    from mitm_proxy import LocalDnsServer
-    _dns_server = LocalDnsServer(
-        intercept_domains=set(target_domains),
-        target_ip="127.0.0.1",
-        listen_host="127.0.0.1",
-        listen_port=53,
-    )
-    if not _dns_server.start():
-        logger.error("本地 DNS 服务器启动失败")
-        _dns_policy_mgr.cleanup()
-        _dns_policy_mgr = None
-        raise RuntimeError("Failed to start local DNS server for compat mode")
+    # 3. 启动本地 DNS 服务器。Hosts 文件方式已经直接写入解析结果，
+    # 无需再占用 53 端口。
+    if _dns_policy_mgr.is_using_nrpt:
+        from mitm_proxy import LocalDnsServer
+        _dns_server = LocalDnsServer(
+            intercept_domains=set(target_domains),
+            target_ip="127.0.0.1",
+            listen_host="127.0.0.1",
+            listen_port=53,
+        )
+        if not _dns_server.start():
+            logger.error("本地 DNS 服务器启动失败")
+            _dns_policy_mgr.cleanup()
+            _dns_policy_mgr = None
+            raise RuntimeError("Failed to start local DNS server for compat mode")
 
-    logger.debug("本地 DNS 服务器已启动 (127.0.0.1:53)")
+        logger.debug("本地 DNS 服务器已启动 (127.0.0.1:53)")
+    else:
+        _dns_server = None
+        logger.debug("Hosts 文件方式无需启动本地 DNS 服务器")
 
     # 4. 启动 mitmproxy 反向代理
     from mitm_proxy import MitmProxyManager
