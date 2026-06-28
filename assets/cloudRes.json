@@ -1,5 +1,5 @@
 {
-  "lastModified": 1782010005,
+  "lastModified": 1782010006,
   "version": "v6.1.0-mac",
   "hotfix": [
     {
@@ -898,7 +898,13 @@
       },
       "channel": "bilibili_sdk",
       "name": "哔哩哔哩"
-    },
+    },{
+    "package_name": "com.netease.l22.vivo",
+    "app_channel": "nearme_vivo",
+    "log_key": "KvVVGe4drWm7w84HByCJivqleET76h2u",
+    "game_id": "l22",
+    "nearme_vivo": "com.netease.l22.vivo"
+},
     {
       "package_name": "com.netease.dwrg.uc",
       "app_channel": "uc_platform",
