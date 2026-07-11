@@ -390,7 +390,6 @@ def initialize():
     genv.set("SCRIPT_DIR", os.path.dirname(os.path.abspath(__file__)))
     CloudPaths = [
         "https://gitee.com/opguess/idv-login/raw/main/assets/cloudRes.json",
-        "https://jihulab.com/KKeygenn/idv-login/-/raw/main/assets/cloudRes.json",
         "https://hk.gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/refs/heads/main/assets/cloudRes.json",
         "https://cdn.jsdelivr.net/gh/KKeygen/idv-login@main/assets/cloudRes.json",
     ]

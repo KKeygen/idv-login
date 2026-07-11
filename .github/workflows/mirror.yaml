@@ -13,20 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sync-jihulab:
-    runs-on: ubuntu-latest
-
-    steps:
-        - uses: actions/checkout@v4
-          with:
-            fetch-depth: 0
-        - name: Mirror to JiHuLab
-          uses: yesolutions/mirror-action@662fce0eced8996f64d7fa264d76cddd84827f33
-          with:
-            REMOTE: 'https://jihulab.com/KKeygenn/idv-login.git'
-            GIT_USERNAME: KKeygenn
-            GIT_PASSWORD: ${{ secrets.GITLAB_TOKEN }}
-
   sync-gitee:
     runs-on: ubuntu-latest
 
