@@ -137,13 +137,19 @@ def parse_uri(uri: str) -> dict:
 # Single-instance signaling
 # ------------------------------------------------------------------
 
-def signal_running_instance(game_id: str, action: str = "open") -> bool:
+def signal_running_instance(
+    game_id: str, action: str = "open", installation_id: str = ""
+) -> bool:
     """Try to send *game_id* to an already-running instance.
 
     On Windows we use a named pipe; on Unix a domain socket.
     Returns ``True`` if a running instance was found and signaled.
     """
-    payload = json.dumps({"game_id": game_id, "action": action}).encode("utf-8")
+    payload = json.dumps({
+        "game_id": game_id,
+        "action": action,
+        "installation_id": installation_id,
+    }).encode("utf-8")
     if sys.platform == "win32":
         return _signal_via_named_pipe(payload)
     else:
@@ -322,7 +328,8 @@ def _listener_named_pipe(callback):
                         msg = json.loads(data.decode("utf-8", errors="replace"))
                         game_id = msg.get("game_id", "")
                         action = msg.get("action", "open")
-                        callback(action, game_id)
+                        installation_id = msg.get("installation_id", "")
+                        callback(action, game_id, installation_id)
                 except Exception:
                     logger.debug("读取命名管道数据失败", exc_info=True)
 
@@ -350,7 +357,8 @@ def _listener_unix_socket(callback):
                     msg = json.loads(data.decode("utf-8", errors="replace"))
                     game_id = msg.get("game_id", "")
                     action = msg.get("action", "open")
-                    callback(action, game_id)
+                    installation_id = msg.get("installation_id", "")
+                    callback(action, game_id, installation_id)
             except Exception:
                 logger.debug("读取Unix socket数据失败", exc_info=True)
             finally:

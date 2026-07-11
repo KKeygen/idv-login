@@ -179,7 +179,9 @@ def _probe_game_setup(logger):
                     f"是否导入此游戏？（您只需要导入您打算使用免扫码工具的游戏）"
                 ):
                     try:
-                        final_gid = game_mgr.import_fever_game(fg["game_id"])
+                        final_gid = game_mgr.import_fever_game(
+                            fg["game_id"], fg.get("distribution_id", -1), fg.get("path", "")
+                        )
                         logger.info(f"已导入发烧平台游戏: {fg['game_id']}")
                         _record_game(final_gid, shortcut_created=True)
                     except Exception as e:
@@ -218,7 +220,11 @@ def _probe_game_setup(logger):
                     "已在发烧平台找到对应路径，是否自动导入？"
                 ):
                     try:
-                        final_gid = game_mgr.import_fever_game(fever_match["game_id"])
+                        final_gid = game_mgr.import_fever_game(
+                            fever_match["game_id"],
+                            fever_match.get("distribution_id", -1),
+                            fever_match.get("path", ""),
+                        )
                         logger.info(f"已从发烧平台导入游戏路径: {game_id}")
                         _record_game(final_gid, shortcut_created=True)
                     except Exception as e:
@@ -261,40 +267,55 @@ def _has_h55_account_record(logger) -> bool:
     return False
 
 
-def _get_h55_path_game(game_mgr):
+def _get_h55_path_installation(game_mgr):
     from channelHandler.channelUtils import getShortGameId
     for game in game_mgr.games.values():
         if getShortGameId(game.game_id) != "h55":
             continue
-        if not game.path:
-            continue
-        if game.default_distribution not in (-1, 73):
-            continue
-        return game
-    return None
+        candidates = []
+        for installation in game.installations.values():
+            if not installation.path:
+                continue
+            if installation.distribution_id not in (-1, 73):
+                continue
+            candidates.append(installation)
+        default = game.get_installation()
+        if default in candidates:
+            return game, default
+        if len(candidates) == 1:
+            return game, candidates[0]
+        if len(candidates) > 1:
+            return game, None
+    return None, None
 
 
 def _prepare_h55_game_path(game_mgr, logger):
     target_dir = _select_directory("选择第五人格新引擎安装目录")
     if not target_dir:
         logger.info("用户未选择第五人格安装目录")
-        return None
+        return None, None
     if _is_drive_root(target_dir):
         _show_msgbox(
             "安装目录无效",
             "不能直接选择磁盘根目录（例如 E:\\）。\n请新建或选择一个专门的游戏安装目录。",
             is_error=True,
         )
-        return None
+        return None, None
 
     game_id = "aecfrt3rmaaaaajl-g-h55"
     game = game_mgr.get_game(game_id)
     game_path = os.path.join(target_dir, "dwrg.exe")
     game_mgr.rename_game(game_id, "第五人格")
-    game_mgr.set_game_path(game_id, game_path)
-    game_mgr.set_game_default_distribution(game_id, 73)
+    installation = game_mgr.add_game_installation(
+        game_id=game_id,
+        path=game_path,
+        distribution_id=73,
+        source="download",
+        startup_path="dwrg.exe",
+        set_default=True,
+    )
     logger.info(f"已设置第五人格启动路径: {game_path}")
-    return game
+    return game, installation
 
 
 def _probe_h55_version_update_prompt(logger):
@@ -307,14 +328,9 @@ def _probe_h55_version_update_prompt(logger):
         from cloudRes import CloudRes
         from gamemgr import Game, GameManager
 
-        cloud_res = CloudRes()
-        checkpoint = cloud_res.get_version_code_checkpoint("h55")
-        if not checkpoint:
-            return
-
         file_info = Game("aecfrt3rmaaaaajl-g-h55").get_file_distribution_info(73)
         remote_version = file_info.get("version_code", "") if file_info else ""
-        if not remote_version or remote_version == checkpoint:
+        if not remote_version:
             return
 
         prompt_key = f"h55_version_update_prompted_{remote_version}"
@@ -322,34 +338,50 @@ def _probe_h55_version_update_prompt(logger):
             return
 
         game_mgr = GameManager()
-        h55_game = _get_h55_path_game(game_mgr)
+        h55_game, h55_installation = _get_h55_path_installation(game_mgr)
         has_h55_account = _has_h55_account_record(logger)
         if not h55_game and not has_h55_account:
             return
-
-        if h55_game and h55_game.version == remote_version:
+        if h55_game and h55_installation is None:
+            logger.info("检测到多个第五人格安装且默认安装不明确，跳过自动更新提示")
             return
+
+        if h55_installation and h55_installation.installed_version == remote_version:
+            return
+        local_version = (
+            h55_installation.installed_version
+            if h55_installation and h55_installation.installed_version
+            else "未知"
+        )
 
         genv.set(prompt_key, True, True)
         if _show_yesno(
             "第五人格6.18新版本提醒",
             "检测到游戏《第五人格》已有新版本。\n\n"
             f"最新版本：{remote_version}\n"
-            f"您的版本：{checkpoint}\n\n"
+            f"您的版本：{local_version}\n\n"
             "您收到此提示是因为您的工具保存有第五人格账号或第五人格游戏路径，此提示只会出现一次，如果选择以后更新，可以自行前往“渠道服管理界面”更新。"
             "是否现在更新《第五人格》（不需要安装发烧平台）？\n"
         ):
             update_started = False
-            if h55_game:
+            if h55_game and h55_installation:
                 logger.info(f"用户选择直接更新第五人格")
                 logger.warning(f"更新时会出现两个黑色窗口，进度条走到100%后更新即完成，此时再次启动工具或点击桌面上的专用快捷方式即可启动游戏。")
-                update_started = h55_game.try_update(73, max_concurrent_files=4)
+                update_started = h55_game.try_update(
+                    73, max_concurrent_files=4,
+                    installation_id=h55_installation.installation_id,
+                )
             else:
-                h55_game = _prepare_h55_game_path(game_mgr, logger)
-                if h55_game:
+                h55_game, h55_installation = _prepare_h55_game_path(game_mgr, logger)
+                if h55_game and h55_installation:
                     logger.info(f"用户选择安装/更新第五人格")
                     logger.warning(f"更新时会出现两个黑色窗口，进度条走到100%后安装/更新即完成，此时再次启动工具或点击桌面上的专用快捷方式即可启动游戏。")
-                    update_started = h55_game.try_update(73, max_concurrent_files=4)
+                    update_started = h55_game.try_update(
+                        73, max_concurrent_files=4,
+                        installation_id=h55_installation.installation_id,
+                    )
+            if h55_game and h55_installation:
+                game_mgr._save_games()
             if update_started:
                 sys.exit()
     except Exception as e:

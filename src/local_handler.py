@@ -130,6 +130,8 @@ class LocalRequestHandler:
             "/_idv-login/launcher-update": self._launcher_update,
             "/_idv-login/launcher-update-info": self._launcher_update_info,
             "/_idv-login/launcher-import-fever": self._launcher_import_fever,
+            "/_idv-login/launcher-set-default": self._launcher_set_default,
+            "/_idv-login/launcher-remove-installation": self._launcher_remove_installation,
             "/_idv-login/fever-games": self._list_fever_games,
             "/_idv-login/defaultChannel": self._get_default_channel,
             "/_idv-login/get-login-delay": self._get_login_delay,
@@ -307,6 +309,20 @@ class LocalRequestHandler:
             "startup_path", "startup_params",
         ]
         return {k: launcher_data.get(k) for k in keys}
+
+    @staticmethod
+    def _resolve_installation(game, installation_id: str = "", distribution_id: int = -1):
+        if not game:
+            return None
+        if installation_id:
+            return game.get_installation(installation_id)
+        if distribution_id != -1:
+            matches = [
+                item for item in game.installations.values()
+                if item.distribution_id == int(distribution_id)
+            ]
+            return matches[0] if len(matches) == 1 else None
+        return game.get_installation()
 
     # ------------------------------------------------------------------
     # Route implementations
@@ -579,6 +595,7 @@ class LocalRequestHandler:
                 "success": True, 
                 "enabled": info["enabled"], 
                 "path": info["path"], 
+                "installation_id": info.get("installation_id", ""),
                 "game_id": gid,
                 "independent_path_config": True
             })
@@ -652,7 +669,11 @@ class LocalRequestHandler:
 
                             game_helper.set_game_auto_start(gid, True)
                             game_helper.set_game_path(gid, sel_path)
-                            game_helper.rename_game(gid, name)
+                            selected_game = game_helper.get_game(gid)
+                            if selected_game and (
+                                not selected_game.name or selected_game.name == selected_game.game_id
+                            ):
+                                game_helper.rename_game(gid, name)
                             LocalRequestHandler._pending_imports[task_id] = {
                                 "status": "done", "success": True,
                                 "enabled": True, "path": sel_path, "game_id": gid,
@@ -709,7 +730,11 @@ class LocalRequestHandler:
 
             self.game_helper.set_game_auto_start(gid, enabled)
             self.game_helper.set_game_path(gid, game_path)
-            self.game_helper.rename_game(gid, name)
+            selected_game = self.game_helper.get_game(gid)
+            if selected_game and (
+                not selected_game.name or selected_game.name == selected_game.game_id
+            ):
+                self.game_helper.rename_game(gid, name)
             return self._json_response(200, {
                 "success": True, "enabled": enabled, "path": game_path, "game_id": gid
             })
@@ -720,12 +745,18 @@ class LocalRequestHandler:
     def _start_game(self, args, body, method):
         try:
             gid = args["game_id"]
-            path = self.game_helper.get_game_auto_start(gid)["path"]
+            installation_id = args.get("installation_id", "")
+            game = self.game_helper.get_game(gid)
+            installation = self._resolve_installation(game, installation_id)
+            path = installation.path if installation else ""
             if not path:
                 return self._json_response(200, {"success": False, "error": "游戏路径未设置"})
-            game = self.game_helper.get_game(gid)
             if game:
-                game.start()
+                if not game.start(installation.installation_id):
+                    return self._json_response(200, {
+                        "success": False,
+                        "error": "游戏启动失败，请检查安装路径",
+                    })
                 game.last_used_time = int(time.time())
                 self.game_helper._save_games()
             return self._json_response(200, {"success": True, "game_id": gid})
@@ -745,39 +776,53 @@ class LocalRequestHandler:
             game = self.game_helper.get_existing_game(gid)
             game_for_remote = self.game_helper.get_game_or_temp(gid)
             distribution_ids = game_for_remote.get_distributions()
-            installed = bool(game and game.path and os.path.exists(game.path))
             can_convert = CloudRes().is_convert_to_normal(short_gid)
-            current_version = game.get_version() if game else ""
-            default_dist = game.get_default_distribution() if game else -1
+            installations = (
+                [item.get_non_sensitive_data() for item in game.installations.values()]
+                if game else []
+            )
             fever_info = None
             for item in self.game_helper.list_fever_games():
-                if item.get("game_id") == short_gid:
+                if getShortGameId(item.get("game_id", "")) == short_gid:
                     fever_info = item
                     break
-            can_import_fever = bool(fever_info) and (
-                not game or not game.path or (
-                    fever_info.get("path") and fever_info.get("path") != game.path
-                )
-            )
+            known_paths = {
+                os.path.normcase(os.path.normpath(item.path))
+                for item in (game.installations.values() if game else [])
+                if item.path
+            }
+            can_import_fever = bool(fever_info) and os.path.normcase(
+                os.path.normpath(fever_info.get("path", ""))
+            ) not in known_paths
             distributions = []
             for dist_id in distribution_ids:
                 launcher_data = game_for_remote.get_launcher_data_for_distribution(dist_id)
                 file_info = game_for_remote.get_file_distribution_info(dist_id)
                 target_ver = file_info.get("version_code", "") if file_info else ""
                 can_download = CloudRes().is_downloadable(short_gid) and file_info is not None
+                matching_installations = [
+                    item for item in installations
+                    if item.get("distribution_id") == dist_id
+                ]
                 distributions.append({
                     "distribution_id": dist_id,
                     "launcher": self._pick_launcher_fields(launcher_data),
                     "target_version": target_ver,
                     "can_download": can_download,
-                    "can_update": bool(installed),
+                    "installations": matching_installations,
+                    "can_update": any(item.get("installed") for item in matching_installations),
                 })
             return self._json_response(200, {
                 "success": True, "game_id": gid,
+                "installation_model_version": 1,
                 "game": {
-                    "installed": installed, "path": game.path if game else "",
-                    "version": current_version, "can_convert": can_convert,
-                    "default_distribution": default_dist,
+                    "installed": any(item.get("installed") for item in installations),
+                    "path": game.path if game else "",
+                    "version": game.get_version() if game else "",
+                    "can_convert": can_convert,
+                    "default_distribution": game.get_default_distribution() if game else -1,
+                    "default_installation_id": game.default_installation_id if game else "",
+                    "installations": installations,
                 },
                 "distributions": distributions,
                 "can_import_fever": can_import_fever,
@@ -800,6 +845,11 @@ class LocalRequestHandler:
             startup_path = launcher_data.get("startup_path", "")
             if not startup_path:
                 return self._json_response(400, {"success": False, "error": "启动器缺少启动路径"})
+            file_info = game.get_file_distribution_info(dist_id)
+            if not file_info:
+                return self._json_response(404, {"success": False, "error": "未找到文件分发信息"})
+            startup_args = launcher_data.get("startup_params", "") or ""
+            content_id = file_info.get("app_content_id")
 
             try:
                 from PyQt6.QtWidgets import QApplication
@@ -842,17 +892,37 @@ class LocalRequestHandler:
                         game_path = os.path.join(target_dir, startup_path)
                         display_name = launcher_data.get("display_name") or launcher_data.get("app_name") or gid
                         game_helper.rename_game(gid, display_name)
-                        game_helper.set_game_path(gid, game_path)
-                        game_helper.set_game_default_distribution(gid, dist_id)
-                        updated = game.try_update(dist_id, max_conc)
-                        if updated:
+                        existing_installation_ids = set(game.installations)
+                        installation = game_helper.add_game_installation(
+                            game_id=gid,
+                            path=game_path,
+                            distribution_id=dist_id,
+                            source="download",
+                            content_id=content_id,
+                            startup_path=startup_path,
+                            startup_args=startup_args,
+                            set_default=True,
+                        )
+                        if installation is None:
+                            raise RuntimeError("创建游戏安装记录失败")
+                        updated = game.try_update(
+                            dist_id, max_conc, installation.installation_id
+                        )
+                        if not updated and installation.installation_id not in existing_installation_ids:
+                            game.remove_installation(installation.installation_id)
+                            game_helper._save_games()
+                        if updated and not game.last_update_async:
                             sgid = getShortGameId(gid)
                             if CloudRes().is_convert_to_normal(sgid):
-                                game.create_tool_launch_shortcut(game.path or "")
+                                game.create_tool_launch_shortcut(
+                                    installation.path, installation.installation_id
+                                )
                         game_helper._save_games()
                         LocalRequestHandler._pending_imports[task_id] = {
                             "status": "done", "success": updated,
-                            "path": game_path, "version": game.get_version(),
+                            "path": game_path,
+                            "installation_id": installation.installation_id,
+                            "version": installation.installed_version,
                         }
                     except Exception as e:
                         logger.exception("异步安装启动器失败")
@@ -887,16 +957,37 @@ class LocalRequestHandler:
             game_path = os.path.join(target_dir, startup_path)
             display_name = launcher_data.get("display_name") or launcher_data.get("app_name") or gid
             self.game_helper.rename_game(gid, display_name)
-            self.game_helper.set_game_path(gid, game_path)
-            self.game_helper.set_game_default_distribution(gid, dist_id)
+            existing_installation_ids = set(game.installations)
+            installation = self.game_helper.add_game_installation(
+                game_id=gid,
+                path=game_path,
+                distribution_id=dist_id,
+                source="download",
+                content_id=content_id,
+                startup_path=startup_path,
+                startup_args=startup_args,
+                set_default=True,
+            )
+            if installation is None:
+                return self._json_response(500, {"success": False, "error": "创建游戏安装记录失败"})
             max_conc = int(args.get("concurrent", "4"))
-            updated = game.try_update(dist_id, max_conc)
-            if updated:
+            updated = game.try_update(dist_id, max_conc, installation.installation_id)
+            if not updated and installation.installation_id not in existing_installation_ids:
+                game.remove_installation(installation.installation_id)
+                self.game_helper._save_games()
+            if updated and not game.last_update_async:
                 sgid = getShortGameId(gid)
                 if CloudRes().is_convert_to_normal(sgid):
-                    game.create_tool_launch_shortcut(game.path or "")
+                    game.create_tool_launch_shortcut(
+                        installation.path, installation.installation_id
+                    )
             self.game_helper._save_games()
-            return self._json_response(200, {"success": updated, "path": game_path, "version": game.get_version()})
+            return self._json_response(200, {
+                "success": updated,
+                "path": game_path,
+                "installation_id": installation.installation_id,
+                "version": installation.installed_version,
+            })
         except Exception as e:
             self.logger.exception("安装启动器失败")
             return self._json_response(500, {"success": False, "error": str(e)})
@@ -905,20 +996,27 @@ class LocalRequestHandler:
         try:
             gid = args["game_id"]
             dist_id = int(args["distribution_id"])
+            installation_id = args.get("installation_id", "")
             game = self.game_helper.get_existing_game(gid)
-            if not game or not game.path or not os.path.exists(game.path):
+            installation = self._resolve_installation(game, installation_id, dist_id)
+            if not installation or not installation.path or not os.path.exists(installation.path):
                 return self._json_response(404, {"success": False, "error": "未找到已安装的游戏"})
             max_conc = int(args.get("concurrent", "4"))
-            updated = game.try_update(dist_id, max_conc)
+            updated = game.try_update(dist_id, max_conc, installation.installation_id)
             try:
                 sgid = getShortGameId(gid)
-                if CloudRes().is_convert_to_normal(sgid):
-                    sa = CloudRes().get_start_argument(sgid)
-                    game.create_tool_launch_shortcut(game.path or "")
+                if updated and not game.last_update_async and CloudRes().is_convert_to_normal(sgid):
+                    game.create_tool_launch_shortcut(
+                        installation.path, installation.installation_id
+                    )
             except Exception:
                 self.logger.exception("更新后创建快捷方式失败")
             self.game_helper._save_games()
-            return self._json_response(200, {"success": updated, "version": game.get_version()})
+            return self._json_response(200, {
+                "success": updated,
+                "installation_id": installation.installation_id,
+                "version": installation.installed_version,
+            })
         except Exception as e:
             self.logger.exception("更新启动器失败")
             return self._json_response(500, {"success": False, "error": str(e)})
@@ -927,23 +1025,39 @@ class LocalRequestHandler:
         try:
             gid = args["game_id"]
             dist_id = int(args["distribution_id"])
+            installation_id = args.get("installation_id", "")
             game = self.game_helper.get_existing_game(gid)
-            if not game or not game.path or not os.path.exists(game.path):
+            installation = self._resolve_installation(game, installation_id, dist_id)
+            if not installation or not installation.path or not os.path.exists(installation.path):
                 return self._json_response(404, {"success": False, "error": "未找到已安装的游戏"})
-            stats = game.get_update_stats(dist_id)
+            stats = game.get_update_stats(dist_id, installation.installation_id)
             if not stats:
                 return self._json_response(404, {"success": False, "error": "未找到更新信息"})
-            return self._json_response(200, {"success": True, "game_id": gid, "distribution_id": dist_id, **stats})
+            return self._json_response(200, {
+                "success": True,
+                "game_id": gid,
+                "installation_id": installation.installation_id,
+                "distribution_id": dist_id,
+                **stats,
+            })
         except Exception as e:
             self.logger.exception("获取更新信息失败")
             return self._json_response(500, {"success": False, "error": str(e)})
 
     def _launcher_import_fever(self, args, body, method):
         try:
-            imported = self.game_helper.import_fever_game(args["game_id"])
+            distribution_id = int(args.get("distribution_id", -1))
+            imported = self.game_helper.import_fever_game(
+                args["game_id"], distribution_id, args.get("path", "")
+            )
             if not imported:
                 return self._json_response(404, {"success": False, "error": "未找到可导入的Fever游戏记录"})
-            return self._json_response(200, {"success": True, "game_id": imported})
+            game = self.game_helper.get_existing_game(imported)
+            return self._json_response(200, {
+                "success": True,
+                "game_id": imported,
+                "installation_id": game.default_installation_id if game else "",
+            })
         except Exception as e:
             self.logger.exception("导入Fever游戏失败")
             return self._json_response(500, {"success": False, "error": str(e)})
@@ -955,6 +1069,7 @@ class LocalRequestHandler:
                 short_id = item.get("game_id")
                 matched = self.game_helper.find_matching_game_id(short_id)
                 result.append({
+                    "fever_id": item.get("fever_id"),
                     "game_id": short_id,
                     "display_name": item.get("display_name"),
                     "path": item.get("path"),
@@ -962,6 +1077,38 @@ class LocalRequestHandler:
                     "matched_game_id": matched,
                 })
             return self._json_response(200, {"success": True, "games": result})
+        except Exception as e:
+            return self._json_response(500, {"success": False, "error": str(e)})
+
+    def _launcher_set_default(self, args, body, method):
+        try:
+            gid = args["game_id"]
+            installation_id = args["installation_id"]
+            if not self.game_helper.set_game_default_installation(gid, installation_id):
+                return self._json_response(404, {
+                    "success": False, "error": "安装记录不存在"
+                })
+            return self._json_response(200, {
+                "success": True,
+                "game_id": gid,
+                "installation_id": installation_id,
+            })
+        except Exception as e:
+            return self._json_response(500, {"success": False, "error": str(e)})
+
+    def _launcher_remove_installation(self, args, body, method):
+        try:
+            gid = args["game_id"]
+            installation_id = args["installation_id"]
+            if not self.game_helper.remove_game_installation(gid, installation_id):
+                return self._json_response(404, {
+                    "success": False, "error": "安装记录不存在"
+                })
+            return self._json_response(200, {
+                "success": True,
+                "game_id": gid,
+                "installation_id": installation_id,
+            })
         except Exception as e:
             return self._json_response(500, {"success": False, "error": str(e)})
 
@@ -1217,6 +1364,9 @@ class LocalRequestHandler:
     def _create_game_shortcut(self, args, body, method):
         """为指定游戏创建桌面快捷方式（通过工具启动）。"""
         game_id = body.get("game_id", "") if body else args.get("game_id", "")
+        installation_id = (
+            body.get("installation_id", "") if body else args.get("installation_id", "")
+        )
         if not game_id:
             return self._json_response(400, {"success": False, "error": "缺少 game_id 参数"})
         
@@ -1225,9 +1375,16 @@ class LocalRequestHandler:
             return self._json_response(404, {"success": False, "error": f"未找到游戏: {game_id}"})
         
         # 尝试使用游戏路径作为图标来源
-        icon_source = game.path if game.path and os.path.exists(game.path) else ""
+        installation = self._resolve_installation(game, installation_id)
+        icon_source = (
+            installation.path
+            if installation and installation.path and os.path.exists(installation.path)
+            else ""
+        )
         
-        success = game.create_tool_launch_shortcut(icon_source)
+        success = game.create_tool_launch_shortcut(
+            icon_source, installation.installation_id if installation else ""
+        )
         if success:
             return self._json_response(200, {"success": True, "message": "快捷方式创建成功"})
         else:

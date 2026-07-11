@@ -678,6 +678,7 @@ def handle_download_task(task_file_path):
         return False
     download_root = task_data.get("download_root", "")
     game_id = task_data.get("game_id", "")
+    installation_id = task_data.get("installation_id", "")
     version_code = task_data.get("version_code", "")
     distribution_id = int(task_data.get("distribution_id", -1))
     content_id = task_data.get("content_id")
@@ -692,20 +693,21 @@ def handle_download_task(task_file_path):
     use_download_ipc = bool(content_id) and distribution_id != -1 and download_root
     try:
         if use_download_ipc:
-            from download_binary import ensure_binary, PORT_SEND_HEARTBEAT, PORT_RECEIVE_PROGRESS
+            from download_binary import ensure_binary, allocate_ipc_ports
             import download_binary
             import threading
             if not ensure_binary():
                 result = False
             else:
+                heartbeat_port, progress_port = allocate_ipc_ports()
                 stop_event = threading.Event()
                 topic_bytes = str(content_id).encode("utf-8") if content_id else b""
                 ui_server_thread = threading.Thread(
                     target=download_binary.main_ui_server,
                     kwargs={
                         "topic": topic_bytes,
-                        "sub_port": PORT_SEND_HEARTBEAT,
-                        "pub_port": PORT_RECEIVE_PROGRESS,
+                        "sub_port": heartbeat_port,
+                        "pub_port": progress_port,
                         "stop_event": stop_event
                     }
                 )
@@ -730,8 +732,8 @@ def handle_download_task(task_file_path):
                     f"--isSSD:1",
                     f"--isRepairMode:1",
                     f"--contentid:{content_id}",
-                    f"--subport:{PORT_SEND_HEARTBEAT}",
-                    f"--pubport:{PORT_RECEIVE_PROGRESS}",
+                    f"--subport:{heartbeat_port}",
+                    f"--pubport:{progress_port}",
                     f"--path:{encoded_path}",
                     f"--repairListPath:{encoded_repair_list_path}",
                 ]
@@ -748,14 +750,34 @@ def handle_download_task(task_file_path):
             from gamemgr import GameManager
             game_mgr = GameManager()
             game = game_mgr.get_game(game_id)
-            if game:
-                game.version = version_code
-                if distribution_id != -1:
-                    game.default_distribution = distribution_id
-                    game.should_auto_start=True
-                game_mgr._save_games()
-                print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")
-                game.create_tool_launch_shortcut(game.path or "")
+            installation = game.get_installation(installation_id) if game else None
+            if game and installation:
+                if installation.distribution_id not in (-1, distribution_id):
+                    logger_local.error(
+                        "下载结果与安装记录分发不匹配，拒绝回写: "
+                        f"installation={installation.distribution_id}, task={distribution_id}"
+                    )
+                    result = False
+                else:
+                    installation.installed_version = version_code
+                    installation.distribution_id = distribution_id
+                    installation.content_id = content_id
+                    installation.startup_args = start_args or installation.startup_args
+                    installation.updated_at = int(time.time())
+                    if not installation.write_marker(game_id):
+                        logger_local.warning("下载完成，但写入安装标记文件失败")
+                    game.default_installation_id = installation.installation_id
+                    game.should_auto_start = True
+                    game_mgr._save_games()
+                    print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")
+                    game.create_tool_launch_shortcut(
+                        installation.path, installation.installation_id
+                    )
+            elif game:
+                logger_local.error(
+                    f"下载完成但安装记录不存在，拒绝覆盖其他安装: {installation_id}"
+                )
+                result = False
 
                 
         if ui_server_process:
@@ -981,6 +1003,7 @@ def setup_network_proxy(proxy_port):
     # 获取代理模式
     uri_action = genv.get("URI_STARTUP_ACTION", "")
     uri_game_id = genv.get("URI_STARTUP_GAME_ID", "")
+    uri_installation_id = genv.get("URI_STARTUP_INSTALLATION_ID", "")
     auto_games = game_helper.list_auto_start_games()
     proxy_mode = genv.get("proxy_mode", "")
     if not proxy_mode:
@@ -1034,13 +1057,16 @@ def setup_network_proxy(proxy_port):
     register_uri_scheme()
 
     # Start the URI listener so that new --uri invocations signal this instance
-    def _on_uri_signal(action: str, game_id: str):
-        logger.info(f"收到 URI 信号: action={action}, game_id={game_id}")
+    def _on_uri_signal(action: str, game_id: str, installation_id: str = ""):
+        logger.info(
+            f"收到 URI 信号: action={action}, game_id={game_id}, "
+            f"installation_id={installation_id}"
+        )
         if action == "start" and game_id:
             game = game_helper.get_game(game_id)
             if game:
                 logger.info(f"通过信号启动游戏: {game.name or game_id}")
-                game.start()
+                game.start(installation_id)
             else:
                 logger.warning(f"信号指定的游戏未找到: {game_id}")
         else:
@@ -1061,11 +1087,12 @@ def setup_network_proxy(proxy_port):
             game = game_helper.get_game(uri_game_id)
             if game:
                 logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
-                game.start()
+                game.start(uri_installation_id)
             else:
                 logger.warning(f"未找到游戏: {uri_game_id}")
             genv.set("URI_STARTUP_ACTION", "")
             genv.set("URI_STARTUP_GAME_ID", "")
+            genv.set("URI_STARTUP_INSTALLATION_ID", "")
         elif auto_games:
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
@@ -1076,12 +1103,13 @@ def setup_network_proxy(proxy_port):
         game = game_helper.get_game(uri_game_id)
         if game:
             logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
-            game.start()
+            game.start(uri_installation_id)
         else:
             logger.warning(f"未找到游戏: {uri_game_id}")
         # 清理启动参数
         genv.set("URI_STARTUP_ACTION", "")
         genv.set("URI_STARTUP_GAME_ID", "")
+        genv.set("URI_STARTUP_INSTALLATION_ID", "")
     elif proxy_mode == "global":
         # 次优先级：全局模式 → 设置系统/用户级代理
         _set_proxy(proxy_port)
@@ -1523,17 +1551,19 @@ if __name__ == "__main__":
             params = parse_uri(CLI_ARGS.uri)
             action = params.get("action", "open")
             game_id = params.get("game_id", "")
+            installation_id = params.get("installation_id", "")
             
             # idvlogin://start?game_id=xxx - 启动工具并仅启动该游戏（进程代理模式）
             # idvlogin://open?game_id=xxx - 打开 UI
             # 两种 action 都先尝试信号已运行实例
-            if signal_running_instance(game_id, action):
+            if signal_running_instance(game_id, action, installation_id):
                 # 已运行实例收到信号，退出本进程
                 sys.exit(0)
             # 无已运行实例，作为新实例启动
             if action == "start" and game_id:
                 genv.set("URI_STARTUP_ACTION", "start")
                 genv.set("URI_STARTUP_GAME_ID", game_id)
+                genv.set("URI_STARTUP_INSTALLATION_ID", installation_id)
             else:
                 # No running instance — fall through and start normally.
                 # Store the game_id so the UI opens for it after startup.
