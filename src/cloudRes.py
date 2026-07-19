@@ -34,6 +34,8 @@ class CloudRes:
             self.local_data = self.load_local_cache()
             self.session = requests.Session()
             self.session.trust_env = False
+            from gamecatalog import DynamicGameCatalog
+            self.dynamic_game_catalog = DynamicGameCatalog(cache_dir=self.cache_dir)
             self._initialized = True
 
     def _get_url_meta(self, url):
@@ -144,7 +146,7 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId:
                 return item
-        return None
+        return self.dynamic_game_catalog.get_cloud_config(shortGameId)
     
     def get_netease_style_pkgname_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -161,7 +163,7 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId:
                 return item
-        return None
+        return self.dynamic_game_catalog.get_feature(shortGameId)
     
     def get_all_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -176,7 +178,28 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId and item.get(key) != "" and item.get(key) != None:
                 return item.get(key)
+        dynamic_item = self.dynamic_game_catalog.get_cloud_config(shortGameId)
+        if dynamic_item and dynamic_item.get(key) not in ("", None):
+            return dynamic_item.get(key)
         return None
+
+    def start_dynamic_game_catalog_update(self):
+        """后台刷新可下载游戏与云端游戏 ID 映射。"""
+        return self.dynamic_game_catalog.start_background_refresh()
+
+    def get_dynamic_game_catalog(self):
+        return self.dynamic_game_catalog.get_games()
+
+    def get_dynamic_game_catalog_status(self):
+        return self.dynamic_game_catalog.get_status()
+
+    def get_cloud_game_config(self, game_id):
+        """按短游戏代号返回公开云端游戏配置。"""
+        return self.dynamic_game_catalog.get_cloud_config(game_id)
+
+    def resolve_cloud_game_id(self, game_id):
+        """将 h55 类短代号转为 aec...-g-h55 形式。"""
+        return self.dynamic_game_catalog.resolve_cloud_game_id(game_id)
 
     def get_version(self):
         return self.local_data.get('version', genv.get('VERSION'))

@@ -1309,6 +1309,8 @@
             }
         }
 
+        let gameCatalogRetryTimer = null;
+
         // 加载游戏列表
         function loadGameList() {
             fetch('/_idv-login/list-games')
@@ -1345,14 +1347,30 @@
                             gameSelect.appendChild(option);
                         });
 
+                        const catalogGames = Array.isArray(data.catalog) ? data.catalog : [];
+                        if (catalogGames.length > 0) {
+                            const catalogGroup = document.createElement('optgroup');
+                            catalogGroup.label = '可下载的更多游戏';
+                            catalogGames.forEach(game => {
+                                const option = document.createElement('option');
+                                option.value = game.game_id || game.short_game_id;
+                                option.text = game.name || game.short_game_id || option.value;
+                                option.selected = cmpGameId(option.value, currentGameId);
+                                catalogGroup.appendChild(option);
+                            });
+                            gameSelect.appendChild(catalogGroup);
+                        }
+
                         // 如果没有当前游戏ID或列表中没有此游戏
                         if (!currentGameId && data.games.length > 0) {
                             switchGame(data.games[0].game_id);
                         }
                         //如果当前有id但是列表中没有，展示当前id
                         has_match = false;
-                        for (var i = 0; i < data.games.length; i++) {
-                            if (cmpGameId(data.games[i].game_id, currentGameId)) {
+                        const selectableGames = data.games.concat(catalogGames);
+                        for (var i = 0; i < selectableGames.length; i++) {
+                            const selectableId = selectableGames[i].game_id || selectableGames[i].short_game_id;
+                            if (cmpGameId(selectableId, currentGameId)) {
                                 has_match = true;
                                 break;
                             }
@@ -1363,6 +1381,11 @@
                             option.text = currentGameId;
                             option.selected = true;
                             gameSelect.appendChild(option);
+                        }
+
+                        if (data.catalog_status && data.catalog_status.loading) {
+                            clearTimeout(gameCatalogRetryTimer);
+                            gameCatalogRetryTimer = setTimeout(loadGameList, 1500);
                         }
                     } else {
                         console.error('获取游戏列表失败');

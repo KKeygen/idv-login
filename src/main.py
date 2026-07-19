@@ -427,6 +427,7 @@ def initialize():
     app_state.cloud_res = m_cloudres
     genv.set("CLOUD_VERSION",m_cloudres.get_version())
     genv.set("CLOUD_ANNO",m_cloudres.get_announcement())
+    m_cloudres.start_dynamic_game_catalog_update()
 
     # disable warnings for requests
     requests.packages.urllib3.disable_warnings()

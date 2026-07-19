@@ -765,7 +765,20 @@ class LocalRequestHandler:
 
     def _list_games(self, args, body, method):
         try:
-            return self._json_response(200, {"success": True, "games": self.game_helper.list_games()})
+            games = self.game_helper.list_games()
+            saved_short_ids = {
+                getShortGameId(item.get("game_id", "")) for item in games
+            }
+            catalog = [
+                item for item in CloudRes().get_dynamic_game_catalog()
+                if item.get("short_game_id") not in saved_short_ids
+            ]
+            return self._json_response(200, {
+                "success": True,
+                "games": games,
+                "catalog": catalog,
+                "catalog_status": CloudRes().get_dynamic_game_catalog_status(),
+            })
         except Exception as e:
             return self._json_response(200, {"success": False, "error": str(e)})
 
@@ -775,8 +788,32 @@ class LocalRequestHandler:
             short_gid = getShortGameId(gid)
             game = self.game_helper.get_existing_game(gid)
             game_for_remote = self.game_helper.get_game_or_temp(gid)
-            distribution_ids = game_for_remote.get_distributions()
+            distribution_options = game_for_remote.get_distribution_options()
+            distribution_ids = game_for_remote._normalize_distribution_ids(
+                distribution_options
+            )
             can_convert = CloudRes().is_convert_to_normal(short_gid)
+            distribution_details = []
+            file_info_by_distribution = {}
+            for dist_id in distribution_ids:
+                launcher_data = game_for_remote.get_launcher_data_for_distribution(dist_id)
+                file_info = game_for_remote.get_file_distribution_info(dist_id)
+                file_info_by_distribution[dist_id] = file_info
+                distribution_details.append((dist_id, launcher_data, file_info))
+            if game:
+                identified = False
+                for item in game.installations.values():
+                    if item.distribution_id != -1:
+                        continue
+                    old_distribution_id = item.distribution_id
+                    game.identify_installation_distribution(
+                        item.installation_id,
+                        distribution_options,
+                        file_info_by_distribution,
+                    )
+                    identified = identified or item.distribution_id != old_distribution_id
+                if identified:
+                    self.game_helper._save_games()
             installations = (
                 [item.get_non_sensitive_data() for item in game.installations.values()]
                 if game else []
@@ -795,9 +832,7 @@ class LocalRequestHandler:
                 os.path.normpath(fever_info.get("path", ""))
             ) not in known_paths
             distributions = []
-            for dist_id in distribution_ids:
-                launcher_data = game_for_remote.get_launcher_data_for_distribution(dist_id)
-                file_info = game_for_remote.get_file_distribution_info(dist_id)
+            for dist_id, launcher_data, file_info in distribution_details:
                 target_ver = file_info.get("version_code", "") if file_info else ""
                 can_download = CloudRes().is_downloadable(short_gid) and file_info is not None
                 matching_installations = [

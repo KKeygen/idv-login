@@ -188,6 +188,82 @@ class GameInstallationModelTests(unittest.TestCase):
         self.assertEqual(second.installed_version, "v3_fever")
         self.assertEqual(game.default_installation_id, second.installation_id)
 
+    def test_known_distribution_reuses_unknown_installation_at_same_path(self):
+        game = Game("h55")
+        unknown = game.add_installation("D:/Games/dwrg.exe", -1, source="manual")
+
+        known = game.add_installation("D:/Games/dwrg.exe", 73, source="download")
+
+        self.assertIs(known, unknown)
+        self.assertEqual(len(game.installations), 1)
+        self.assertEqual(known.distribution_id, 73)
+
+    def test_unknown_distribution_uses_fewest_hash_mismatches(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = os.path.join(temp_dir, "game.exe")
+            common = os.path.join(temp_dir, "common.bin")
+            Path(executable).touch()
+            Path(common).touch()
+            game = Game("h55")
+            installation = game.add_installation(executable, -1)
+            options = [73, 134]
+            file_infos = {
+                73: {"files": [{"path": "common.bin", "xxh": "wrong", "op": 1}]},
+                134: {"files": [{"path": "common.bin", "xxh": "local", "op": 1}]},
+            }
+
+            with mock.patch("gamemgr.calculate_xxh64", return_value="local") as hasher:
+                detected = game.identify_installation_distribution(
+                    installation.installation_id, options, file_infos
+                )
+
+            self.assertEqual(detected, 134)
+            self.assertEqual(installation.distribution_id, 134)
+            hasher.assert_called_once_with(common)
+
+    def test_unknown_distribution_tie_uses_first_cloud_distribution(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = os.path.join(temp_dir, "game.exe")
+            common = os.path.join(temp_dir, "common.bin")
+            Path(executable).touch()
+            Path(common).touch()
+            game = Game("h55")
+            installation = game.add_installation(executable, -1)
+            file_infos = {
+                73: {"files": [{"path": "common.bin", "xxh": "same", "op": 1}]},
+                134: {"files": [{"path": "common.bin", "xxh": "same", "op": 1}]},
+            }
+
+            with mock.patch("gamemgr.calculate_xxh64", return_value="same"):
+                detected = game.identify_installation_distribution(
+                    installation.installation_id, [73, 134], file_infos
+                )
+
+            self.assertEqual(detected, 73)
+            self.assertEqual(installation.distribution_id, 73)
+
+    def test_update_stats_include_manifest_items_without_url(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = os.path.join(temp_dir, "game.exe")
+            Path(executable).touch()
+            game = Game("h55")
+            installation = game.add_installation(executable, 134)
+            files = [
+                {"path": "a.bin", "xxh": "a", "size": 10, "url": ""},
+                {"path": "b.bin", "xxh": "b", "size": 20},
+            ]
+            game.get_file_distribution_info = lambda distribution_id: {
+                "version_code": "v3_target",
+                "files": files,
+            }
+
+            with mock.patch.object(game, "version_check", return_value=(False, files)):
+                stats = game.get_update_stats(134, installation.installation_id)
+
+            self.assertEqual(stats["file_count"], 2)
+            self.assertEqual(stats["download_bytes"], 30)
+            self.assertTrue(stats["needs_update"])
+
     def test_successful_start_returns_true(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             executable = os.path.join(temp_dir, "game.exe")

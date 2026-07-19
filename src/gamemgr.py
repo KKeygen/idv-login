@@ -352,7 +352,6 @@ class Game:
                     item for item in self.installations.values()
                     if os.path.normcase(os.path.normpath(item.path or ""))
                     == os.path.normcase(os.path.normpath(normalized_path))
-                    and (item.distribution_id == dist_id or dist_id == -1)
                 ),
                 None,
             )
@@ -843,6 +842,73 @@ class Game:
                 continue
         return result
 
+    def identify_installation_distribution(
+        self,
+        installation_id: str,
+        distribution_options: List,
+        file_info_by_distribution: Dict[int, dict],
+    ) -> int:
+        """Identify and persist the distribution of an unclassified install.
+
+        The closest manifest wins by mismatched-file count.  Ties use the
+        first cloud-configured distribution, which is the default.
+        """
+        installation = self.get_installation(installation_id)
+        if installation is None or installation.distribution_id != -1:
+            return installation.distribution_id if installation else -1
+        if not installation.path or not os.path.exists(installation.path):
+            return -1
+        root_path = self.get_root_path(installation.installation_id)
+        if not root_path or not os.path.exists(root_path):
+            return -1
+
+        candidates = []
+        seen = set()
+        for index, option in enumerate(distribution_options or []):
+            dist_ids = self._normalize_distribution_ids([option])
+            if not dist_ids or dist_ids[0] in seen:
+                continue
+            dist_id = dist_ids[0]
+            seen.add(dist_id)
+            file_info = file_info_by_distribution.get(dist_id)
+            files = file_info.get("files", []) if isinstance(file_info, dict) else []
+            if not isinstance(files, list) or not files:
+                continue
+            candidates.append({
+                "distribution_id": dist_id,
+                "files": files,
+                "index": index,
+            })
+        if not candidates:
+            return -1
+
+        hash_cache = {}
+        scored = []
+        try:
+            for candidate in candidates:
+                _, mismatched = self.version_check(
+                    candidate["files"], installation.installation_id, hash_cache
+                )
+                scored.append((
+                    len(mismatched),
+                    candidate["index"],
+                    candidate["distribution_id"],
+                ))
+        except OSError as exc:
+            self.logger.warning(f"识别游戏分发时读取文件失败: {exc}")
+            return -1
+
+        mismatch_count, _, distribution_id = min(
+            scored, key=lambda item: (item[0], item[1])
+        )
+        installation.distribution_id = distribution_id
+        installation.updated_at = int(time.time())
+        self.logger.info(
+            f"已识别安装记录 {installation.installation_id} 的分发: "
+            f"{distribution_id}（{mismatch_count} 个文件不匹配）"
+        )
+        return distribution_id
+
     def get_distributions(self) -> List[int]:
         """获取游戏可用的分发ID列表"""
         cloud_res = CloudRes()
@@ -1063,7 +1129,10 @@ class Game:
         return not check_result
 
     def version_check(
-        self, files: List[dict], installation_id: str = ""
+        self,
+        files: List[dict],
+        installation_id: str = "",
+        hash_cache: Optional[Dict[str, str]] = None,
     ) -> Tuple[bool, List[dict]]:
         """检查游戏版本是否匹配, 返回需要更新的文件列表"""
         root_path = self.get_root_path(installation_id)
@@ -1079,7 +1148,12 @@ class Game:
                 to_update.append(file_info)
                 continue
             #计算xxh64值
-            local_xxh64 = calculate_xxh64(file_path)
+            if hash_cache is not None and file_path in hash_cache:
+                local_xxh64 = hash_cache[file_path]
+            else:
+                local_xxh64 = calculate_xxh64(file_path)
+                if hash_cache is not None:
+                    hash_cache[file_path] = local_xxh64
             if local_xxh64 != file_info.get("xxh", ""):
                 to_update.append(file_info)
         return len(to_update) == 0, to_update
@@ -1113,7 +1187,6 @@ class Game:
             return None
         files = file_distribution_info.get("files", [])
         check_result, to_update = self.version_check(files, installation.installation_id)
-        to_update = [item for item in to_update if item.get("url", "") != ""]
         download_bytes = sum(self._extract_file_size(item) for item in to_update)
         usage = shutil.disk_usage(download_root)
         return {
