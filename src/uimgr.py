@@ -23,7 +23,7 @@ import os
 import sys
 import threading
 
-from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QUrl
+from PyQt6.QtCore import QByteArray, QBuffer, QEvent, QIODevice, Qt, QUrl
 from PyQt6.QtWebEngineCore import (
     QWebEngineUrlScheme,
     QWebEngineUrlSchemeHandler,
@@ -31,7 +31,14 @@ from PyQt6.QtWebEngineCore import (
     QWebEnginePage,
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import QMainWindow
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from logutil import setup_logger
 from secure_write import write_file_restricted
@@ -362,6 +369,260 @@ class _MainThreadDispatcher(QObject):
         return bag["value"]
 
 
+class _WindowsTitleBar(QWidget):
+    """Small native-window control strip for the Windows frameless shell."""
+
+    def __init__(self, window: "_WindowsFramelessWindow"):
+        super().__init__(window)
+        self._window = window
+        self.setObjectName("windowsTitleBar")
+        self.setFixedHeight(40)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._title = QLabel(window.windowTitle(), self)
+        self._title.setObjectName("windowsTitle")
+        self._title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self._title)
+        layout.addStretch(1)
+
+        self._minimize_button = self._make_button("\u2014", "最小化")
+        self._maximize_button = self._make_button("\u25a1", "最大化")
+        self._close_button = self._make_button("\u00d7", "关闭", close_button=True)
+        self._minimize_button.clicked.connect(window.showMinimized)
+        self._maximize_button.clicked.connect(window.toggle_maximized)
+        self._close_button.clicked.connect(window.close)
+
+        layout.addWidget(self._minimize_button)
+        layout.addWidget(self._maximize_button)
+        layout.addWidget(self._close_button)
+
+        self.setStyleSheet(
+            """
+            QWidget#windowsTitleBar {
+                background: #111720;
+            }
+            QLabel#windowsTitle {
+                color: rgba(255, 255, 255, 190);
+                font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+                font-size: 12px;
+            }
+            QToolButton {
+                color: rgba(255, 255, 255, 210);
+                background: transparent;
+                border: 0;
+                font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
+                font-size: 16px;
+            }
+            QToolButton:hover {
+                background: rgba(255, 255, 255, 24);
+            }
+            QToolButton:pressed {
+                background: rgba(255, 255, 255, 36);
+            }
+            QToolButton#closeButton:hover {
+                color: white;
+                background: #c42b1c;
+            }
+            QToolButton#closeButton:pressed {
+                background: #a82318;
+            }
+            """
+        )
+
+    def _make_button(
+        self, text: str, tooltip: str, *, close_button: bool = False
+    ) -> QToolButton:
+        button = QToolButton(self)
+        button.setText(text)
+        button.setToolTip(tooltip)
+        button.setFixedSize(46, 40)
+        button.setCursor(Qt.CursorShape.ArrowCursor)
+        if close_button:
+            button.setObjectName("closeButton")
+        return button
+
+    def update_window_state(self):
+        maximized = self._window.isMaximized()
+        self._maximize_button.setText("\u2750" if maximized else "\u25a1")
+        self._maximize_button.setToolTip("还原" if maximized else "最大化")
+
+    def update_title(self):
+        self._title.setText(self._window.windowTitle())
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self._window.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._window.toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+class _WindowsFramelessWindow(QMainWindow):
+    """Windows-only frameless host around the existing WebEngine UI.
+
+    Resizing is delegated to the native non-client hit-test path.  This keeps
+    Aero Snap, multi-monitor DPI handling and the system resize cursor working
+    without a custom mouse-drag implementation.
+    """
+
+    _WM_NCHITTEST = 0x0084
+    _HTLEFT = 10
+    _HTRIGHT = 11
+    _HTTOP = 12
+    _HTTOPLEFT = 13
+    _HTTOPRIGHT = 14
+    _HTBOTTOM = 15
+    _HTBOTTOMLEFT = 16
+    _HTBOTTOMRIGHT = 17
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint, True)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
+        self.setStyleSheet("QMainWindow { background: #10141b; }")
+
+        self._container = QWidget(self)
+        self._layout = QVBoxLayout(self._container)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
+        super().setCentralWidget(self._container)
+
+        self._title_bar = _WindowsTitleBar(self)
+        self._layout.addWidget(self._title_bar)
+        self._dwm_style_applied = False
+
+    def set_content_widget(self, widget: QWidget):
+        self._layout.addWidget(widget, 1)
+
+    def toggle_maximized(self):
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._title_bar.update_window_state()
+        elif event.type() == QEvent.Type.WindowTitleChange:
+            self._title_bar.update_title()
+        super().changeEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._dwm_style_applied:
+            self._apply_dwm_style()
+            self._dwm_style_applied = True
+
+    def _apply_dwm_style(self):
+        """Ask DWM for native shadow and rounded corners when available."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = int(self.winId())
+            dwmapi = ctypes.windll.dwmapi
+
+            # Windows 11: DWMWA_WINDOW_CORNER_PREFERENCE / DWMWCP_ROUND.
+            corner_preference = ctypes.c_int(2)
+
+            # A one-pixel non-client frame lets DWM retain its native shadow on
+            # supported Windows 10/11 builds without making WebEngine translucent.
+            class MARGINS(ctypes.Structure):
+                _fields_ = [
+                    ("cxLeftWidth", ctypes.c_int),
+                    ("cxRightWidth", ctypes.c_int),
+                    ("cyTopHeight", ctypes.c_int),
+                    ("cyBottomHeight", ctypes.c_int),
+                ]
+
+            margins = MARGINS(1, 1, 1, 1)
+            dwmapi.DwmSetWindowAttribute.argtypes = [
+                wintypes.HWND,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+            ]
+            dwmapi.DwmExtendFrameIntoClientArea.argtypes = [
+                wintypes.HWND,
+                ctypes.POINTER(MARGINS),
+            ]
+            native_hwnd = wintypes.HWND(hwnd)
+            dwmapi.DwmSetWindowAttribute(
+                native_hwnd,
+                33,
+                ctypes.byref(corner_preference),
+                ctypes.sizeof(corner_preference),
+            )
+            dwmapi.DwmExtendFrameIntoClientArea(
+                native_hwnd, ctypes.byref(margins)
+            )
+        except Exception as exc:
+            logger.debug(f"Windows DWM 窗口样式不可用: {exc}")
+
+    def nativeEvent(self, event_type, message):
+        if not self.isMaximized() and bytes(event_type) == b"windows_generic_MSG":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == self._WM_NCHITTEST:
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    rect = wintypes.RECT()
+                    hwnd = int(self.winId())
+                    user32 = ctypes.windll.user32
+                    user32.GetWindowRect.argtypes = [
+                        wintypes.HWND,
+                        ctypes.POINTER(wintypes.RECT),
+                    ]
+                    native_hwnd = wintypes.HWND(hwnd)
+                    if user32.GetWindowRect(native_hwnd, ctypes.byref(rect)):
+                        try:
+                            user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+                            user32.GetDpiForWindow.restype = wintypes.UINT
+                            dpi = user32.GetDpiForWindow(native_hwnd)
+                        except Exception:
+                            dpi = 96
+                        border = max(6, round(7 * dpi / 96))
+                        left = x < rect.left + border
+                        right = x >= rect.right - border
+                        top = y < rect.top + border
+                        bottom = y >= rect.bottom - border
+
+                        if top and left:
+                            return True, self._HTTOPLEFT
+                        if top and right:
+                            return True, self._HTTOPRIGHT
+                        if bottom and left:
+                            return True, self._HTBOTTOMLEFT
+                        if bottom and right:
+                            return True, self._HTBOTTOMRIGHT
+                        if left:
+                            return True, self._HTLEFT
+                        if right:
+                            return True, self._HTRIGHT
+                        if top:
+                            return True, self._HTTOP
+                        if bottom:
+                            return True, self._HTBOTTOM
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
+
+
 class UIManager:
     """Manages the PyQt6/QtWebEngine window for the account management UI.
 
@@ -395,12 +656,18 @@ class UIManager:
         if app is None:
             raise RuntimeError("QApplication 未创建")
 
-        self._window = QMainWindow()
+        if sys.platform == "win32":
+            self._window = _WindowsFramelessWindow()
+        else:
+            self._window = QMainWindow()
         self._window.setWindowTitle("渠道服账号管理")
         self._window.resize(900, 700)
 
         self._view = QWebEngineView(self._window)
-        self._window.setCentralWidget(self._view)
+        if isinstance(self._window, _WindowsFramelessWindow):
+            self._window.set_content_widget(self._view)
+        else:
+            self._window.setCentralWidget(self._view)
 
         # 使用自定义 Page 子类将 JS 控制台消息写入 Python 日志
         custom_page = _LoggingWebPage(self._view)

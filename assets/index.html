@@ -642,7 +642,7 @@
             </div>
         </div>
 
-        <div class="card mb-4">
+        <div class="card mb-4" id="launcher">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-rocket-takeoff me-2"></i>游戏启动器</span>
                 <button class="btn btn-sm btn-outline-secondary" id="launcherToggleBtn" onclick="toggleLauncherPanel()">
@@ -1323,21 +1323,6 @@
 
                         // 获取当前选中的游戏ID
                         const currentGameId = getQueryVariable("game_id");
-                        //如果当前选中id为空，远端返回的游戏列表也为空，则通过localstorage 一次性地用swal询问用户是否要跳转到https://localhost/_idv-login/index?game_id=aecfrt3rmaaaaajl-g-h55
-                        const has_ask_for_jump_20260205 = localStorage.getItem('has_ask_for_jump_20260205');
-                        if (!currentGameId && data.games.length === 0 && !has_ask_for_jump_20260205) {
-                            swal({
-                                title: "游戏ID为空，您可能从未记录过渠道服账号",
-                                text: "您是否要前往安装第五人格新引擎？",
-                                icon: "info",
-                                buttons: ["取消", "跳转"],
-                            }).then((willJump) => {
-                                if (willJump) {
-                                    localStorage.setItem('has_ask_for_jump_20260205', 'true');
-                                    window.location.href = '/_idv-login/index?game_id=aecfrt3rmaaaaajl-g-h55';
-                                }
-                            });
-                        }
                         // 添加游戏选项
                         data.games.forEach(game => {
                             const option = document.createElement('option');
@@ -1359,6 +1344,18 @@
                                 catalogGroup.appendChild(option);
                             });
                             gameSelect.appendChild(catalogGroup);
+                        }
+
+                        // 没有本地游戏记录时，直接进入动态目录中的游戏下载界面。
+                        if (!currentGameId && data.games.length === 0 && catalogGames.length > 0) {
+                            const firstCatalogId = catalogGames[0].game_id || catalogGames[0].short_game_id;
+                            if (firstCatalogId) {
+                                const downloadUrl = new URL(window.location.href);
+                                downloadUrl.searchParams.set('game_id', firstCatalogId);
+                                downloadUrl.hash = 'launcher';
+                                window.location.replace(downloadUrl.toString());
+                                return;
+                            }
                         }
 
                         // 如果没有当前游戏ID或列表中没有此游戏
