@@ -42,6 +42,9 @@ cloud_res.CloudRes = type(
     {
         "is_convert_to_normal": lambda self, game_id: False,
         "get_start_argument": lambda self, game_id: "",
+        "get_download_distributions": lambda self, game_id: [],
+        "is_fever_managed_game": lambda self, game_id, distribution_id=-1: False,
+        "has_manual_game_feature": lambda self, game_id: False,
     },
 )
 sys.modules["cloudRes"] = cloud_res
@@ -69,6 +72,18 @@ class GameInstallationModelTests(unittest.TestCase):
         manager._save_games = lambda: None
         manager.logger = getattr(game, "logger", None)
         return manager
+
+    def test_nested_startup_path_keeps_selected_install_root(self):
+        game = Game("h55")
+        installation = game.add_installation(
+            "/Games/Fever/bin/game.exe",
+            distribution_id=73,
+            startup_path="bin/game.exe",
+        )
+        self.assertEqual(
+            game.get_root_path(installation.installation_id),
+            "/Games/Fever",
+        )
 
     def test_legacy_record_migrates_to_one_stable_installation(self):
         legacy = {
@@ -208,17 +223,40 @@ class GameInstallationModelTests(unittest.TestCase):
             installation = game.add_installation(executable, -1)
             options = [73, 134]
             file_infos = {
-                73: {"files": [{"path": "common.bin", "xxh": "wrong", "op": 1}]},
-                134: {"files": [{"path": "common.bin", "xxh": "local", "op": 1}]},
+                73: {
+                    "files": [{"path": "common.bin", "xxh": "wrong", "op": 1}],
+                    "version_code": "v3_stable",
+                    "app_content_id": 434,
+                },
+                134: {
+                    "files": [{"path": "common.bin", "xxh": "local", "op": 1}],
+                    "version_code": "v3_preview",
+                    "app_content_id": 667,
+                },
+            }
+            launcher_data = {
+                73: {"startup_path": "game.exe", "startup_params": "--stable"},
+                134: {
+                    "startup_path": "game.exe",
+                    "startup_params": "--start_from_launcher=1",
+                },
             }
 
             with mock.patch("gamemgr.calculate_xxh64", return_value="local") as hasher:
                 detected = game.identify_installation_distribution(
-                    installation.installation_id, options, file_infos
+                    installation.installation_id,
+                    options,
+                    file_infos,
+                    launcher_data,
                 )
 
             self.assertEqual(detected, 134)
             self.assertEqual(installation.distribution_id, 134)
+            self.assertEqual(installation.installed_version, "v3_preview")
+            self.assertEqual(installation.content_id, 667)
+            self.assertEqual(
+                installation.startup_args, "--start_from_launcher=1"
+            )
             hasher.assert_called_once_with(common)
 
     def test_unknown_distribution_tie_uses_first_cloud_distribution(self):
@@ -241,6 +279,69 @@ class GameInstallationModelTests(unittest.TestCase):
 
             self.assertEqual(detected, 73)
             self.assertEqual(installation.distribution_id, 73)
+
+    def test_manifest_unavailable_uses_first_distribution_and_cloud_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executable = os.path.join(temp_dir, "game.exe")
+            Path(executable).touch()
+            game = Game("h55")
+            installation = game.add_installation(executable, 134, "v3_old")
+
+            detected = game.identify_installation_distribution(
+                installation.installation_id,
+                [73, 134],
+                {
+                    73: {"version_code": "v3_cloud", "app_content_id": 434},
+                    134: {},
+                },
+                {
+                    73: {
+                        "startup_path": "game.exe",
+                        "startup_params": "--start_from_launcher=1",
+                    }
+                },
+                force=True,
+            )
+
+            self.assertEqual(detected, 73)
+            self.assertEqual(installation.distribution_id, 73)
+            self.assertEqual(installation.installed_version, "v3_cloud")
+            self.assertEqual(installation.content_id, 434)
+            self.assertEqual(
+                installation.startup_args, "--start_from_launcher=1"
+            )
+
+    def test_forced_fever_distribution_setting_round_trips_in_sidecar(self):
+        game = Game("h55")
+        game.add_installation("D:/Games/dwrg.exe", 73)
+        self.assertTrue(game.set_fever_bridge_forced(73, True))
+
+        restored = Game.from_dict(game.to_dict(), game.to_installation_state())
+
+        self.assertTrue(restored.is_fever_bridge_forced(73))
+        self.assertNotIn("force_fever_bridge_distributions", restored.to_dict())
+
+    def test_fever_bridge_force_overrides_manual_feature_for_one_distribution(self):
+        _genv_store["FEVER_BRIDGE_ENABLED"] = True
+        game = Game("h55")
+        installation = game.add_installation("D:/Games/dwrg.exe", 73)
+        with mock.patch.object(
+            cloud_res.CloudRes, "is_fever_managed_game", return_value=True
+        ), mock.patch.object(
+            cloud_res.CloudRes, "has_manual_game_feature", return_value=True
+        ):
+            self.assertFalse(game.should_use_fever_bridge(installation))
+            game.set_fever_bridge_forced(73, True)
+            self.assertTrue(game.should_use_fever_bridge(installation))
+
+        other = game.add_installation("D:/Games/preview.exe", 134)
+        with mock.patch.object(
+            cloud_res.CloudRes, "is_fever_managed_game", return_value=True
+        ), mock.patch.object(
+            cloud_res.CloudRes, "has_manual_game_feature", return_value=True
+        ):
+            self.assertFalse(game.should_use_fever_bridge(other))
+        _genv_store.clear()
 
     def test_update_stats_include_manifest_items_without_url(self):
         with tempfile.TemporaryDirectory() as temp_dir:

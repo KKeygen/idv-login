@@ -17,6 +17,7 @@ from download_binary import (
     ProgressReporter,
     allocate_ipc_ports,
     _progress_view,
+    _progress_event,
     _render_core_error,
     _render_progress_line,
 )
@@ -78,6 +79,11 @@ class DownloadProgressTests(unittest.TestCase):
     def test_setup_error_is_not_discarded(self):
         message = _render_core_error(MSG_SETUP_ERROR, b"invalid path")
         self.assertEqual(message, "下载初始化失败：invalid path")
+
+    def test_finished_core_state_remains_pending_until_metadata_is_saved(self):
+        event = _progress_event({"StateFlags": 8})
+        self.assertEqual(event["status"], "pending")
+        self.assertEqual(event["progress_percent"], 100)
 
 
 if __name__ == "__main__":

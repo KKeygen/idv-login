@@ -173,6 +173,7 @@ class Game:
         installation_state=None,
         installations=None,
         default_installation_id: str = "",
+        force_fever_bridge_distributions=None,
     ) -> None:
         self.game_id = game_id
         self.name = name if name else game_id
@@ -188,6 +189,14 @@ class Game:
             default_installation_id = installation_state.get(
                 "default_installation_id", ""
             )
+            force_fever_bridge_distributions = installation_state.get(
+                "force_fever_bridge_distributions", []
+            )
+        self.force_fever_bridge_distributions = {
+            self._coerce_distribution_id(item)
+            for item in (force_fever_bridge_distributions or [])
+            if self._coerce_distribution_id(item) != -1
+        }
         if isinstance(installations, dict):
             raw_installations = installations.values()
         elif isinstance(installations, list):
@@ -238,6 +247,7 @@ class Game:
                 installation_state.get("legacy_projection"),
             )
         self.last_update_async = False
+        self.last_start_error = ""
 
     @staticmethod
     def _coerce_distribution_id(value) -> int:
@@ -490,6 +500,9 @@ class Game:
                 installation_id: installation.to_dict()
                 for installation_id, installation in self.installations.items()
             },
+            "force_fever_bridge_distributions": sorted(
+                self.force_fever_bridge_distributions
+            ),
         }
 
     def get_non_sensitive_data(self) -> dict:
@@ -504,15 +517,70 @@ class Game:
                 installation.get_non_sensitive_data()
                 for installation in self.installations.values()
             ],
+            "force_fever_bridge_distributions": sorted(
+                self.force_fever_bridge_distributions
+            ),
         }
 
+    def is_fever_bridge_forced(self, distribution_id: int) -> bool:
+        return self._coerce_distribution_id(
+            distribution_id
+        ) in self.force_fever_bridge_distributions
+
+    def set_fever_bridge_forced(self, distribution_id: int, forced: bool) -> bool:
+        dist_id = self._coerce_distribution_id(distribution_id)
+        if dist_id == -1:
+            return False
+        if forced:
+            self.force_fever_bridge_distributions.add(dist_id)
+        else:
+            self.force_fever_bridge_distributions.discard(dist_id)
+        return True
+
+    def should_use_fever_bridge(self, installation: GameInstallation) -> bool:
+        forced = self.is_fever_bridge_forced(installation.distribution_id)
+        if not genv.get("FEVER_BRIDGE_ENABLED", False) and not forced:
+            return False
+        cloud_res = CloudRes()
+        short_game_id = getShortGameId(self.game_id)
+        return bool(
+            cloud_res.is_fever_managed_game(
+                short_game_id, installation.distribution_id
+            )
+            and (
+                forced
+                or not cloud_res.has_manual_game_feature(short_game_id)
+            )
+        )
+
     def start(self, installation_id: str = ""):
+        self.last_start_error = ""
         installation = self.get_installation(installation_id)
         game_path = installation.path if installation else ""
         if not game_path or not os.path.exists(game_path):
             self.logger.error(f"游戏路径无效或不存在: {game_path}")
+            self.last_start_error = "游戏路径无效或不存在"
             return False
+        use_fever_bridge = self.should_use_fever_bridge(installation)
+        if use_fever_bridge:
+            from fever_bridge import FeverBridge
+            if app_state.fever_bridge is None:
+                app_state.fever_bridge = FeverBridge(self.logger)
+            try:
+                if not app_state.fever_bridge.activate(self.game_id):
+                    self.logger.error("平台托管登录仅支持 Windows")
+                    self.last_start_error = "平台托管登录仅支持 Windows"
+                    return False
+            except Exception:
+                self.logger.exception("启动平台托管登录失败")
+                self.last_start_error = "平台托管登录启动失败；请确认真实发烧平台未在运行且 mpay 资源完整"
+                return False
         start_args = installation.startup_args if installation else ""
+        if use_fever_bridge and not start_args and installation.distribution_id != -1:
+            launcher_data = self.get_launcher_data_for_distribution(
+                installation.distribution_id
+            ) or {}
+            start_args = str(launcher_data.get("startup_params") or "")
         if not start_args and self.can_convert_to_normal():
             start_args = CloudRes().get_start_argument(getShortGameId(self.game_id)) or ""
         if sys.platform == "win32":
@@ -822,6 +890,16 @@ class Game:
         installation = self.get_installation(installation_id)
         if not installation or not installation.path:
             return ""
+        startup_path = str(installation.startup_path or "").replace("\\", "/")
+        relative_parts = [
+            part for part in startup_path.split("/")
+            if part not in ("", ".")
+        ]
+        if relative_parts and ".." not in relative_parts:
+            root = installation.path
+            for _part in relative_parts:
+                root = os.path.dirname(root)
+            return root
         return os.path.dirname(installation.path)
     
     def _normalize_distribution_ids(self, distributions: List) -> List[int]:
@@ -847,20 +925,26 @@ class Game:
         installation_id: str,
         distribution_options: List,
         file_info_by_distribution: Dict[int, dict],
+        launcher_data_by_distribution: Optional[Dict[int, dict]] = None,
+        force: bool = False,
     ) -> int:
-        """Identify and persist the distribution of an unclassified install.
+        """Identify and persist the closest cloud distribution for an install.
 
         The closest manifest wins by mismatched-file count.  Ties use the
-        first cloud-configured distribution, which is the default.
+        first cloud-configured distribution.  When manifests cannot be scored,
+        the first distribution is still selected.
         """
         installation = self.get_installation(installation_id)
-        if installation is None or installation.distribution_id != -1:
+        if installation is None or (installation.distribution_id != -1 and not force):
             return installation.distribution_id if installation else -1
         if not installation.path or not os.path.exists(installation.path):
             return -1
-        root_path = self.get_root_path(installation.installation_id)
-        if not root_path or not os.path.exists(root_path):
-            return -1
+
+        ordered_distribution_ids = list(dict.fromkeys(
+            self._normalize_distribution_ids(distribution_options or [])
+        ))
+        if not ordered_distribution_ids:
+            return installation.distribution_id
 
         candidates = []
         seen = set()
@@ -879,15 +963,28 @@ class Game:
                 "files": files,
                 "index": index,
             })
-        if not candidates:
-            return -1
-
+        launcher_data_by_distribution = launcher_data_by_distribution or {}
+        selected_distribution_id = ordered_distribution_ids[0]
+        mismatch_count = None
         hash_cache = {}
         scored = []
         try:
             for candidate in candidates:
+                launcher_data = launcher_data_by_distribution.get(
+                    candidate["distribution_id"], {}
+                )
+                startup_path = str(
+                    launcher_data.get("startup_path")
+                    or installation.startup_path
+                    or os.path.basename(installation.path)
+                )
                 _, mismatched = self.version_check(
-                    candidate["files"], installation.installation_id, hash_cache
+                    candidate["files"],
+                    installation.installation_id,
+                    hash_cache,
+                    root_path=self._root_from_executable(
+                        installation.path, startup_path
+                    ),
                 )
                 scored.append((
                     len(mismatched),
@@ -896,18 +993,80 @@ class Game:
                 ))
         except OSError as exc:
             self.logger.warning(f"识别游戏分发时读取文件失败: {exc}")
-            return -1
+            scored = []
 
-        mismatch_count, _, distribution_id = min(
-            scored, key=lambda item: (item[0], item[1])
+        if scored:
+            mismatch_count, _, selected_distribution_id = min(
+                scored, key=lambda item: (item[0], item[1])
+            )
+
+        selected_file_info = file_info_by_distribution.get(
+            selected_distribution_id, {}
         )
-        installation.distribution_id = distribution_id
+        selected_launcher_data = launcher_data_by_distribution.get(
+            selected_distribution_id, {}
+        )
+        installation.distribution_id = selected_distribution_id
+        if isinstance(selected_file_info, dict):
+            if selected_file_info.get("version_code") is not None:
+                installation.installed_version = str(
+                    selected_file_info.get("version_code") or ""
+                )
+            if selected_file_info.get("app_content_id") is not None:
+                installation.content_id = selected_file_info.get("app_content_id")
+        if isinstance(selected_launcher_data, dict):
+            startup_path = str(selected_launcher_data.get("startup_path") or "")
+            if self._is_safe_startup_path_for_executable(
+                installation.path, startup_path
+            ):
+                installation.startup_path = startup_path
+            elif not installation.startup_path:
+                installation.startup_path = os.path.basename(installation.path)
+            installation.startup_args = str(
+                selected_launcher_data.get("startup_params") or ""
+            )
         installation.updated_at = int(time.time())
+        score_text = (
+            f"{mismatch_count} 个文件不匹配"
+            if mismatch_count is not None
+            else "无法比较清单，使用首个分发"
+        )
         self.logger.info(
             f"已识别安装记录 {installation.installation_id} 的分发: "
-            f"{distribution_id}（{mismatch_count} 个文件不匹配）"
+            f"{selected_distribution_id}（{score_text}）"
         )
-        return distribution_id
+        return selected_distribution_id
+
+    @staticmethod
+    def _is_safe_startup_path_for_executable(
+        executable_path: str, startup_path: str
+    ) -> bool:
+        parts = [
+            part for part in str(startup_path or "").replace("\\", "/").split("/")
+            if part not in ("", ".")
+        ]
+        return bool(
+            parts
+            and ".." not in parts
+            and not os.path.isabs(startup_path)
+            and os.path.normcase(parts[-1])
+            == os.path.normcase(os.path.basename(executable_path))
+        )
+
+    @classmethod
+    def _root_from_executable(cls, executable_path: str, startup_path: str) -> str:
+        if not cls._is_safe_startup_path_for_executable(
+            executable_path, startup_path
+        ):
+            return os.path.dirname(executable_path)
+        root_path = executable_path
+        parts = [
+            part for part in str(startup_path).replace("\\", "/").split("/")
+            if part not in ("", ".")
+        ]
+        for _part in parts:
+            root_path = os.path.dirname(root_path)
+        return root_path
 
     def get_distributions(self) -> List[int]:
         """获取游戏可用的分发ID列表"""
@@ -934,6 +1093,7 @@ class Game:
             url=f"https://loadingbaycn.webapp.163.com/app/v1/game_library/app?force=1&app_id={distribution_id}"
             headers={
                 "User-Agent": "",
+                "channel": "mkt-h55",
             }
             session = requests.Session()
             session.trust_env = False
@@ -975,6 +1135,7 @@ class Game:
         distribution_id: int,
         max_concurrent_files: int,
         installation_id: str = "",
+        progress_file: str = "",
     ) -> bool:
         """尝试将游戏更新到指定分发ID的版本"""
         self.last_update_async = False
@@ -1043,6 +1204,7 @@ class Game:
             "distribution_id": dist_id,
             "content_id":file_distribution_info.get("app_content_id"),
             "repair_list_path": repair_list_path,
+            "progress_file": os.path.abspath(progress_file) if progress_file else "",
             "original_version": installation.installed_version,
             "start_args": installation.startup_args
             or CloudRes().get_start_argument(getShortGameId(self.game_id))
@@ -1133,9 +1295,10 @@ class Game:
         files: List[dict],
         installation_id: str = "",
         hash_cache: Optional[Dict[str, str]] = None,
+        root_path: str = "",
     ) -> Tuple[bool, List[dict]]:
         """检查游戏版本是否匹配, 返回需要更新的文件列表"""
-        root_path = self.get_root_path(installation_id)
+        root_path = root_path or self.get_root_path(installation_id)
         if not root_path or not os.path.exists(root_path):
             return False, files
         to_update = []
@@ -1380,11 +1543,40 @@ class GameManager:
         self._save_games()
         return installation
 
+    def identify_game_installation(
+        self, game_id: str, installation_id: str, *, force: bool = True
+    ) -> int:
+        """Classify one local install against every cloud distribution."""
+        game = self.get_existing_game(game_id)
+        installation = game.get_installation(installation_id) if game else None
+        if installation is None:
+            return -1
+        distribution_options = game.get_distribution_options()
+        distribution_ids = game._normalize_distribution_ids(distribution_options)
+        if not distribution_ids:
+            return installation.distribution_id
+        file_info_by_distribution = {}
+        launcher_data_by_distribution = {}
+        for dist_id in distribution_ids:
+            launcher_data_by_distribution[dist_id] = (
+                game.get_launcher_data_for_distribution(dist_id) or {}
+            )
+            file_info_by_distribution[dist_id] = (
+                game.get_file_distribution_info(dist_id) or {}
+            )
+        return game.identify_installation_distribution(
+            installation.installation_id,
+            distribution_options,
+            file_info_by_distribution,
+            launcher_data_by_distribution,
+            force=force,
+        )
+
     def set_game_path(self, game_id: str, path: str) -> bool:
         """选择游戏路径，同时保留其他已知安装。
 
-        同一路径会复用已有安装；带标记的路径会恢复安装身份；没有任何
-        记录的新路径一律创建 manual 安装，避免继承无法证明的分发和版本。
+        同一路径会复用已有安装；带标记的路径会恢复安装身份。对于有云端
+        分发清单的游戏，会立即重新按哈希最接近原则识别分发与当前版本。
         """
         if not game_id:
             return False
@@ -1393,8 +1585,9 @@ class GameManager:
             return False
         normalized = GameInstallation._normalize_path(path)
         marker = GameInstallation.read_marker(normalized)
+        installation = None
         if marker and cmp_game_id(marker.get("game_id", ""), game_id):
-            game.add_installation(
+            installation = game.add_installation(
                 path=normalized,
                 distribution_id=marker.get("distribution_id", -1),
                 installed_version=marker.get("installed_version", ""),
@@ -1405,32 +1598,43 @@ class GameManager:
                 installation_id=marker.get("installation_id", ""),
                 set_default=True,
             )
-            self._save_games()
-            return True
-        matching = next(
-            (
-                item for item in game.installations.values()
-                if os.path.normcase(os.path.normpath(item.path or ""))
-                == os.path.normcase(os.path.normpath(normalized or ""))
-            ),
-            None,
-        )
-        if matching:
-            game.set_default_installation(matching.installation_id)
-        elif normalized:
-            invalid_ids = [
-                installation.installation_id
-                for installation in game.installations.values()
-                if not installation.path or not os.path.exists(installation.path)
-            ]
-            for installation_id in invalid_ids:
-                game.remove_installation(installation_id)
-            game.add_installation(normalized, source="manual", set_default=True)
         else:
-            default = game.get_installation()
-            if default:
-                default.path = ""
-                default.updated_at = int(time.time())
+            matching = next(
+                (
+                    item for item in game.installations.values()
+                    if os.path.normcase(os.path.normpath(item.path or ""))
+                    == os.path.normcase(os.path.normpath(normalized or ""))
+                ),
+                None,
+            )
+            if matching:
+                game.set_default_installation(matching.installation_id)
+                installation = matching
+            elif normalized:
+                invalid_ids = [
+                    item.installation_id
+                    for item in game.installations.values()
+                    if not item.path or not os.path.exists(item.path)
+                ]
+                for installation_id in invalid_ids:
+                    game.remove_installation(installation_id)
+                installation = game.add_installation(
+                    normalized,
+                    source="manual",
+                    startup_path=os.path.basename(normalized),
+                    set_default=True,
+                )
+            else:
+                default = game.get_installation()
+                if default:
+                    default.path = ""
+                    default.updated_at = int(time.time())
+        if installation is not None:
+            if not installation.startup_path:
+                installation.startup_path = os.path.basename(normalized)
+            self.identify_game_installation(
+                game_id, installation.installation_id, force=True
+            )
         game.last_used_time = int(time.time())
         self._save_games()
         return True
@@ -1539,6 +1743,17 @@ class GameManager:
             return False
         if not game.installations:
             game.should_auto_start = False
+        self._save_games()
+        return True
+
+    def set_fever_bridge_forced(
+        self, game_id: str, distribution_id: int, forced: bool
+    ) -> bool:
+        game = self.get_existing_game(game_id)
+        if not game or not game.set_fever_bridge_forced(
+            distribution_id, forced
+        ):
+            return False
         self._save_games()
         return True
 
@@ -1674,7 +1889,13 @@ class GameManager:
         return result
 
     def import_fever_game(
-        self, game_id: str, distribution_id: int = -1, path: str = ""
+        self,
+        game_id: str,
+        distribution_id: int = -1,
+        path: str = "",
+        *,
+        create_shortcut: bool = True,
+        notify: bool = True,
     ) -> Optional[str]:
         if not game_id:
             return None
@@ -1717,13 +1938,18 @@ class GameManager:
             startup_path=os.path.basename(executable_path),
             set_default=True,
         )
-        try:
-            game.create_tool_launch_shortcut(
-                installation.path, installation.installation_id
-            )
-            app_state.toast(f"成功导入发烧平台游戏，下次启动请使用桌面上的{game.name}(IDV-LOGIN)快捷方式", duration=3000)
-        except Exception:
-            self.logger.exception("导入Fever游戏后创建快捷方式失败")
+        self.identify_game_installation(
+            final_game_id, installation.installation_id, force=True
+        )
+        if create_shortcut:
+            try:
+                game.create_tool_launch_shortcut(
+                    installation.path, installation.installation_id
+                )
+                if notify:
+                    app_state.toast(f"成功导入发烧平台游戏，下次启动请使用桌面上的{game.name}(IDV-LOGIN)快捷方式", duration=3000)
+            except Exception:
+                self.logger.exception("导入Fever游戏后创建快捷方式失败")
         self._save_games()
         return final_game_id
 

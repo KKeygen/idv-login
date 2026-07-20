@@ -185,7 +185,28 @@ def _render_core_error(msg_type, payload):
         return "下载核心已退出"
     return ""
 
-def main_ui_server(topic=None, sub_port=None, pub_port=None, stop_event=None):
+def _progress_event(data):
+    phase, percent, rate, total = _progress_view(data)
+    return {
+        # The core can announce STATE_FINISHED before the supervisor has
+        # persisted installation metadata.  Only the supervisor publishes the
+        # terminal task state.
+        "status": "pending",
+        "phase": phase,
+        "progress_percent": _as_percent(percent),
+        "rate": rate,
+        "total_bytes": total,
+        "state": data.get("StateFlags", STATE_NOT_STARTED),
+    }
+
+
+def main_ui_server(
+    topic=None,
+    sub_port=None,
+    pub_port=None,
+    stop_event=None,
+    on_event=None,
+):
     if topic is None:
         topic = TOPIC
     if sub_port is None:
@@ -252,6 +273,8 @@ def main_ui_server(topic=None, sub_port=None, pub_port=None, stop_event=None):
                         if msg_type == MSG_PROGRESS:
                             try:
                                 data = json.loads(payload.decode('utf-8'))
+                                if on_event:
+                                    on_event(_progress_event(data))
                                 line = progress_reporter.render_if_due(data)
                                 if line:
                                     print(line, flush=True)
@@ -260,6 +283,16 @@ def main_ui_server(topic=None, sub_port=None, pub_port=None, stop_event=None):
                         else:
                             error_text = _render_core_error(msg_type, payload)
                             if error_text:
+                                if on_event:
+                                    on_event({
+                                        "status": "done",
+                                        "success": False,
+                                        "phase": "failed",
+                                        "error": error_text,
+                                        "message_type": msg_type.decode(
+                                            "utf-8", errors="replace"
+                                        ),
+                                    })
                                 print(f"[下载核心] {error_text}")
 
                 except zmq.ZMQError as e:

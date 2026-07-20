@@ -164,6 +164,36 @@ class CloudRes:
             if item.get('game_id') == shortGameId:
                 return item
         return self.dynamic_game_catalog.get_feature(shortGameId)
+
+    def has_manual_game_feature(self, shortGameId):
+        """Whether launcher behavior is explicitly maintained in cloudRes."""
+        for item in self.local_data.get('feature_game_short_ids', []):
+            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId):
+                return True
+        return False
+
+    def is_fever_managed_game(self, shortGameId, distribution_id=-1):
+        catalog_item = self.dynamic_game_catalog.get_game(shortGameId) or {}
+        platform_type = catalog_item.get('platform_type')
+        if platform_type:
+            return platform_type == 'fever'
+        feature = next((
+            item for item in self.local_data.get('feature_game_short_ids', [])
+            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId)
+        ), None)
+        distributions = feature.get('download_distributions', []) if feature else []
+        normalized = []
+        for item in distributions:
+            value = item.get('distribution_id') if isinstance(item, dict) else item
+            try:
+                normalized.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        try:
+            requested = int(distribution_id)
+        except (TypeError, ValueError):
+            requested = -1
+        return requested in normalized if requested != -1 else bool(normalized)
     
     def get_all_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -247,7 +277,7 @@ class CloudRes:
     
     def get_login_page(self):
         import base64
-        return base64.b64decode(self.local_data.get('login_base64_page', '')).decode()
+        return base64.b64decode(self.local_data.get('login_base64_page_fever', '')).decode()
     
     def get_shortcuts(self):
         return self.local_data.get('shortcuts', [])

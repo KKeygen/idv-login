@@ -25,6 +25,11 @@ import time
 
 import app_state
 from mitmproxy import http
+from mpay_request_policy import (
+    ROLE_BRIDGED_GAME,
+    ROLE_HOSTED_FEVER_MPAY,
+    classify_mpay_request,
+)
 
 
 LOGIN_METHODS = [
@@ -118,6 +123,7 @@ class IDVLoginAddon:
         self.genv = genv
         self.stack_mgr = LoginStackManager.get_instance()
         self.cloud_res = CloudRes
+        self._hosted_targets_by_process = {}
 
         self.target_domains = {
             genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
@@ -150,6 +156,25 @@ class IDVLoginAddon:
         # ── _idv-login routes: handle locally, do NOT forward upstream ──
         if path.startswith("/_idv-login/"):
             self._handle_idv_login_request(flow, path)
+            return
+
+        hosted_active = bool(
+            getattr(getattr(app_state.fever_bridge, "ipc", None), "hwnd", None)
+        )
+        request_role = classify_mpay_request(
+            flow.request,
+            app_state.fever_bridge_target_game_ids,
+            hosted_mpay_active=hosted_active,
+        )
+        if request_role == ROLE_BRIDGED_GAME:
+            return
+        if request_role == ROLE_HOSTED_FEVER_MPAY:
+            # Hosted a50 mpay owns its configuration.  Only QR login traffic
+            # participates in the existing account capture/mapping pipeline.
+            if path == "/mpay/api/qrcode/create_login":
+                self._modify_create_login_request(flow)
+            elif path == "/mpay/api/users/login/qrcode/exchange_token":
+                self._modify_exchange_token_request(flow)
             return
 
         # ── Game API routes: may modify query before forwarding ──
@@ -196,6 +221,36 @@ class IDVLoginAddon:
             return
 
         try:
+            hosted_active = bool(
+                getattr(getattr(app_state.fever_bridge, "ipc", None), "hwnd", None)
+            )
+            request_role = classify_mpay_request(
+                flow.request,
+                app_state.fever_bridge_target_game_ids,
+                hosted_mpay_active=hosted_active,
+            )
+            if request_role == ROLE_BRIDGED_GAME:
+                return
+            if request_role == ROLE_HOSTED_FEVER_MPAY:
+                if path == "/mpay/games/pc_config":
+                    self._disable_hosted_auto_login(flow)
+                elif path == "/mpay/api/qrcode/image":
+                    self._modify_qrcode_image_response(flow)
+                elif path == "/mpay/api/qrcode/create_login":
+                    target_game_id = self._effective_hosted_game_id(flow)
+                    process_id = flow.request.query.get("process_id", "")
+                    if target_game_id and process_id:
+                        self._hosted_targets_by_process[str(process_id)] = target_game_id
+                    self._modify_create_login_response(flow)
+                elif path == "/mpay/api/qrcode/query":
+                    self._handle_qrcode_query_response(
+                        flow, self._effective_hosted_game_id(flow)
+                    )
+                elif path == "/mpay/api/users/login/qrcode/exchange_token":
+                    self._handle_exchange_token_response(
+                        flow, self._effective_hosted_game_id(flow)
+                    )
+                return
             if self._re_login_methods.match(path):
                 self._modify_login_methods_response(flow)
             elif self._re_handle_login.match(path) and flow.request.method == "GET":
@@ -244,7 +299,7 @@ class IDVLoginAddon:
 
     def _modify_create_login_request(self, flow: http.HTTPFlow):
         query = dict(flow.request.query)
-        game_id = query.get("game_id", "")
+        game_id = query.get("dst_jf_game_id", "") or query.get("game_id", "")
         if self.create_login_query_hook:
             self.create_login_query_hook(query, game_id)
             flow.request.query.update(query)
@@ -258,20 +313,24 @@ class IDVLoginAddon:
     def _modify_exchange_token_request(self, flow: http.HTTPFlow):
         """覆写 exchange_token 请求参数（query + body），与 v5.9.1 行为一致。"""
         game_id = flow.request.query.get("game_id", "")
-        if not game_id:
+        dst_game_id = flow.request.query.get("dst_jf_game_id", "")
+        if not game_id or not dst_game_id:
             content_type = flow.request.headers.get("content-type", "")
             if "application/x-www-form-urlencoded" in content_type:
                 from urllib.parse import parse_qs
                 raw = flow.request.content.decode("utf-8", errors="replace")
                 parsed = parse_qs(raw, keep_blank_values=True)
-                game_id = parsed.get("game_id", [""])[0]
+                game_id = game_id or parsed.get("game_id", [""])[0]
+                dst_game_id = parsed.get("dst_jf_game_id", [dst_game_id])[0]
             elif "application/json" in content_type:
                 try:
-                    game_id = json.loads(flow.request.content).get("game_id", "")
+                    body = json.loads(flow.request.content)
+                    game_id = game_id or body.get("game_id", "")
+                    dst_game_id = body.get("dst_jf_game_id", dst_game_id)
                 except Exception:
                     pass
 
-        config = self.cloud_res().get_qrcode_login_config(game_id)
+        config = self.cloud_res().get_qrcode_login_config(dst_game_id or game_id)
         if not config:
             return
 
@@ -383,6 +442,17 @@ class IDVLoginAddon:
         except Exception:
             pass
 
+    def _disable_hosted_auto_login(self, flow: http.HTTPFlow):
+        """Disable only a50's automatic login; leave all config intact."""
+        try:
+            data = json.loads(flow.response.content)
+            config = data.get("game", {}).get("config", {})
+            if isinstance(config, dict):
+                config["auto_login"] = False
+                flow.response.content = json.dumps(data).encode()
+        except Exception:
+            pass
+
     def _modify_create_login_response(self, flow: http.HTTPFlow):
         try:
             data = json.loads(flow.response.content)
@@ -399,6 +469,7 @@ class IDVLoginAddon:
 
             # 发烧平台
             dst_jf_game_id = query.get("dst_jf_game_id", "")
+            effective_game_id = dst_jf_game_id or game_id
             if dst_jf_game_id:
                 qr_data["dst_jf_game_id"] = dst_jf_game_id
                 if (not self.genv.get("has_opened_admin", False)) and (not query.get("_cloud_extra_base64", "")):
@@ -412,9 +483,9 @@ class IDVLoginAddon:
                 self.stack_mgr.ensure_pending_stack(game_id)
 
             # Auto-login
-            auto_uuid = self.genv.get(f"auto-{game_id}", "")
+            auto_uuid = self.genv.get(f"auto-{effective_game_id}", "")
             if auto_uuid:
-                delay = self.game_helper.get_login_delay(game_id)
+                delay = self.game_helper.get_login_delay(effective_game_id)
                 self.logger.info(f"即将自动登录，{delay}秒后开始扫码")
                 self.genv.set("CHANNEL_ACCOUNT_SELECTED", auto_uuid)
 
@@ -441,9 +512,9 @@ class IDVLoginAddon:
             # Change the QR code redirect URL
             is_compat = getattr(getattr(app_state, "proxy_mgr", None), "mode", "") == "compat"
             if is_compat:
-                qr_url = f"https://localhost/_idv-login/index?game_id={game_id}"
+                qr_url = f"https://localhost/_idv-login/index?game_id={effective_game_id}"
             else:
-                qr_url = f"idvlogin://open?game_id={game_id}"
+                qr_url = f"idvlogin://open?game_id={effective_game_id}"
             data["qrcode_scanners"][0]["url"] = qr_url
 
             if self.genv.get("SCAN_RECORD_ENABLED", True):
@@ -457,12 +528,23 @@ class IDVLoginAddon:
         except Exception:
             self.logger.exception("处理 create_login 响应失败")
 
-    def _handle_qrcode_query_response(self, flow: http.HTTPFlow):
+    def _effective_hosted_game_id(self, flow: http.HTTPFlow) -> str:
+        query = flow.request.query
+        process_id = str(query.get("process_id", "") or "")
+        return str(
+            query.get("dst_jf_game_id", "")
+            or self._hosted_targets_by_process.get(process_id, "")
+            or query.get("game_id", "")
+        )
+
+    def _handle_qrcode_query_response(
+        self, flow: http.HTTPFlow, effective_game_id: str = ""
+    ):
         if self.genv.get("CHANNEL_ACCOUNT_SELECTED"):
             return
         try:
             data = json.loads(flow.response.content)
-            game_id = flow.request.query.get("game_id", "")
+            game_id = effective_game_id or flow.request.query.get("game_id", "")
             process_id = flow.request.query.get("process_id", "")
 
             if data.get("code", -1) != -1:
@@ -479,7 +561,9 @@ class IDVLoginAddon:
         except Exception:
             self.logger.exception("处理 qrcode/query 响应失败")
 
-    def _handle_exchange_token_response(self, flow: http.HTTPFlow):
+    def _handle_exchange_token_response(
+        self, flow: http.HTTPFlow, effective_game_id: str = ""
+    ):
         is_selected = bool(self.genv.get("CHANNEL_ACCOUNT_SELECTED"))
         try:
             raw_data = flow.response.content
@@ -494,6 +578,7 @@ class IDVLoginAddon:
                 form_data = json.loads(flow.request.content)
 
             game_id = flow.request.query.get("game_id", "") or form_data.get("game_id", "")
+            game_id = effective_game_id or game_id
             process_id = flow.request.query.get("process_id", "")
 
             if flow.response.status_code == 200:

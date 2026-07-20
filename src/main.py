@@ -142,6 +142,14 @@ def handle_exit():
     else:
         print("程序关闭，正在清理！ (logger 未初始化)")
 
+    if app_state.fever_bridge is not None:
+        try:
+            app_state.fever_bridge.stop()
+        except Exception:
+            if logger:
+                logger.exception("停止平台托管登录失败")
+        app_state.fever_bridge = None
+
     # 停止 mitmproxy 代理
     proxy_mgr = app_state.proxy_mgr
     if proxy_mgr:
@@ -658,6 +666,33 @@ def _encode_repair_list_path(path):
     path = os.path.abspath(path).replace("\\", "/")
     return base64.b64encode(path.encode("utf-8")).decode("utf-8")
 
+
+_download_status_lock = threading.Lock()
+
+
+def _write_download_status(status_file, values):
+    if not status_file:
+        return
+    try:
+        with _download_status_lock:
+            current = {}
+            try:
+                with open(status_file, "r", encoding="utf-8") as status_handle:
+                    current = json.load(status_handle)
+            except (FileNotFoundError, OSError, ValueError, TypeError):
+                current = {}
+            if not isinstance(current, dict):
+                current = {}
+            current.update(values)
+            current["updated_at"] = int(time.time())
+            temp_file = status_file + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as status_handle:
+                json.dump(current, status_handle, ensure_ascii=False)
+            os.replace(temp_file, status_file)
+    except Exception:
+        # Progress reporting must never terminate the download itself.
+        pass
+
 def handle_download_task(task_file_path):
     if not task_file_path:
         print("缺少下载任务文件路径")
@@ -685,6 +720,7 @@ def handle_download_task(task_file_path):
     content_id = task_data.get("content_id")
     original_version = task_data.get("original_version", "")
     repair_list_path = task_data.get("repair_list_path", "")
+    progress_file = task_data.get("progress_file", "")
     start_args = task_data.get("start_args", "")
     result = True
     ui_server_process = None
@@ -692,6 +728,12 @@ def handle_download_task(task_file_path):
     stop_event = None
     download_process = None
     use_download_ipc = bool(content_id) and distribution_id != -1 and download_root
+    core_error = {"value": ""}
+    _write_download_status(progress_file, {
+        "status": "pending",
+        "phase": "preparing",
+        "progress_percent": 0,
+    })
     try:
         if use_download_ipc:
             from download_binary import ensure_binary, allocate_ipc_ports
@@ -703,13 +745,20 @@ def handle_download_task(task_file_path):
                 heartbeat_port, progress_port = allocate_ipc_ports()
                 stop_event = threading.Event()
                 topic_bytes = str(content_id).encode("utf-8") if content_id else b""
+
+                def publish_progress(event):
+                    if event.get("success") is False:
+                        core_error["value"] = str(event.get("error") or "下载失败")
+                    _write_download_status(progress_file, event)
+
                 ui_server_thread = threading.Thread(
                     target=download_binary.main_ui_server,
                     kwargs={
                         "topic": topic_bytes,
                         "sub_port": heartbeat_port,
                         "pub_port": progress_port,
-                        "stop_event": stop_event
+                        "stop_event": stop_event,
+                        "on_event": publish_progress,
                     }
                 )
                 ui_server_thread.daemon = True
@@ -746,7 +795,7 @@ def handle_download_task(task_file_path):
                     download_cmd.append(f"--originVersion:")
                 download_process = subprocess.Popen(download_cmd, creationflags=creationflags)
                 exit_code = download_process.wait()
-                result = exit_code == 0
+                result = exit_code == 0 and not core_error["value"]
         if result and game_id and version_code:
             from gamemgr import GameManager
             game_mgr = GameManager()
@@ -763,6 +812,7 @@ def handle_download_task(task_file_path):
                     installation.installed_version = version_code
                     installation.distribution_id = distribution_id
                     installation.content_id = content_id
+                    installation.source = "download"
                     installation.startup_args = start_args or installation.startup_args
                     installation.updated_at = int(time.time())
                     if not installation.write_marker(game_id):
@@ -809,9 +859,27 @@ def handle_download_task(task_file_path):
                     subprocess.Popen(["xdg-open", download_root])
         except Exception as e:
             logger_local.exception(f"打开下载目录失败: {e}")
+        _write_download_status(progress_file, {
+            "status": "done",
+            "success": bool(result),
+            "phase": "finished" if result else "failed",
+            "progress_percent": 100 if result else 0,
+            "error": "" if result else (core_error["value"] or "下载核心异常退出"),
+            "game_id": game_id,
+            "installation_id": installation_id,
+            "distribution_id": distribution_id,
+            "target_version": version_code,
+            "content_id": content_id,
+        })
         return result
     except Exception as e:
         logger_local.exception(f"下载任务执行失败: {e}")
+        _write_download_status(progress_file, {
+            "status": "done",
+            "success": False,
+            "phase": "failed",
+            "error": str(e),
+        })
     finally:
         from gamemgr import Game
         game=Game(game_id=game_id,path=os.path.join(download_root,"dummy.exe"))

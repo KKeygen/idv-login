@@ -76,6 +76,14 @@ def homepage_payload():
                 },
                 {
                     "app_data": {
+                        "app_id": 108,
+                        "app_type": 3,
+                        "display_name": "阴阳师",
+                        "goods_image": "https://example.test/g37-cover.png",
+                    }
+                },
+                {
+                    "app_data": {
                         "app_id": 93,
                         "app_type": 2,
                         "display_name": "网易云音乐",
@@ -111,6 +119,14 @@ class DynamicGameCatalogTests(unittest.TestCase):
             DynamicGameCatalog.APP_DETAIL_URL.format(73): [
                 FakeResponse(app_detail_payload())
             ],
+            DynamicGameCatalog.APP_DETAIL_URL.format(108): [
+                FakeResponse({"code": 200, "data": {
+                    "app_id": 108,
+                    "game_id": "g37",
+                    "display_name": "阴阳师",
+                    "main_image": "https://example.test/g37-main.png",
+                }})
+            ],
         }
 
     def test_maps_launcher_game_id_to_cloud_config_and_download_distribution(self):
@@ -137,7 +153,11 @@ class DynamicGameCatalogTests(unittest.TestCase):
                 ],
                 [73],
             )
-            self.assertEqual(len(catalog.get_games()), 1)
+            native_game = catalog.get_game("g37")
+            self.assertEqual(native_game["platform_type"], "native_pc")
+            self.assertEqual(native_game["download_distributions"], [])
+            self.assertEqual(native_game["launcher"]["main_image"], "https://example.test/g37-main.png")
+            self.assertEqual(len(catalog.get_games()), 2)
 
             config_call = next(
                 call for call in session.calls
