@@ -683,15 +683,9 @@
                             </div>
                         </div>
                         <div class="mt-3">
-                            <label for="launcherDistributionSelect" class="form-label fw-bold">分发选择:</label>
-                            <select id="launcherDistributionSelect" class="form-select" onchange="onLauncherDistributionChanged()">
+                            <label for="launcherDistributionSelect" class="form-label fw-bold">版本选择:</label>
+                            <select id="launcherDistributionSelect" class="form-select" onchange="updateLauncherDisplay()">
                                 <option value="" disabled selected>加载中...</option>
-                            </select>
-                        </div>
-                        <div class="mt-3">
-                            <label for="launcherInstallationSelect" class="form-label fw-bold">本地安装:</label>
-                            <select id="launcherInstallationSelect" class="form-select" onchange="updateLauncherDisplay()">
-                                <option value="">尚未安装</option>
                             </select>
                         </div>
                         <div id="launcherStatusBadges" class="d-flex flex-wrap gap-2 mt-3"></div>
@@ -701,12 +695,6 @@
                             </button>
                             <button id="launcherUpdateBtn" onclick="updateLauncher()" class="btn btn-outline-primary">
                                 <i class="bi bi-arrow-repeat me-1"></i>新引擎检查更新
-                            </button>
-                            <button id="launcherDefaultBtn" onclick="setDefaultLauncherInstallation()" class="btn btn-outline-primary">
-                                <i class="bi bi-play-circle me-1"></i>设为默认启动
-                            </button>
-                            <button id="launcherRemoveBtn" onclick="removeLauncherInstallation()" class="btn btn-outline-danger">
-                                <i class="bi bi-x-circle me-1"></i>移除安装记录
                             </button>
                             <button id="launcherImportFeverListBtn" onclick="importFeverLauncherList()" class="btn btn-outline-secondary">
                                 <i class="bi bi-box-arrow-in-down me-1"></i>导入发烧平台已有游戏
@@ -1613,15 +1601,6 @@
                     if (!data.success) {
                         throw new Error(data.error || '获取启动器信息失败');
                     }
-                    const hasInstallationModel = data.installation_model_version === 1
-                        && data.game
-                        && Array.isArray(data.game.installations)
-                        && Array.isArray(data.distributions);
-                    if (!hasInstallationModel) {
-                        markUpdateRequired();
-                        launcherState = null;
-                        return;
-                    }
                     launcherState = data;
                     renderLauncherDistributionOptions();
                     updateLauncherDisplay();
@@ -1636,12 +1615,10 @@
         }
 
         function renderLauncherDistributionOptions() {
-            const distSelect = document.getElementById('launcherDistributionSelect');
-            const installationSelect = document.getElementById('launcherInstallationSelect');
-            distSelect.innerHTML = '';
-            installationSelect.innerHTML = '<option value="">尚未选择本地安装</option>';
+            const select = document.getElementById('launcherDistributionSelect');
+            select.innerHTML = '';
             if (!launcherState || !launcherState.distributions || launcherState.distributions.length === 0) {
-                distSelect.innerHTML = '<option value="" disabled selected>暂无分发</option>';
+                select.innerHTML = '<option value="" disabled selected>暂无版本</option>';
                 return;
             }
             const defaultId = launcherState.game.default_distribution;
@@ -1652,44 +1629,8 @@
                 if (String(item.distribution_id) === String(defaultId)) {
                     option.selected = true;
                 }
-                distSelect.appendChild(option);
+                select.appendChild(option);
             });
-            (launcherState.game.installations || []).forEach(item => {
-                const option = document.createElement('option');
-                option.value = item.installation_id;
-                const sourceName = item.source === 'fever' ? '发烧平台' : (item.source === 'download' ? '本工具下载' : '手动路径');
-                const distName = Number(item.distribution_id) >= 0 ? `分发 ${item.distribution_id}` : '分发未知';
-                option.text = `[${distName} / ${sourceName}] ${item.path || '路径缺失'}`;
-                if (item.installation_id === launcherState.game.default_installation_id) {
-                    option.selected = true;
-                }
-                installationSelect.appendChild(option);
-            });
-        }
-
-        function getSelectedLauncherDistribution() {
-            const distId = document.getElementById('launcherDistributionSelect').value;
-            return launcherState && launcherState.distributions
-                ? launcherState.distributions.find(item => String(item.distribution_id) === String(distId))
-                : null;
-        }
-
-        function getSelectedLauncherInstallation() {
-            const installationId = document.getElementById('launcherInstallationSelect').value;
-            return launcherState && launcherState.game && launcherState.game.installations
-                ? launcherState.game.installations.find(item => item.installation_id === installationId)
-                : null;
-        }
-
-        function onLauncherDistributionChanged() {
-            const dist = getSelectedLauncherDistribution();
-            const installationSelect = document.getElementById('launcherInstallationSelect');
-            const selected = getSelectedLauncherInstallation();
-            if (!selected || !dist || String(selected.distribution_id) !== String(dist.distribution_id)) {
-                const matching = dist && dist.installations && dist.installations.length ? dist.installations[0] : null;
-                installationSelect.value = matching ? matching.installation_id : '';
-            }
-            updateLauncherDisplay();
         }
 
         function updateLauncherDisplay() {
@@ -1700,18 +1641,17 @@
                 distId = launcherState.distributions[0].distribution_id;
                 select.value = distId;
             }
-            const dist = getSelectedLauncherDistribution();
-            const installation = getSelectedLauncherInstallation();
+            const dist = launcherState.distributions.find(item => String(item.distribution_id) === String(distId));
             const launcher = dist ? (dist.launcher || {}) : {};
 
             document.getElementById('launcherTitle').textContent = launcher.display_name || launcher.app_name || launcherState.game_id;
             document.getElementById('launcherSubTitle').textContent = launcher.app_name || launcher.display_name || '启动器信息';
             document.getElementById('launcherDeveloper').textContent = launcher.developer || '-';
             document.getElementById('launcherPublisher').textContent = launcher.publisher || '-';
-            document.getElementById('launcherLocalVersion').textContent = installation && installation.installed_version ? installation.installed_version : '未知';
+            document.getElementById('launcherLocalVersion').textContent = launcherState.game.version || '未知';
             document.getElementById('launcherTargetVersion').textContent = dist && dist.target_version ? dist.target_version : '未知';
             document.getElementById('launcherStartupPath').textContent = launcher.startup_path || '未知';
-            document.getElementById('launcherInstallPath').textContent = installation && installation.path ? installation.path : '未选择本地安装';
+            document.getElementById('launcherInstallPath').textContent = launcherState.game.installed ? (launcherState.game.path || '已安装') : '未安装';
 
             const iconEl = document.getElementById('launcherIcon');
             const iconSrc = launcher.logo || launcher.icon || '';
@@ -1734,9 +1674,8 @@
             }
 
             const badges = [];
-            const installationMatchesDistribution = installation && dist && String(installation.distribution_id) === String(dist.distribution_id);
-            badges.push({ text: installation && installation.installed ? '已安装' : '未安装', color: installation && installation.installed ? 'success' : 'secondary' });
-            badges.push({ text: installationMatchesDistribution ? '分发已确认' : '未选择该分发的安装', color: installationMatchesDistribution ? 'success' : 'secondary' });
+            badges.push({ text: launcherState.game.installed ? '已安装' : '未安装', color: launcherState.game.installed ? 'success' : 'secondary' });
+            badges.push({ text: dist && dist.can_update ? '可检查更新' : '无需更新', color: dist && dist.can_update ? 'warning' : 'secondary' });
             badges.push({ text: dist && dist.can_download ? '可下载' : '不可下载', color: dist && dist.can_download ? 'info' : 'secondary' });
             badges.push({ text: launcherState.game.can_convert ? '可多开' : '不可多开', color: launcherState.game.can_convert ? 'primary' : 'secondary' });
             const badgeContainer = document.getElementById('launcherStatusBadges');
@@ -1750,58 +1689,23 @@
 
             const installBtn = document.getElementById('launcherInstallBtn');
             const updateBtn = document.getElementById('launcherUpdateBtn');
-            const defaultBtn = document.getElementById('launcherDefaultBtn');
-            const removeBtn = document.getElementById('launcherRemoveBtn');
             
             const importListBtn = document.getElementById('launcherImportFeverListBtn');
-            installBtn.disabled = !(dist && dist.can_download);
-            installBtn.textContent = dist && dist.installations && dist.installations.length
-                ? '再安装一份此分发'
-                : '安装此分发';
-            updateBtn.textContent = '检查并更新所选安装';
-            updateBtn.disabled = !(installationMatchesDistribution && installation.installed);
-            defaultBtn.disabled = !installation || installation.installation_id === launcherState.game.default_installation_id;
-            removeBtn.disabled = !installation;
+            installBtn.disabled = launcherState.game.installed || !(dist && dist.can_download);
+            //如果已经安装，且能下载，则修改按钮字样为重新安装并启用
+            if (launcherState.game.installed && dist && dist.can_download) {
+                installBtn.textContent = '重新安装或从旧包体迁移';
+                updateBtn.textContent = '检查更新';
+                installBtn.disabled = false;
+                updateBtn.disabled = false;
+            } else if(dist && dist.can_download) {
+                installBtn.disabled=false;
+            }
+            
+            updateBtn.disabled = !(dist && dist.can_update);
 
             importListBtn.disabled = false;
 
-        }
-
-        function setDefaultLauncherInstallation() {
-            const installation = getSelectedLauncherInstallation();
-            if (!launcherState || !installation) return;
-            fetchLauncherJson(`/_idv-login/launcher-set-default?game_id=${encodeURIComponent(launcherState.game_id)}&installation_id=${encodeURIComponent(installation.installation_id)}`)
-                .then(data => {
-                    if (!data.success) throw new Error(data.error || '设置默认安装失败');
-                    return loadLauncherStatus();
-                })
-                .catch(error => {
-                    if (error && error.isNotFound) return;
-                    swal('设置失败', error.message || '未知错误', 'error');
-                });
-        }
-
-        function removeLauncherInstallation() {
-            const installation = getSelectedLauncherInstallation();
-            if (!launcherState || !installation) return;
-            swal({
-                title: '移除安装记录？',
-                text: '只会从工具中移除该记录，不会删除磁盘上的游戏文件。',
-                icon: 'warning',
-                buttons: ['取消', '移除记录'],
-                dangerMode: true,
-            }).then(confirmed => {
-                if (!confirmed) return;
-                return fetchLauncherJson(`/_idv-login/launcher-remove-installation?game_id=${encodeURIComponent(launcherState.game_id)}&installation_id=${encodeURIComponent(installation.installation_id)}`)
-                    .then(data => {
-                        if (!data.success) throw new Error(data.error || '移除失败');
-                        loadGameList();
-                        return loadLauncherStatus();
-                    });
-            }).catch(error => {
-                if (error && error.isNotFound) return;
-                swal('移除失败', error.message || '未知错误', 'error');
-            });
         }
 
         function installLauncher() {
@@ -1854,13 +1758,8 @@
         function updateLauncher() {
             if (!launcherState) return;
             const distId = document.getElementById('launcherDistributionSelect').value;
-            const installation = getSelectedLauncherInstallation();
-            if (!distId || !installation) {
-                swal('请选择本地安装', '更新必须绑定到一个明确的本地安装目录。', 'warning');
-                return;
-            }
-            const installationId = encodeURIComponent(installation.installation_id);
-            fetchLauncherJson(`/_idv-login/launcher-update-info?game_id=${launcherState.game_id}&distribution_id=${distId}&installation_id=${installationId}`)
+            if (!distId) return;
+            fetchLauncherJson(`/_idv-login/launcher-update-info?game_id=${launcherState.game_id}&distribution_id=${distId}`)
                 .then(info => {
                     if (!info.success) {
                         throw new Error(info.error || '获取更新信息失败');
@@ -1894,7 +1793,7 @@
                         buttons: false,
                         closeOnClickOutside: false,
                     });
-                    return fetchLauncherJson(`/_idv-login/launcher-update?game_id=${launcherState.game_id}&distribution_id=${distId}&installation_id=${installationId}`);
+                    return fetchLauncherJson(`/_idv-login/launcher-update?game_id=${launcherState.game_id}&distribution_id=${distId}`);
                 })
                 .then(data => {
                     if (!data) return;
@@ -1954,8 +1853,7 @@
                 buttons: false,
                 closeOnClickOutside: false,
             });
-            const fever = launcherState.fever || {};
-            fetchLauncherJson(`/_idv-login/launcher-import-fever?game_id=${encodeURIComponent(launcherState.game_id)}&distribution_id=${encodeURIComponent(fever.distribution_id ?? -1)}&path=${encodeURIComponent(fever.path || '')}`)
+            fetchLauncherJson(`/_idv-login/launcher-import-fever?game_id=${launcherState.game_id}`)
                 .then(data => {
                     swal.close();
                     if (data.success) {
@@ -2009,11 +1907,8 @@
                     data.games.forEach(item => {
                         const option = document.createElement("option");
                         const title = item.display_name || item.game_id;
-                        option.value = item.fever_id || `${item.game_id}:${item.distribution_id}`;
-                        option.dataset.gameId = item.game_id;
-                        option.dataset.distributionId = item.distribution_id;
-                        option.dataset.path = item.path || '';
-                        option.textContent = `${title} (${item.game_id} / 分发 ${item.distribution_id})`;
+                        option.value = item.game_id;
+                        option.textContent = `${title} (${item.game_id})`;
                         select.appendChild(option);
                     });
                     return swal({
@@ -2022,12 +1917,7 @@
                         buttons: ["取消", "导入"],
                     }).then(shouldImport => {
                         if (!shouldImport) return null;
-                        const selected = select.options[select.selectedIndex];
-                        return {
-                            gameId: selected.dataset.gameId,
-                            distributionId: selected.dataset.distributionId,
-                            path: selected.dataset.path,
-                        };
+                        return { selectedId: select.value };
                     });
                 })
                 .then(payload => {
@@ -2039,7 +1929,7 @@
                         buttons: false,
                         closeOnClickOutside: false,
                     });
-                    return fetchLauncherJson(`/_idv-login/launcher-import-fever?game_id=${encodeURIComponent(payload.gameId)}&distribution_id=${encodeURIComponent(payload.distributionId)}&path=${encodeURIComponent(payload.path)}`);
+                    return fetchLauncherJson(`/_idv-login/launcher-import-fever?game_id=${payload.selectedId}`);
                 })
                 .then(data => {
                     if (!data) return;
