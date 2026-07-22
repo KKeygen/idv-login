@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import re
 import struct
 import sys
 import threading
@@ -28,9 +29,24 @@ _XOR_TABLE = bytes.fromhex(
     "76e505c656989efff5284b901125cb78"
 )
 
+_CLIENT_WINDOW_CLASS_RE = re.compile(
+    r"^LHMW_FG_clientFGp(?P<game_id>.+)_i(?P<instance>\d+)$"
+)
+
 
 def _xor(data: bytes) -> bytes:
     return bytes(value ^ _XOR_TABLE[index % len(_XOR_TABLE)] for index, value in enumerate(data))
+
+
+def parse_client_window_class(class_name: str):
+    """Return ``(short_game_id, instance)`` for a Fever game window."""
+    match = _CLIENT_WINDOW_CLASS_RE.fullmatch(str(class_name or ""))
+    if not match:
+        return None
+    game_id = match.group("game_id").strip()
+    if not game_id or "-" in game_id:
+        return None
+    return game_id, int(match.group("instance"))
 
 
 if sys.platform == "win32":
@@ -160,19 +176,84 @@ class FeverIpcHost:
     def _on_copydata(self, sender_hwnd, lparam):
         cds = ctypes.cast(lparam, ctypes.POINTER(COPYDATASTRUCT)).contents
         raw = ctypes.string_at(cds.lpData, cds.cbData)
+        return self._handle_packet(sender_hwnd, raw, int(cds.dwData))
+
+    def _handle_packet(self, sender_hwnd, raw: bytes, dw_data: int = 0):
         if len(raw) < 12:
+            self.logger.debug(
+                "收到过短的 Fever IPC 包: "
+                f"dwData={dw_data}, sender=0x{int(sender_hwnd):x}, bytes={len(raw)}"
+            )
             return 0
-        _length, opcode, _flags = struct.unpack("<iii", raw[:12])
+        length, opcode, flags = struct.unpack("<iii", raw[:12])
         payload = _xor(raw[12:])
-        if opcode != 13 or len(payload) < 260:
-            return 0
-        instance = struct.unpack("<i", payload[:4])[0] - 101
-        identifier = payload[4:260]
+        packet_summary = (
+            f"op={opcode}, dwData={dw_data}, sender=0x{int(sender_hwnd):x}, "
+            f"declared={length}, flags={flags}, bytes={len(raw)}"
+        )
+        if opcode != 13:
+            # Observe every currently unknown opcode without logging payloads.
+            self.logger.debug(f"收到未知 Fever IPC: {packet_summary}")
         try:
-            self.on_ticket_request(int(sender_hwnd), instance, identifier)
+            if opcode == 13 and len(payload) >= 260:
+                self.logger.debug(f"收到 Fever ticket 请求: {packet_summary}")
+                payload_instance = struct.unpack("<i", payload[:4])[0] - 101
+                identifier = payload[4:260]
+                sender = self._resolve_client_sender(sender_hwnd)
+                if sender is None:
+                    return 0
+                process_id, game_id, instance = sender
+                if payload_instance != instance:
+                    self.logger.warning(
+                        "忽略实例编号不一致的 Fever ticket 请求: "
+                        f"class={instance}, payload={payload_instance}"
+                    )
+                    return 0
+                accepted = self.on_ticket_request(
+                    int(sender_hwnd), process_id, game_id, instance, identifier
+                )
+                return 0 if accepted is False else 1
         except Exception:
-            self.logger.exception("处理游戏 ticket 请求失败")
-        return 1
+            self.logger.exception(f"处理游戏 IPC op{opcode} 失败")
+        return 0
+
+    def _resolve_client_sender(self, sender_hwnd):
+        class_name = self._get_window_class_name(sender_hwnd)
+        identity = parse_client_window_class(class_name)
+        if identity is None:
+            self.logger.warning(
+                f"忽略未知 Fever 客户端窗口类: {class_name or '(empty)'}"
+            )
+            return None
+        game_id, instance = identity
+        process_id = self._get_window_process_id(sender_hwnd)
+        return process_id, game_id, instance
+
+    @staticmethod
+    def _get_window_class_name(hwnd) -> str:
+        if sys.platform != "win32":
+            return ""
+        buffer = ctypes.create_unicode_buffer(256)
+        user32 = ctypes.windll.user32
+        user32.GetClassNameW.argtypes = [
+            ctypes.wintypes.HWND, ctypes.wintypes.LPWSTR, ctypes.c_int,
+        ]
+        user32.GetClassNameW.restype = ctypes.c_int
+        length = user32.GetClassNameW(hwnd, buffer, len(buffer))
+        return buffer.value[:length] if length else ""
+
+    @staticmethod
+    def _get_window_process_id(hwnd) -> int:
+        if sys.platform != "win32":
+            return 0
+        process_id = ctypes.wintypes.DWORD()
+        user32 = ctypes.windll.user32
+        user32.GetWindowThreadProcessId.argtypes = [
+            ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        return int(process_id.value)
 
     def send_ticket(self, target_hwnd: int, login_channel: str, ticket: str) -> bool:
         if sys.platform != "win32" or not self.hwnd:

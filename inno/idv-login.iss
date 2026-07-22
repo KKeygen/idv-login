@@ -53,6 +53,8 @@ Name: "desktopiconmgr"; Description: "创建渠道服管理界面快捷方式"; 
 [Files]
 Source: "..\dist\python-embed\*"; DestDir: "{app}\python-embed"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\src\*"; DestDir: "{app}\src"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\assets\mpay.dll"; DestDir: "{app}\assets"; Flags: ignoreversion
+Source: "..\dist\assets\mpay_default_skin.zip"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "..\dist\点我启动工具.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 

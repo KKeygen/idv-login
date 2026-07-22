@@ -24,6 +24,7 @@ import threading
 import time
 
 import app_state
+from channelHandler.channelUtils import getShortGameId
 from mitmproxy import http
 from mpay_request_policy import (
     ROLE_BRIDGED_GAME,
@@ -124,11 +125,17 @@ class IDVLoginAddon:
         self.stack_mgr = LoginStackManager.get_instance()
         self.cloud_res = CloudRes
         self._hosted_targets_by_process = {}
+        self._held_hosted_query_flows = {}
 
+        self.auth_status_domain = str(
+            genv.get("DOMAIN_TARGET_AUTH_STATUS", "") or ""
+        ).strip().lower()
         self.target_domains = {
-            genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
-            genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
+            str(genv.get("DOMAIN_TARGET", "service.mkey.163.com")).lower(),
+            str(genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com")).lower(),
         }
+        if self.auth_status_domain:
+            self.target_domains.add(self.auth_status_domain)
 
         # Regex patterns for route matching
         self._re_login_methods = re.compile(r"^/mpay/games/([^/]+)/login_methods$")
@@ -147,34 +154,40 @@ class IDVLoginAddon:
     # ------------------------------------------------------------------
 
     def request(self, flow: http.HTTPFlow):
-        host = flow.request.pretty_host
+        host = flow.request.pretty_host.lower()
         if host not in self.target_domains:
             return
 
         path = flow.request.path.split("?")[0]
+
+        # This host is observed only for session validity.  Never apply MPay
+        # request rewriting to its traffic.
+        if host == getattr(self, "auth_status_domain", ""):
+            return
 
         # ── _idv-login routes: handle locally, do NOT forward upstream ──
         if path.startswith("/_idv-login/"):
             self._handle_idv_login_request(flow, path)
             return
 
-        hosted_active = bool(
-            getattr(getattr(app_state.fever_bridge, "ipc", None), "hwnd", None)
-        )
-        request_role = classify_mpay_request(
-            flow.request,
-            app_state.fever_bridge_target_game_ids,
-            hosted_mpay_active=hosted_active,
-        )
+        request_role = self._classify_mpay_request(flow)
         if request_role == ROLE_BRIDGED_GAME:
             return
         if request_role == ROLE_HOSTED_FEVER_MPAY:
-            # Hosted a50 mpay owns its configuration.  Only QR login traffic
-            # participates in the existing account capture/mapping pipeline.
+            self._remember_hosted_request(flow)
+            # The hosted instance uses the target game's native init identity,
+            # but its QR login traffic follows the same mapping path as the
+            # real Fever client when both coexist with this tool.
             if path == "/mpay/api/qrcode/create_login":
+                self._discard_held_hosted_query(
+                    self._request_process_id(flow)
+                )
                 self._modify_create_login_request(flow)
             elif path == "/mpay/api/users/login/qrcode/exchange_token":
                 self._modify_exchange_token_request(flow)
+            elif path == "/mpay/games/pc_config":
+                if flow.request.query.get("game_id", "") != "aecglf6ee4aaaarz-g-a50":
+                    flow.request.query["cv"] = self.cv
             return
 
         # ── Game API routes: may modify query before forwarding ──
@@ -210,30 +223,31 @@ class IDVLoginAddon:
                 self._modify_post_body_cv(flow)
 
     def response(self, flow: http.HTTPFlow):
-        host = flow.request.pretty_host
+        host = flow.request.pretty_host.lower()
         if host not in self.target_domains:
             return
 
         path = flow.request.path.split("?")[0]
+
+        if host == getattr(self, "auth_status_domain", ""):
+            if path.endswith("/sdk/uni_sauth"):
+                self._check_uni_sauth_response(flow)
+            return
 
         # ── _idv-login routes are fully handled in request() ──
         if path.startswith("/_idv-login/"):
             return
 
         try:
-            hosted_active = bool(
-                getattr(getattr(app_state.fever_bridge, "ipc", None), "hwnd", None)
-            )
-            request_role = classify_mpay_request(
-                flow.request,
-                app_state.fever_bridge_target_game_ids,
-                hosted_mpay_active=hosted_active,
-            )
+            request_role = self._classify_mpay_request(flow)
             if request_role == ROLE_BRIDGED_GAME:
                 return
             if request_role == ROLE_HOSTED_FEVER_MPAY:
-                if path == "/mpay/games/pc_config":
-                    self._disable_hosted_auto_login(flow)
+                if self._re_login_methods.match(path):
+                    self._modify_login_methods_response(flow)
+                elif path == "/mpay/games/pc_config":
+                    if flow.request.query.get("game_id", "") != "aecglf6ee4aaaarz-g-a50":
+                        self._modify_pc_config_response(flow)
                 elif path == "/mpay/api/qrcode/image":
                     self._modify_qrcode_image_response(flow)
                 elif path == "/mpay/api/qrcode/create_login":
@@ -241,11 +255,13 @@ class IDVLoginAddon:
                     process_id = flow.request.query.get("process_id", "")
                     if target_game_id and process_id:
                         self._hosted_targets_by_process[str(process_id)] = target_game_id
-                    self._modify_create_login_response(flow)
+                    self._modify_create_login_response(flow, target_game_id)
                 elif path == "/mpay/api/qrcode/query":
+                    effective_game_id = self._effective_hosted_game_id(flow)
                     self._handle_qrcode_query_response(
-                        flow, self._effective_hosted_game_id(flow)
+                        flow, effective_game_id
                     )
+                    self._hold_hosted_channel_query(flow, effective_game_id)
                 elif path == "/mpay/api/users/login/qrcode/exchange_token":
                     self._handle_exchange_token_response(
                         flow, self._effective_hosted_game_id(flow)
@@ -273,9 +289,69 @@ class IDVLoginAddon:
         except Exception:
             self.logger.exception(f"处理响应时出错: {path}")
 
+    def _check_uni_sauth_response(self, flow: http.HTTPFlow):
+        """Notify when the game's short-id uni_sauth check is no longer valid."""
+        try:
+            payload = json.loads(flow.response.content or b"{}")
+        except (TypeError, ValueError, UnicodeDecodeError):
+            payload = {}
+        if payload.get("code") == 200 and payload.get("subcode") == 0:
+            return
+        self.logger.warning("uni_sauth 校验失败，账号登录已过期")
+        app_state.toast("账号登录已过期", duration=5000)
+
     # ------------------------------------------------------------------
     # Request modification helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _request_process_id(flow: http.HTTPFlow) -> str:
+        return str(flow.request.query.get("process_id", "") or "")
+
+    def _classify_mpay_request(self, flow: http.HTTPFlow) -> str:
+        bridge = app_state.fever_bridge
+        hosted_active = bool(
+            getattr(getattr(bridge, "ipc", None), "hwnd", None)
+        )
+        role = classify_mpay_request(
+            flow.request,
+            app_state.fever_bridge_target_game_ids,
+            hosted_mpay_active=hosted_active,
+        )
+        process_id = self._request_process_id(flow)
+        if (
+            hosted_active
+            and process_id
+            and (
+                process_id == str(os.getpid())
+                or process_id in self._hosted_targets_by_process
+            )
+        ):
+            return ROLE_HOSTED_FEVER_MPAY
+        return role
+
+    def _remember_hosted_request(self, flow: http.HTTPFlow) -> None:
+        process_id = self._request_process_id(flow)
+        if process_id:
+            target_game_id = self._effective_hosted_game_id(flow)
+            if target_game_id:
+                self._hosted_targets_by_process[process_id] = target_game_id
+
+    def _discard_held_hosted_query(self, process_id: str) -> None:
+        if not process_id:
+            return
+        held = self._held_hosted_query_flows.pop(process_id, None)
+        if held is None or not getattr(held, "intercepted", False):
+            return
+        try:
+            held.kill()
+        except Exception:
+            self.logger.exception("清理旧的托管 MPay 二维码响应失败")
+
+    def done(self):
+        """Release intercepted responses when mitmproxy shuts down."""
+        for process_id in list(self._held_hosted_query_flows):
+            self._discard_held_hosted_query(process_id)
 
     def _modify_post_body_cv(self, flow: http.HTTPFlow):
         """为 POST 请求的 body 注入 cv 并移除 arch（全局 catch-all 用）。"""
@@ -442,18 +518,9 @@ class IDVLoginAddon:
         except Exception:
             pass
 
-    def _disable_hosted_auto_login(self, flow: http.HTTPFlow):
-        """Disable only a50's automatic login; leave all config intact."""
-        try:
-            data = json.loads(flow.response.content)
-            config = data.get("game", {}).get("config", {})
-            if isinstance(config, dict):
-                config["auto_login"] = False
-                flow.response.content = json.dumps(data).encode()
-        except Exception:
-            pass
-
-    def _modify_create_login_response(self, flow: http.HTTPFlow):
+    def _modify_create_login_response(
+        self, flow: http.HTTPFlow, hosted_target_game_id: str = ""
+    ):
         try:
             data = json.loads(flow.response.content)
             query = dict(flow.request.query)
@@ -469,21 +536,26 @@ class IDVLoginAddon:
 
             # 发烧平台
             dst_jf_game_id = query.get("dst_jf_game_id", "")
-            effective_game_id = dst_jf_game_id or game_id
+            effective_raw_game_id = (
+                dst_jf_game_id or hosted_target_game_id or game_id
+            )
+            effective_game_id = getShortGameId(effective_raw_game_id)
             if dst_jf_game_id:
                 qr_data["dst_jf_game_id"] = dst_jf_game_id
                 if (not self.genv.get("has_opened_admin", False)) and (not query.get("_cloud_extra_base64", "")):
                     self.genv.set("has_opened_admin", True)
                     if self.ui_manager:
-                        self.ui_manager.open_for_game(dst_jf_game_id)
-                self.stack_mgr.push_cached_qrcode_data(dst_jf_game_id, process_id, qr_data)
-                self.stack_mgr.ensure_pending_stack(dst_jf_game_id)
+                        self.ui_manager.open_for_game(dst_jf_game_id, "accounts")
+                self.stack_mgr.push_cached_qrcode_data(effective_game_id, process_id, qr_data)
+                self.stack_mgr.ensure_pending_stack(effective_game_id)
             else:
-                self.stack_mgr.push_cached_qrcode_data(game_id, process_id, qr_data)
-                self.stack_mgr.ensure_pending_stack(game_id)
+                self.stack_mgr.push_cached_qrcode_data(effective_game_id, process_id, qr_data)
+                self.stack_mgr.ensure_pending_stack(effective_game_id)
 
             # Auto-login
             auto_uuid = self.genv.get(f"auto-{effective_game_id}", "")
+            if not auto_uuid and effective_raw_game_id != effective_game_id:
+                auto_uuid = self.genv.get(f"auto-{effective_raw_game_id}", "")
             if auto_uuid:
                 delay = self.game_helper.get_login_delay(effective_game_id)
                 self.logger.info(f"即将自动登录，{delay}秒后开始扫码")
@@ -512,9 +584,14 @@ class IDVLoginAddon:
             # Change the QR code redirect URL
             is_compat = getattr(getattr(app_state, "proxy_mgr", None), "mode", "") == "compat"
             if is_compat:
-                qr_url = f"https://localhost/_idv-login/index?game_id={effective_game_id}"
+                qr_url = (
+                    "https://localhost/_idv-login/index"
+                    f"?game_id={effective_game_id}&view=accounts"
+                )
             else:
-                qr_url = f"idvlogin://open?game_id={effective_game_id}"
+                qr_url = (
+                    f"idvlogin://open?game_id={effective_game_id}&view=accounts"
+                )
             data["qrcode_scanners"][0]["url"] = qr_url
 
             if self.genv.get("SCAN_RECORD_ENABLED", True):
@@ -531,10 +608,12 @@ class IDVLoginAddon:
     def _effective_hosted_game_id(self, flow: http.HTTPFlow) -> str:
         query = flow.request.query
         process_id = str(query.get("process_id", "") or "")
+        bridge = app_state.fever_bridge
         return str(
             query.get("dst_jf_game_id", "")
             or self._hosted_targets_by_process.get(process_id, "")
             or query.get("game_id", "")
+            or getattr(bridge, "active_target_long_game_id", "")
         )
 
     def _handle_qrcode_query_response(
@@ -560,6 +639,66 @@ class IDVLoginAddon:
                 )
         except Exception:
             self.logger.exception("处理 qrcode/query 响应失败")
+
+    def _hold_hosted_channel_query(
+        self, flow: http.HTTPFlow, effective_game_id: str = ""
+    ) -> bool:
+        """Hold a channel success response and hand its code to the game.
+
+        The response must not reach hosted MPay: it would exchange the one-shot
+        code before the game receives it through op14.
+        """
+        handed_off = False
+        try:
+            if flow.response.status_code != 200:
+                return False
+            data = json.loads(flow.response.content)
+            if data.get("qrcode", {}).get("status") != 2:
+                return False
+            login_info = data.get("login_info", {})
+            if not isinstance(login_info, dict):
+                return False
+            login_channel = str(login_info.get("login_channel", "") or "")
+            ticket = str(login_info.get("code", "") or "")
+            if not login_channel or login_channel == "netease" or not ticket:
+                return False
+
+            bridge = app_state.fever_bridge
+            if bridge is None:
+                return False
+            process_id = self._request_process_id(flow)
+            if not process_id:
+                return False
+            flow.intercept()
+            accepted = bridge.accept_channel_qrcode_ticket(
+                login_channel, ticket
+            )
+            if not accepted:
+                flow.resume()
+                return False
+            handed_off = True
+            previous = self._held_hosted_query_flows.pop(process_id, None)
+            if (
+                previous is not None
+                and previous is not flow
+                and getattr(previous, "intercepted", False)
+            ):
+                try:
+                    previous.kill()
+                except Exception:
+                    self.logger.exception("清理重复的渠道服登录响应失败")
+            self._held_hosted_query_flows[process_id] = flow
+            self.logger.info(
+                "已挂起托管 MPay 的渠道服登录响应并转交游戏: "
+                f"game={getShortGameId(effective_game_id)}, "
+                f"channel={login_channel}"
+            )
+            return True
+        except Exception:
+            if not handed_off and getattr(flow, "intercepted", False):
+                flow.resume()
+            self.logger.exception("接管托管 MPay 渠道服登录 code 失败")
+            return False
 
     def _handle_exchange_token_response(
         self, flow: http.HTTPFlow, effective_game_id: str = ""
