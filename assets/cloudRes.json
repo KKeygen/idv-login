@@ -938,6 +938,16 @@
         "api_key": "CgB6e3x96tnvAjIf2C9bRrULw213dM5IWDf5OQZxAT2YuYfuE4A3/qPM/OctW8RyU4xUYGxRLcQ+uivojYvlZuEJ",
         "package_name": "com.netease.party.huawei"
       }
+    },
+    {
+        "package_name": "com.tencent.tmgp.party",
+        "app_channel": "myapp",
+        "log_key": "AFhte0-UFSsBUxO3yaM747mxyQHGiG06",
+        "game_id": "u5",
+        "myapp": {
+            "wx_appid": "wx7869269b36f12fb3",
+            "channel": "1112051453"
+        }
     }
   ],
   "netease_qrcode_login_game_list": [
