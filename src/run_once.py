@@ -388,6 +388,77 @@ def _probe_h55_version_update_prompt(logger):
         logger.error(f"第五人格版本更新提醒失败: {e}")
 
 
+def _initialize_downloadable_installation_versions(logger):
+    """Identify downloadable local installs that still lack a version baseline.
+
+    Path selection and legacy imports can create a valid local installation
+    without a ``version_code``.  Resolve its closest cloud distribution once,
+    then persist that distribution's current version as the comparison
+    baseline.  Later launcher status checks can therefore detect updates using
+    version codes only, without hashing the game on every page load.
+    """
+    from channelHandler.channelUtils import getShortGameId
+    from cloudRes import CloudRes
+    from gamemgr import GameManager
+
+    cloud = CloudRes()
+    game_mgr = GameManager()
+    changed = False
+    for game in game_mgr.games.values():
+        short_game_id = getShortGameId(game.game_id)
+        if not cloud.is_downloadable(short_game_id):
+            continue
+        pending = [
+            item for item in game.installations.values()
+            if item.path and os.path.exists(item.path) and not item.installed_version
+        ]
+        if not pending:
+            continue
+        distribution_options = game.get_distribution_options()
+        distribution_ids = game._normalize_distribution_ids(distribution_options)
+        if not distribution_ids:
+            continue
+        file_info_by_distribution = {
+            dist_id: game.get_file_distribution_info(dist_id) or {}
+            for dist_id in distribution_ids
+        }
+        launcher_data_by_distribution = {
+            dist_id: game.get_launcher_data_for_distribution(dist_id) or {}
+            for dist_id in distribution_ids
+        }
+        for installation in pending:
+            before = (
+                installation.distribution_id,
+                installation.installed_version,
+                installation.content_id,
+                installation.startup_path,
+                installation.startup_args,
+            )
+            game.identify_installation_distribution(
+                installation.installation_id,
+                distribution_options,
+                file_info_by_distribution,
+                launcher_data_by_distribution,
+                force=True,
+            )
+            after = (
+                installation.distribution_id,
+                installation.installed_version,
+                installation.content_id,
+                installation.startup_path,
+                installation.startup_args,
+            )
+            if after != before:
+                changed = True
+                installation.write_marker(game.game_id)
+                logger.info(
+                    f"已初始化本地游戏版本基线: {game.game_id}, "
+                    f"installation={installation.installation_id}"
+                )
+    if changed:
+        game_mgr._save_games()
+
+
 def _is_compat_port_available() -> bool:
     """检查兼容模式所需的 443 端口是否可用。"""
     import socket
@@ -536,6 +607,12 @@ def run_once():
         _probe_game_setup(logger)
     except Exception as e:
         logger.error(f"游戏设置引导失败: {e}")
+
+    # 为缺失 version_code 的本地可下载分发建立一次性比较基线。
+    try:
+        _initialize_downloadable_installation_versions(logger)
+    except Exception as e:
+        logger.error(f"初始化本地游戏版本基线失败: {e}")
 
     # 第五人格新版本引导
     try:
