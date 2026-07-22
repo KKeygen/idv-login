@@ -22,13 +22,22 @@ PORT_SEND_HEARTBEAT = 1737
 
 # 协议常量
 TOPIC = b"434"
-# UI 发送的心跳内容，告诉 Worker "我准备好接收状态 4 的数据了"
+# UI -> core heartbeat command.
 UI_HEARTBEAT_PAYLOAD = b"4"
+# Commands accepted by downloadIPC on the same UI -> core PUB socket.
+# The bundled Go binary maps 1 to Pause and 2 to Download; invoking Download
+# after a pause resumes the persisted download state.
+UI_PAUSE_PAYLOAD = b"1"
+UI_RESUME_PAYLOAD = b"2"
+UI_CONTROL_PAYLOADS = {
+    "pause": UI_PAUSE_PAYLOAD,
+    "resume": UI_RESUME_PAYLOAD,
+}
 # UI 发送心跳的频率
 UI_HEARTBEAT_INTERVAL_S = 1.0
 
-# downloadIPC message types (confirmed from the bundled binary).
-MSG_PROGRESS = b"4"
+# downloadIPC uses DownloadStateResp.StateFlags itself as the second multipart
+# frame for progress callbacks.  It is not a fixed "progress = 4" message type.
 MSG_SETUP_ERROR = b"101"
 MSG_DISK_FULL = b"206"
 MSG_QUIT = b"-1"
@@ -44,6 +53,21 @@ STATE_DISK_FULL = 7
 STATE_FINISHED = 8
 STATE_FAILED = 9
 STATE_VERIFYING = 11
+PROGRESS_MESSAGE_TYPES = frozenset(
+    str(state).encode("ascii")
+    for state in (
+        STATE_NOT_STARTED,
+        STATE_RESUME,
+        STATE_DOWNLOADING_HEAD,
+        STATE_DOWNLOADING,
+        STATE_BUILDING,
+        STATE_PAUSED,
+        STATE_DISK_FULL,
+        STATE_FINISHED,
+        STATE_FAILED,
+        STATE_VERIFYING,
+    )
+)
 
 
 def allocate_ipc_ports():
@@ -187,6 +211,21 @@ def _render_core_error(msg_type, payload):
 
 def _progress_event(data):
     phase, percent, rate, total = _progress_view(data)
+
+    def stage(prefix):
+        stage_percent = _as_percent(data.get(f"Show{prefix}Percent", 0))
+        stage_total = data.get(f"Show{prefix}Size", 0) or 0
+        try:
+            completed = float(stage_total) * stage_percent / 100.0
+        except (TypeError, ValueError):
+            completed = 0
+        return {
+            "percent": stage_percent,
+            "rate": data.get(f"Show{prefix}RateStr", "N/A"),
+            "completed_bytes": completed,
+            "total_bytes": stage_total,
+        }
+
     return {
         # The core can announce STATE_FINISHED before the supervisor has
         # persisted installation metadata.  Only the supervisor publishes the
@@ -197,7 +236,72 @@ def _progress_event(data):
         "rate": rate,
         "total_bytes": total,
         "state": data.get("StateFlags", STATE_NOT_STARTED),
+        "stages": {
+            "download": stage("Download"),
+            "install": stage("Build"),
+            "verify": stage("Verify"),
+        },
     }
+
+
+def _decode_progress_message(msg_type, payload):
+    """Decode a download-state frame, using its message type as a fallback."""
+    if msg_type not in PROGRESS_MESSAGE_TYPES:
+        return None
+    data = json.loads(payload.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise TypeError("download progress payload must be an object")
+    data.setdefault("StateFlags", int(msg_type.decode("ascii")))
+    return data
+
+
+def _read_control_command(control_file, last_sequence):
+    if not control_file:
+        return last_sequence, None
+    try:
+        with open(control_file, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        sequence = int(payload.get("sequence", 0))
+        action = str(payload.get("action") or "").strip().lower()
+    except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return last_sequence, None
+    if sequence <= last_sequence or action not in ("pause", "resume"):
+        return last_sequence, None
+    return sequence, action
+
+
+def _control_acknowledged(action, state):
+    if action == "pause":
+        return state == STATE_PAUSED
+    return state in {
+        STATE_RESUME,
+        STATE_DOWNLOADING_HEAD,
+        STATE_DOWNLOADING,
+        STATE_BUILDING,
+        STATE_VERIFYING,
+        STATE_FINISHED,
+    }
+
+
+def _control_pending_event(action):
+    return {
+        "status": "pending",
+        "phase": "正在暂停…" if action == "pause" else "正在恢复…",
+        "requested_action": action,
+    }
+
+
+def _new_control_request(action):
+    return {"action": action, "sent": False}
+
+
+def _send_control_once(sender, topic, request, core_ready):
+    """Send one control sequence after the core IPC is known to be ready."""
+    if not request or not core_ready or request["sent"]:
+        return False
+    sender.send_multipart([topic, UI_CONTROL_PAYLOADS[request["action"]]])
+    request["sent"] = True
+    return True
 
 
 def main_ui_server(
@@ -206,6 +310,7 @@ def main_ui_server(
     pub_port=None,
     stop_event=None,
     on_event=None,
+    control_file=None,
 ):
     if topic is None:
         topic = TOPIC
@@ -249,6 +354,10 @@ def main_ui_server(
     print("\nUI Server 已就绪。等待 下载核心 启动并连接...")
     
     last_heartbeat_time = 0
+    last_control_check_time = 0
+    last_control_sequence = 0
+    pending_control = None
+    core_ready = False
     progress_reporter = ProgressReporter()
     
     # 使用 Poller 实现高效的 I/O 多路复用
@@ -269,12 +378,34 @@ def main_ui_server(
                     
                     if len(message_parts) == 3:
                         topic, msg_type, payload = message_parts
+                        core_ready = True
                         # 仅打印非心跳消息，或者特定的进度消息
-                        if msg_type == MSG_PROGRESS:
+                        if msg_type in PROGRESS_MESSAGE_TYPES:
                             try:
-                                data = json.loads(payload.decode('utf-8'))
+                                data = _decode_progress_message(msg_type, payload)
+                                acknowledged = bool(
+                                    pending_control and _control_acknowledged(
+                                        pending_control["action"],
+                                        data.get("StateFlags", STATE_NOT_STARTED),
+                                    )
+                                )
+                                if acknowledged:
+                                    pending_control = None
                                 if on_event:
-                                    on_event(_progress_event(data))
+                                    event = _progress_event(data)
+                                    if pending_control:
+                                        # Preserve the real core state while a
+                                        # control request is awaiting its state
+                                        # callback.  In particular, never forge
+                                        # StateFlags=6 before the core sends it.
+                                        event.update(
+                                            _control_pending_event(
+                                                pending_control["action"]
+                                            )
+                                        )
+                                    elif acknowledged:
+                                        event["requested_action"] = ""
+                                    on_event(event)
                                 line = progress_reporter.render_if_due(data)
                                 if line:
                                     print(line, flush=True)
@@ -301,6 +432,22 @@ def main_ui_server(
             # 2. 处理发送 (UI 心跳)
             # Worker 需要不断收到这个消息，才会认为 UI 在线，并继续发送数据
             current_time = time.time()
+            if current_time - last_control_check_time >= 0.1:
+                last_control_sequence, action = _read_control_command(
+                    control_file, last_control_sequence
+                )
+                last_control_check_time = current_time
+                if action:
+                    pending_control = _new_control_request(action)
+                    if on_event:
+                        on_event(_control_pending_event(action))
+
+            # A PUB socket can drop a command before the core has subscribed.
+            # Receiving any core frame proves its IPC initialization completed;
+            # after that, send exactly once for each control-file sequence.  The
+            # resulting state callback is the acknowledgement.
+            _send_control_once(sender, topic, pending_control, core_ready)
+
             if current_time - last_heartbeat_time > UI_HEARTBEAT_INTERVAL_S:
                 # 构造消息: [topic, payload] -> [b"434", b"4"]
                 # 注意：Worker (Client) 那边接收的是 2-part message

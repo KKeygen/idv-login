@@ -60,6 +60,13 @@ class NativeTaskRegistry:
             success=bool(success),
             **values,
         )
+        with cls._lock:
+            control_file = str((cls._tasks.get(task_id) or {}).get("control_file") or "")
+        if control_file:
+            try:
+                os.remove(control_file)
+            except OSError:
+                pass
 
     @classmethod
     def get(cls, task_id: str) -> dict | None:
@@ -97,6 +104,27 @@ class NativeTaskRegistry:
         )
 
     @classmethod
+    def find_pending_download(cls, game_id: str, distribution_id: int) -> dict | None:
+        target_game = str(game_id or "")
+        try:
+            target_distribution = int(distribution_id)
+        except (TypeError, ValueError):
+            return None
+        with cls._lock:
+            task_ids = [
+                task_id
+                for task_id, task in cls._tasks.items()
+                if task.get("kind") in ("launcher-install", "launcher-update")
+                and str(task.get("game_id") or "") == target_game
+                and int(task.get("distribution_id", -1)) == target_distribution
+            ]
+        pending = [
+            task for task_id in task_ids
+            if (task := cls.get(task_id)) and task.get("status") == "pending"
+        ]
+        return max(pending, key=lambda item: int(item.get("created_at", 0))) if pending else None
+
+    @classmethod
     def _cleanup_locked(cls, now: int) -> None:
         expired = [
             task_id
@@ -106,10 +134,12 @@ class NativeTaskRegistry:
         ]
         for task_id in expired:
             task = cls._tasks.pop(task_id, None) or {}
-            status_file = task.get("status_file")
-            if status_file:
+            for file_key in ("status_file", "control_file"):
+                task_file = task.get(file_key)
+                if not task_file:
+                    continue
                 try:
-                    os.remove(status_file)
+                    os.remove(task_file)
                 except OSError:
                     pass
 
@@ -123,6 +153,7 @@ def capabilities() -> dict:
         "inspect_path": True,
         "task_polling": True,
         "download_progress": True,
+        "download_pause_resume": True,
         "platform": sys.platform,
     }
 
@@ -173,6 +204,7 @@ def inspect_path(path: str) -> dict:
         "is_file": is_file,
         "is_directory": is_directory,
         "is_drive_root": is_drive_root,
+        "volume_root": root,
         "writable": writable,
         "disk_total_bytes": disk_total,
         "disk_used_bytes": disk_used,

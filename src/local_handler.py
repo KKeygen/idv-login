@@ -158,6 +158,7 @@ class LocalRequestHandler:
             "/_idv-login/native/pick-executable": self._native_pick_executable,
             "/_idv-login/native/path-status": self._native_path_status,
             "/_idv-login/native/task-status": self._native_task_status,
+            "/_idv-login/native/download-control": self._native_download_control,
             "/_idv-login/fever-bridge": self._fever_bridge_setting,
 
         }
@@ -175,6 +176,24 @@ class LocalRequestHandler:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _download_control_file(task_id: str) -> str:
+        return os.path.join(
+            genv.get("FP_WORKDIR", os.getcwd()),
+            f"download_control_{task_id}.json",
+        )
+
+    @staticmethod
+    def _public_download_task(task: dict | None) -> dict | None:
+        if not task:
+            return None
+        keys = (
+            "task_id", "kind", "status", "success", "phase",
+            "progress_percent", "rate", "total_bytes", "state", "stages",
+            "created_at", "updated_at", "requested_action", "error",
+        )
+        return {key: task[key] for key in keys if key in task}
 
     @staticmethod
     def _json_response(status: int, data) -> Tuple[int, dict, bytes]:
@@ -1057,7 +1076,12 @@ class LocalRequestHandler:
                     genv.get("FP_WORKDIR", os.getcwd()),
                     f"download_status_{task_id}.json",
                 )
-                NativeTaskRegistry.update(task_id, status_file=progress_file)
+                control_file = self._download_control_file(task_id)
+                NativeTaskRegistry.update(
+                    task_id,
+                    status_file=progress_file,
+                    control_file=control_file,
+                )
                 NativeTaskRegistry.update(
                     task_id,
                     game_id=gid,
@@ -1113,6 +1137,7 @@ class LocalRequestHandler:
                             max_conc,
                             installation.installation_id,
                             progress_file=progress_file,
+                            control_file=control_file,
                         )
                         if not updated:
                             raise RuntimeError("启动游戏下载失败")
@@ -1320,9 +1345,11 @@ class LocalRequestHandler:
                 genv.get("FP_WORKDIR", os.getcwd()),
                 f"download_status_{task_id}.json",
             )
+            control_file = self._download_control_file(task_id)
             NativeTaskRegistry.update(
                 task_id,
                 status_file=progress_file,
+                control_file=control_file,
                 phase="checking",
                 progress_percent=0,
                 game_id=gid,
@@ -1338,6 +1365,7 @@ class LocalRequestHandler:
                         max_conc,
                         installation.installation_id,
                         progress_file=progress_file,
+                        control_file=control_file,
                     )
                     if not updated:
                         raise RuntimeError("启动游戏更新失败")
@@ -1780,6 +1808,77 @@ class LocalRequestHandler:
             NativeTaskRegistry.update(task_id, reconciled=True)
             task["reconciled"] = True
         return self._json_response(200, task)
+
+    def _native_download_control(self, args, body, method):
+        if method != "POST":
+            return self._json_response(405, {
+                "success": False,
+                "error": "下载控制请求必须使用 POST",
+            })
+        from nativebridge import NativeTaskRegistry
+
+        payload = body or {}
+        task_id = str(payload.get("task_id") or "")
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in ("pause", "resume"):
+            return self._json_response(400, {
+                "success": False,
+                "error": "下载控制只支持暂停或继续",
+            })
+        task = NativeTaskRegistry.get(task_id)
+        if not task or task.get("kind") not in ("launcher-install", "launcher-update"):
+            return self._json_response(404, {
+                "success": False,
+                "error": "未找到下载任务",
+            })
+        if task.get("status") != "pending":
+            return self._json_response(409, {
+                "success": False,
+                "error": "下载任务已结束",
+            })
+        control_file = str(task.get("control_file") or "")
+        if not control_file:
+            return self._json_response(409, {
+                "success": False,
+                "error": "下载核心尚未完成控制初始化",
+            })
+
+        command = {
+            "sequence": time.time_ns(),
+            "action": action,
+        }
+        temporary = f"{control_file}.{threading.get_ident()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(control_file) or ".", exist_ok=True)
+            with open(temporary, "w", encoding="utf-8") as handle:
+                json.dump(command, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, control_file)
+        except Exception as exc:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            self.logger.exception("写入下载控制请求失败")
+            return self._json_response(500, {
+                "success": False,
+                "error": str(exc),
+            })
+
+        phase = "正在暂停…" if action == "pause" else "正在恢复…"
+        NativeTaskRegistry.update(
+            task_id,
+            phase=phase,
+            requested_action=action,
+        )
+        return self._json_response(202, {
+            "success": True,
+            "status": "pending",
+            "task_id": task_id,
+            "action": action,
+            "phase": phase,
+        })
 
     def _fever_bridge_setting(self, args, body, method):
         payload = body or args or {}

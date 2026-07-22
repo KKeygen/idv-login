@@ -667,6 +667,24 @@ def _encode_repair_list_path(path):
     return base64.b64encode(path.encode("utf-8")).decode("utf-8")
 
 
+def _download_core_log_path(game_id="", installation_id=""):
+    log_dir = os.path.join(
+        genv.get("FP_WORKDIR", os.getcwd()),
+        "download-core-logs",
+    )
+    os.makedirs(log_dir, exist_ok=True)
+    identity = f"{game_id}_{installation_id}" or "unknown"
+    safe_identity = "".join(
+        char if char.isalnum() or char in ("-", "_") else "_"
+        for char in identity
+    ).strip("_") or "unknown"
+    stamp = int(time.time() * 1000)
+    return os.path.join(
+        log_dir,
+        f"download_core_{safe_identity}_{stamp}_{os.getpid()}.log",
+    )
+
+
 _download_status_lock = threading.Lock()
 
 
@@ -721,6 +739,7 @@ def handle_download_task(task_file_path):
     original_version = task_data.get("original_version", "")
     repair_list_path = task_data.get("repair_list_path", "")
     progress_file = task_data.get("progress_file", "")
+    control_file = task_data.get("control_file", "")
     start_args = task_data.get("start_args", "")
     result = True
     ui_server_process = None
@@ -759,6 +778,7 @@ def handle_download_task(task_file_path):
                         "pub_port": progress_port,
                         "stop_event": stop_event,
                         "on_event": publish_progress,
+                        "control_file": control_file,
                     }
                 )
                 ui_server_thread.daemon = True
@@ -766,7 +786,6 @@ def handle_download_task(task_file_path):
                 #等待几秒钟，确保UI服务器启动完成
                 import time
                 time.sleep(5)
-                creationflags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
                 encoded_path = _encode_download_path(download_root)
                 encoded_repair_list_path = _encode_repair_list_path(repair_list_path)
                 #./downloadIPC  --gameid:73 --contentid:434 --subport:1737 --pubport:1740 --path:RTpcRmV2ZXJBcHBzXGR3cmcy --env:live --oversea:0 --targetVersion:v3_3028_7e8d8ea06733136dd915a6e865440158 --originVersion:v3_2547 --scene:2 --rateLimit:0  --channel:platform --locale:zh_Hans  --isSSD:1 --isRepairMode:0
@@ -793,8 +812,25 @@ def handle_download_task(task_file_path):
                     download_cmd.append(f"--originVersion:{original_version}")
                 else:
                     download_cmd.append(f"--originVersion:")
-                download_process = subprocess.Popen(download_cmd, creationflags=creationflags)
-                exit_code = download_process.wait()
+                core_log_path = _download_core_log_path(game_id, installation_id)
+                _write_download_status(progress_file, {
+                    "core_log_path": core_log_path,
+                })
+                creationflags = (
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    if sys.platform == "win32"
+                    else 0
+                )
+                logger_local.info(f"下载核心输出日志: {core_log_path}")
+                with open(core_log_path, "ab", buffering=0) as core_log:
+                    download_process = subprocess.Popen(
+                        download_cmd,
+                        stdin=subprocess.DEVNULL,
+                        stdout=core_log,
+                        stderr=subprocess.STDOUT,
+                        creationflags=creationflags,
+                    )
+                    exit_code = download_process.wait()
                 result = exit_code == 0 and not core_error["value"]
         if result and game_id and version_code:
             from gamemgr import GameManager
@@ -845,6 +881,13 @@ def handle_download_task(task_file_path):
             os.remove(task_file_path)
         except Exception as e:
             logger_local.exception(f"删除下载任务文件失败: {e}")
+        if control_file:
+            try:
+                os.remove(control_file)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger_local.exception(f"删除下载控制文件失败: {e}")
         try:#尝试用explorer打开下载完成的目录
             if download_root and os.path.exists(download_root):
                 #使用正斜杠避免路径问题
