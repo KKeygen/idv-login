@@ -277,7 +277,16 @@ class CloudRes:
     
     def get_login_page(self):
         import base64
-        return base64.b64decode(self.local_data.get('login_base64_page_fever', '')).decode()
+        import binascii
+        for key in ('login_base64_page_fever', 'login_base64_page'):
+            encoded = self.local_data.get(key, '')
+            if not encoded:
+                continue
+            try:
+                return base64.b64decode(encoded, validate=True).decode()
+            except (binascii.Error, UnicodeDecodeError, TypeError, ValueError):
+                logger.warning(f"云端页面字段无效，尝试兼容回退: {key}")
+        return ""
     
     def get_shortcuts(self):
         return self.local_data.get('shortcuts', [])

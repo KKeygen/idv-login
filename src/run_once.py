@@ -602,23 +602,11 @@ def run_once():
                 )
                 logger.error("config.json 修复失败，写入仍然不可用")
     
-    # 游戏设置引导
-    try:
-        _probe_game_setup(logger)
-    except Exception as e:
-        logger.error(f"游戏设置引导失败: {e}")
-
     # 为缺失 version_code 的本地可下载分发建立一次性比较基线。
     try:
         _initialize_downloadable_installation_versions(logger)
     except Exception as e:
         logger.error(f"初始化本地游戏版本基线失败: {e}")
-
-    # 第五人格新版本引导
-    try:
-        _probe_h55_version_update_prompt(logger)
-    except Exception as e:
-        logger.error(f"第五人格新版本引导失败: {e}")
     
     # 代理模式引导（多游戏有账号时）
     try:
