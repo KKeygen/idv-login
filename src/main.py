@@ -66,6 +66,15 @@ _dns_policy_mgr = None  # DnsPolicyManager instance for compat mode
 _dns_server = None      # LocalDnsServer instance for compat mode
 
 
+def _configured_target_domains():
+    domains = [
+        genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
+        genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
+        genv.get("DOMAIN_TARGET_AUTH_STATUS", ""),
+    ]
+    return [str(domain).strip() for domain in domains if str(domain or "").strip()]
+
+
 # -- 全局异常钩子 --
 def _global_excepthook(exc_type, exc_value, exc_tb):
     """处理主线程中未捕获的异常"""
@@ -387,6 +396,8 @@ def initialize():
     os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
     genv.set("DOMAIN_TARGET", "service.mkey.163.com")
     genv.set("DOMAIN_TARGET_OVERSEA","sdk-os.mpsdk.easebar.com")
+    # Placeholder for the game's uni_sauth host.  Leave empty until assigned.
+    genv.set("DOMAIN_TARGET_AUTH_STATUS", "")
     genv.set("FP_FAKE_DEVICE", os.path.join(genv.get("FP_WORKDIR"), "fakeDevice.json"))
     genv.set("FP_WEBCERT", os.path.join(genv.get("FP_WORKDIR"), "domain_cert_4.pem"))
     genv.set("FP_WEBKEY", os.path.join(genv.get("FP_WORKDIR"), "domain_key_4.pem"))
@@ -1015,8 +1026,7 @@ def generate_certificates_if_needed():
         # ── 生成服务器证书 (仍用于某些内部流程) ──
         srv_key = m_certmgr.generate_private_key(bits=2048)
         srv_cert = m_certmgr.generate_cert(
-            [genv.get("DOMAIN_TARGET"), genv.get("DOMAIN_TARGET_OVERSEA"), "localhost"],
-            srv_key, ca_cert, ca_key,
+            [*_configured_target_domains(), "localhost"], srv_key, ca_cert, ca_key,
         )
         m_certmgr.export_cert(genv.get("FP_WEBCERT"), srv_cert)
         m_certmgr.export_key(genv.get("FP_WEBKEY"), srv_key)
@@ -1097,6 +1107,7 @@ def setup_network_proxy(proxy_port):
     from uimgr import UIManager
     ui_mgr = UIManager(game_helper=game_helper, ui_logger=ui_logger)
     app_state.ui_mgr = ui_mgr
+    game_helper.start_fever_auto_import()
 
     # Create the mitmproxy addon
     from mitm_addon import IDVLoginAddon
@@ -1116,6 +1127,7 @@ def setup_network_proxy(proxy_port):
     uri_action = genv.get("URI_STARTUP_ACTION", "")
     uri_game_id = genv.get("URI_STARTUP_GAME_ID", "")
     uri_installation_id = genv.get("URI_STARTUP_INSTALLATION_ID", "")
+    uri_initial_view = genv.get("URI_STARTUP_VIEW", "")
     auto_games = game_helper.list_auto_start_games()
     proxy_mode = genv.get("proxy_mode", "")
     if not proxy_mode:
@@ -1169,12 +1181,23 @@ def setup_network_proxy(proxy_port):
     register_uri_scheme()
 
     # Start the URI listener so that new --uri invocations signal this instance
-    def _on_uri_signal(action: str, game_id: str, installation_id: str = ""):
+    def _on_uri_signal(
+        action: str,
+        game_id: str,
+        installation_id: str = "",
+        initial_view: str = "",
+    ):
         logger.info(
             f"收到 URI 信号: action={action}, game_id={game_id}, "
-            f"installation_id={installation_id}"
+            f"installation_id={installation_id}, view={initial_view}"
         )
-        if action == "start" and game_id:
+        if action == "fever-channel-accounts":
+            bridge = app_state.fever_bridge
+            target_game_id = game_id or getattr(
+                bridge, "active_target_game_id", ""
+            )
+            ui_mgr.open_for_game(target_game_id, "accounts")
+        elif action == "start" and game_id:
             game = game_helper.get_game(game_id)
             if game:
                 logger.info(f"通过信号启动游戏: {game.name or game_id}")
@@ -1182,14 +1205,16 @@ def setup_network_proxy(proxy_port):
             else:
                 logger.warning(f"信号指定的游戏未找到: {game_id}")
         else:
-            ui_mgr.open_for_game(game_id)
+            ui_mgr.open_for_game(game_id, initial_view)
 
     start_uri_listener(_on_uri_signal)
 
     # If we were launched via --uri / --open-ui, open the UI
     if genv.get("URI_STARTUP_OPEN_UI"):
         startup_game_id = genv.get("URI_STARTUP_GAME_ID", "")
-        ui_mgr.open_for_game(startup_game_id)
+        ui_mgr.open_for_game(startup_game_id, uri_initial_view)
+        genv.set("URI_STARTUP_OPEN_UI", "")
+        genv.set("URI_STARTUP_VIEW", "")
 
     # 根据模式执行不同的启动逻辑
     if proxy_mode == "compat":
@@ -1205,11 +1230,13 @@ def setup_network_proxy(proxy_port):
             genv.set("URI_STARTUP_ACTION", "")
             genv.set("URI_STARTUP_GAME_ID", "")
             genv.set("URI_STARTUP_INSTALLATION_ID", "")
+            genv.set("URI_STARTUP_VIEW", "")
         elif auto_games:
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
             for g in auto_games:
-                g.start()
+                installation = g.get_auto_start_installation()
+                g.start(installation.installation_id if installation else "")
     elif uri_action == "start" and uri_game_id:
         # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
         game = game_helper.get_game(uri_game_id)
@@ -1222,6 +1249,7 @@ def setup_network_proxy(proxy_port):
         genv.set("URI_STARTUP_ACTION", "")
         genv.set("URI_STARTUP_GAME_ID", "")
         genv.set("URI_STARTUP_INSTALLATION_ID", "")
+        genv.set("URI_STARTUP_VIEW", "")
     elif proxy_mode == "global":
         # 次优先级：全局模式 → 设置系统/用户级代理
         _set_proxy(proxy_port)
@@ -1231,7 +1259,8 @@ def setup_network_proxy(proxy_port):
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
             for g in auto_games:
-                g.start()
+                installation = g.get_auto_start_installation()
+                g.start(installation.installation_id if installation else "")
         else:
             logger.info("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
     elif auto_games:
@@ -1239,7 +1268,8 @@ def setup_network_proxy(proxy_port):
         names = ", ".join(g.name for g in auto_games)
         logger.info(f"进程代理模式，启动自启游戏: {names}")
         for g in auto_games:
-            g.start()
+            installation = g.get_auto_start_installation()
+            g.start(installation.installation_id if installation else "")
     else:
         # 进程代理模式且没有自启游戏
         logger.info("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
@@ -1259,10 +1289,7 @@ def _setup_compat_mode(addon):
     global m_proxy, _dns_policy_mgr, _dns_server
 
     # 目标域名
-    target_domains = [
-        genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
-        genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
-    ]
+    target_domains = _configured_target_domains()
 
     # 0. 检测并处理 443 端口占用
     _check_and_handle_port_443()
@@ -1664,11 +1691,15 @@ if __name__ == "__main__":
             action = params.get("action", "open")
             game_id = params.get("game_id", "")
             installation_id = params.get("installation_id", "")
+            initial_view = params.get("view", "")
             
             # idvlogin://start?game_id=xxx - 启动工具并仅启动该游戏（进程代理模式）
             # idvlogin://open?game_id=xxx - 打开 UI
+            # idvlogin://fever-channel-accounts - 打开当前游戏的渠道账号管理
             # 两种 action 都先尝试信号已运行实例
-            if signal_running_instance(game_id, action, installation_id):
+            if signal_running_instance(
+                game_id, action, installation_id, initial_view
+            ):
                 # 已运行实例收到信号，退出本进程
                 sys.exit(0)
             # 无已运行实例，作为新实例启动
@@ -1680,6 +1711,7 @@ if __name__ == "__main__":
                 # No running instance — fall through and start normally.
                 # Store the game_id so the UI opens for it after startup.
                 genv.set("URI_STARTUP_GAME_ID", game_id)
+                genv.set("URI_STARTUP_VIEW", initial_view)
                 genv.set("URI_STARTUP_OPEN_UI", "1")
     except SystemExit:
         raise

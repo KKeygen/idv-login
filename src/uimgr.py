@@ -23,17 +23,26 @@ import os
 import sys
 import threading
 
-from PyQt6.QtCore import QByteArray, QBuffer, QEvent, QIODevice, Qt, QUrl
+from PyQt6.QtCore import (
+    QByteArray,
+    QBuffer,
+    QEvent,
+    QIODevice,
+    Qt,
+    QUrl,
+    QUrlQuery,
+)
 from PyQt6.QtWebEngineCore import (
+    QWebEngineProfile,
     QWebEngineUrlScheme,
     QWebEngineUrlSchemeHandler,
     QWebEngineUrlRequestJob,
     QWebEnginePage,
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QMainWindow,
     QToolButton,
     QVBoxLayout,
@@ -51,6 +60,8 @@ SCHEME_NAME = b"idvlogin"
 _CDN_PROXY_HOST = "cdn"
 # Host used for opening external URLs in system browser (idvlogin://open/...)
 _OPEN_PROXY_HOST = "open"
+_UI_PROFILE_STORAGE_NAME = "idvlogin-launcher"
+_UI_PROFILE_DIR_NAME = "webui_profile"
 
 # In-memory cache for CDN resources: url -> (content_type, body_bytes)
 _cdn_cache: dict[str, tuple[str, bytes]] = {}
@@ -204,10 +215,13 @@ class IDVLoginSchemeHandler(QWebEngineUrlSchemeHandler):
         path = url.path() or "/"
         method = job.requestMethod().data().decode("utf-8", errors="replace")
 
-        # Parse query parameters
-        from PyQt6.QtCore import QUrlQuery
-        qurl_query = QUrlQuery(url)
-        args = {item[0]: item[1] for item in qurl_query.queryItems()}
+        # Parse the fully encoded query.  QUrlQuery.queryItems() leaves the
+        # colon in a Windows drive letter as ``%3A``, turning D:\\... into a
+        # relative path under the process's C: working directory.
+        from uri_scheme import parse_fully_encoded_query
+
+        encoded_query = url.query(QUrl.ComponentFormattingOption.FullyEncoded)
+        args = parse_fully_encoded_query(encoded_query)
 
         # Read body for POST
         json_body = None
@@ -316,7 +330,7 @@ class _UISignalRouter(QObject):
     when emitted from a background thread, guaranteeing execution
     on the main (GUI) thread.
     """
-    open_game_sig = pyqtSignal(str)
+    open_game_sig = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -326,10 +340,10 @@ class _UISignalRouter(QObject):
     def set_callback(self, callback):
         self._callback = callback
 
-    @pyqtSlot(str)
-    def _on_open_game(self, game_id: str):
+    @pyqtSlot(str, str)
+    def _on_open_game(self, game_id: str, initial_view: str):
         if self._callback:
-            self._callback(game_id)
+            self._callback(game_id, initial_view)
 
 
 class _MainThreadDispatcher(QObject):
@@ -369,28 +383,58 @@ class _MainThreadDispatcher(QObject):
         return bag["value"]
 
 
-class _WindowsTitleBar(QWidget):
-    """Small native-window control strip for the Windows frameless shell."""
+class _WindowControlButton(QToolButton):
+    """Draw title-bar glyphs in one optical box instead of using Unicode."""
+
+    def __init__(self, kind: str, parent=None):
+        super().__init__(parent)
+        self.kind = kind
+
+    def set_kind(self, kind: str):
+        self.kind = kind
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor(255, 255, 255, 245 if self.underMouse() else 210)
+        pen = QPen(color, 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.SquareCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+        painter.setPen(pen)
+
+        cx = self.width() / 2
+        cy = self.height() / 2
+        if self.kind == "minimize":
+            painter.drawLine(round(cx - 5), round(cy + 3), round(cx + 5), round(cy + 3))
+        elif self.kind == "maximize":
+            painter.drawRect(round(cx - 5), round(cy - 5), 10, 10)
+        elif self.kind == "restore":
+            painter.drawRect(round(cx - 4), round(cy - 5), 9, 9)
+            painter.drawLine(round(cx - 6), round(cy - 3), round(cx - 6), round(cy + 5))
+            painter.drawLine(round(cx - 6), round(cy + 5), round(cx + 3), round(cy + 5))
+        else:
+            painter.drawLine(round(cx - 5), round(cy - 5), round(cx + 5), round(cy + 5))
+            painter.drawLine(round(cx + 5), round(cy - 5), round(cx - 5), round(cy + 5))
+
+
+class _WindowsWindowControls(QWidget):
+    """Floating controls for the Windows frameless shell."""
 
     def __init__(self, window: "_WindowsFramelessWindow"):
         super().__init__(window)
         self._window = window
-        self.setObjectName("windowsTitleBar")
-        self.setFixedHeight(40)
+        self.setObjectName("windowsWindowControls")
+        self.setFixedSize(114, 34)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(3, 3, 3, 3)
+        layout.setSpacing(2)
 
-        self._title = QLabel(window.windowTitle(), self)
-        self._title.setObjectName("windowsTitle")
-        self._title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        layout.addWidget(self._title)
-        layout.addStretch(1)
-
-        self._minimize_button = self._make_button("\u2014", "最小化")
-        self._maximize_button = self._make_button("\u25a1", "最大化")
-        self._close_button = self._make_button("\u00d7", "关闭", close_button=True)
+        self._minimize_button = self._make_button("minimize", "最小化")
+        self._maximize_button = self._make_button("maximize", "最大化")
+        self._close_button = self._make_button("close", "关闭", close_button=True)
         self._minimize_button.clicked.connect(window.showMinimized)
         self._maximize_button.clicked.connect(window.toggle_maximized)
         self._close_button.clicked.connect(window.close)
@@ -401,20 +445,16 @@ class _WindowsTitleBar(QWidget):
 
         self.setStyleSheet(
             """
-            QWidget#windowsTitleBar {
-                background: #111720;
-            }
-            QLabel#windowsTitle {
-                color: rgba(255, 255, 255, 190);
-                font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
-                font-size: 12px;
+            QWidget#windowsWindowControls {
+                border: 1px solid rgba(255, 255, 255, 28);
+                border-radius: 13px;
+                background: rgba(12, 16, 23, 178);
             }
             QToolButton {
                 color: rgba(255, 255, 255, 210);
                 background: transparent;
                 border: 0;
-                font-family: "Segoe UI Symbol", "Segoe UI", sans-serif;
-                font-size: 16px;
+                border-radius: 9px;
             }
             QToolButton:hover {
                 background: rgba(255, 255, 255, 24);
@@ -433,12 +473,11 @@ class _WindowsTitleBar(QWidget):
         )
 
     def _make_button(
-        self, text: str, tooltip: str, *, close_button: bool = False
+        self, kind: str, tooltip: str, *, close_button: bool = False
     ) -> QToolButton:
-        button = QToolButton(self)
-        button.setText(text)
+        button = _WindowControlButton(kind, self)
         button.setToolTip(tooltip)
-        button.setFixedSize(46, 40)
+        button.setFixedSize(34, 28)
         button.setCursor(Qt.CursorShape.ArrowCursor)
         if close_button:
             button.setObjectName("closeButton")
@@ -446,27 +485,8 @@ class _WindowsTitleBar(QWidget):
 
     def update_window_state(self):
         maximized = self._window.isMaximized()
-        self._maximize_button.setText("\u2750" if maximized else "\u25a1")
+        self._maximize_button.set_kind("restore" if maximized else "maximize")
         self._maximize_button.setToolTip("还原" if maximized else "最大化")
-
-    def update_title(self):
-        self._title.setText(self._window.windowTitle())
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            handle = self._window.windowHandle()
-            if handle is not None and handle.startSystemMove():
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._window.toggle_maximized()
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)
-
 
 class _WindowsFramelessWindow(QMainWindow):
     """Windows-only frameless host around the existing WebEngine UI.
@@ -485,7 +505,6 @@ class _WindowsFramelessWindow(QMainWindow):
     _HTBOTTOM = 15
     _HTBOTTOMLEFT = 16
     _HTBOTTOMRIGHT = 17
-
     def __init__(self):
         super().__init__()
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
@@ -499,12 +518,14 @@ class _WindowsFramelessWindow(QMainWindow):
         self._layout.setSpacing(0)
         super().setCentralWidget(self._container)
 
-        self._title_bar = _WindowsTitleBar(self)
-        self._layout.addWidget(self._title_bar)
+        self._window_controls = _WindowsWindowControls(self)
+        self._position_window_controls()
+        self._window_controls.raise_()
         self._dwm_style_applied = False
 
     def set_content_widget(self, widget: QWidget):
         self._layout.addWidget(widget, 1)
+        self._window_controls.raise_()
 
     def toggle_maximized(self):
         if self.isMaximized():
@@ -514,13 +535,25 @@ class _WindowsFramelessWindow(QMainWindow):
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.WindowStateChange:
-            self._title_bar.update_window_state()
-        elif event.type() == QEvent.Type.WindowTitleChange:
-            self._title_bar.update_title()
+            self._window_controls.update_window_state()
+            self._position_window_controls()
         super().changeEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_window_controls()
+
+    def _position_window_controls(self):
+        inset = 12 if not self.isMaximized() else 8
+        self._window_controls.move(
+            max(inset, self.width() - self._window_controls.width() - inset),
+            inset,
+        )
+        self._window_controls.raise_()
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._position_window_controls()
         if not self._dwm_style_applied:
             self._apply_dwm_style()
             self._dwm_style_applied = True
@@ -620,7 +653,21 @@ class _WindowsFramelessWindow(QMainWindow):
                             return True, self._HTBOTTOM
             except Exception:
                 pass
-        return super().nativeEvent(event_type, message)
+        # PyQt6 expects an integer native result even when the event is not
+        # handled.  QWidget.nativeEvent() can expose a null result during HWND
+        # creation, which SIP then dereferences while converting the tuple.
+        return False, 0
+
+
+def _fit_frameless_launcher_size(
+    available_width: int, available_height: int
+) -> tuple[int, int]:
+    """Fit the 1280x720 launcher into the available desktop at 16:9."""
+    target_width, target_height = 1280, 720
+    max_width = max(1, int(available_width) - 24)
+    max_height = max(1, int(available_height) - 24)
+    scale = min(1.0, max_width / target_width, max_height / target_height)
+    return max(1, round(target_width * scale)), max(1, round(target_height * scale))
 
 
 class UIManager:
@@ -636,15 +683,38 @@ class UIManager:
         self.ui_logger = ui_logger
         self._window: QMainWindow | None = None
         self._view: QWebEngineView | None = None
+        self._profile: QWebEngineProfile | None = None
         self._scheme_handler: IDVLoginSchemeHandler | None = None
 
         self._router = _UISignalRouter()
         self._router.set_callback(self._do_open_for_game)
         self._dispatcher = _MainThreadDispatcher()
 
-    def open_for_game(self, game_id: str = ""):
+    def open_for_game(self, game_id: str = "", initial_view: str = ""):
         """Show the UI window for the given *game_id*. (Thread-safe)"""
-        self._router.open_game_sig.emit(game_id)
+        self._router.open_game_sig.emit(game_id, initial_view)
+
+    def start_system_move(self) -> bool:
+        """Start the OS-native move operation for the embedded launcher."""
+        return bool(self._dispatcher.run_sync(self._do_start_system_move))
+
+    def _do_start_system_move(self) -> bool:
+        window = self._window
+        if window is None or not window.isVisible():
+            return False
+        handle = window.windowHandle()
+        return bool(handle and handle.startSystemMove())
+
+    def toggle_maximized(self) -> bool:
+        """Toggle the embedded frameless launcher between normal/maximized."""
+        return bool(self._dispatcher.run_sync(self._do_toggle_maximized))
+
+    def _do_toggle_maximized(self) -> bool:
+        window = self._window
+        if not isinstance(window, _WindowsFramelessWindow) or not window.isVisible():
+            return False
+        window.toggle_maximized()
+        return True
 
     def _ensure_window(self):
         if self._window is not None:
@@ -661,7 +731,16 @@ class UIManager:
         else:
             self._window = QMainWindow()
         self._window.setWindowTitle("渠道服账号管理")
-        self._window.resize(900, 700)
+        if isinstance(self._window, _WindowsFramelessWindow):
+            screen = self._window.screen() or app.primaryScreen()
+            available = screen.availableGeometry() if screen is not None else None
+            width, height = _fit_frameless_launcher_size(
+                available.width() if available is not None else 1280,
+                available.height() if available is not None else 720,
+            )
+            self._window.resize(width, height)
+        else:
+            self._window.resize(900, 700)
 
         self._view = QWebEngineView(self._window)
         if isinstance(self._window, _WindowsFramelessWindow):
@@ -669,23 +748,40 @@ class UIManager:
         else:
             self._window.setCentralWidget(self._view)
 
+        # The default WebEngine profile is off-the-record.  Give the launcher
+        # its own stable profile so idvlogin://app localStorage survives a
+        # process restart without sharing data with browser/login profiles.
+        from envmgr import genv
+
+        profile_root = os.path.join(
+            genv.get("FP_WORKDIR") or os.getcwd(),
+            _UI_PROFILE_DIR_NAME,
+        )
+        self._profile = QWebEngineProfile(_UI_PROFILE_STORAGE_NAME, app)
+        self._profile.setPersistentStoragePath(profile_root)
+
         # 使用自定义 Page 子类将 JS 控制台消息写入 Python 日志
-        custom_page = _LoggingWebPage(self._view)
+        custom_page = _LoggingWebPage(self._profile, self._view)
         self._view.setPage(custom_page)
 
         # Install the custom scheme handler for page loads.
-        profile = custom_page.profile()
         self._scheme_handler = IDVLoginSchemeHandler(
             game_helper=self.game_helper,
             ui_logger=self.ui_logger,
             parent=self._view,
         )
-        profile.installUrlSchemeHandler(SCHEME_NAME, self._scheme_handler)
+        self._profile.installUrlSchemeHandler(SCHEME_NAME, self._scheme_handler)
 
-    def _do_open_for_game(self, game_id: str = ""):
+    def _do_open_for_game(self, game_id: str = "", initial_view: str = ""):
         """Show the UI window for the given *game_id*."""
         self._ensure_window()
-        url = QUrl(f"idvlogin://app/_idv-login/index?game_id={game_id}")
+        url = QUrl("idvlogin://app/_idv-login/index")
+        query = QUrlQuery()
+        if game_id:
+            query.addQueryItem("game_id", game_id)
+        if initial_view:
+            query.addQueryItem("view", initial_view)
+        url.setQuery(query)
         self._view.load(url)
         self._window.show()
         self._window.raise_()

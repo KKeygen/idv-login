@@ -107,6 +107,7 @@ class LocalRequestHandler:
     def _route(self, path: str, method: str, args: dict,
                json_body: dict = None) -> Tuple[int, dict, bytes]:
         route_map = {
+            "/_idv-login/health": self._health,
             "/_idv-login/manualChannels": self._manual_channels,
             "/_idv-login/list": self._list_channels,
             "/_idv-login/qrcode": self._channel_qrcode,
@@ -154,6 +155,8 @@ class LocalRequestHandler:
             "/_idv-login/scan-record-setting": self._scan_record_setting,
             "/_idv-login/native-save-setting": self._native_save_setting,
             "/_idv-login/native/capabilities": self._native_capabilities,
+            "/_idv-login/native/window-drag": self._native_window_drag,
+            "/_idv-login/native/window-toggle-maximize": self._native_window_toggle_maximize,
             "/_idv-login/native/pick-directory": self._native_pick_directory,
             "/_idv-login/native/pick-executable": self._native_pick_executable,
             "/_idv-login/native/path-status": self._native_path_status,
@@ -200,6 +203,13 @@ class LocalRequestHandler:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json; charset=utf-8"}
         return status, headers, body
+
+    def _health(self, args, body, method):
+        return self._json_response(200, {
+            "success": True,
+            "status": "ok",
+            "installation_model_version": 1,
+        })
 
     @staticmethod
     def _force_dialog_foreground(widget):
@@ -527,7 +537,8 @@ class LocalRequestHandler:
 
     def _set_default(self, args, body, method):
         try:
-            genv.set(f"auto-{args['game_id']}", args["uuid"], True)
+            game_id = args["game_id"]
+            genv.set(f"auto-{game_id}", args["uuid"], True)
             return self._json_response(200, {"success": True})
         except Exception:
             self.logger.exception("设置默认账号失败")
@@ -535,7 +546,8 @@ class LocalRequestHandler:
 
     def _clear_default(self, args, body, method):
         try:
-            genv.set(f"auto-{args['game_id']}", "", True)
+            game_id = args["game_id"]
+            genv.set(f"auto-{game_id}", "", True)
             return self._json_response(200, {"success": True})
         except Exception:
             return self._json_response(200, {"success": False})
@@ -543,8 +555,16 @@ class LocalRequestHandler:
     def _get_auto_close_state(self, args, body, method):
         try:
             gid = args["game_id"]
+            installation_id = args.get("installation_id", "")
+            distribution_id = int(args.get("distribution_id", -1))
             return self._json_response(200, {
-                "success": True, "state": self.game_helper.get_auto_close_setting(gid), "game_id": gid
+                "success": True,
+                "state": self.game_helper.get_auto_close_setting(
+                    gid, installation_id, distribution_id
+                ),
+                "game_id": gid,
+                "installation_id": installation_id,
+                "distribution_id": distribution_id,
             })
         except Exception as e:
             return self._json_response(200, {"success": False, "error": str(e)})
@@ -552,9 +572,24 @@ class LocalRequestHandler:
     def _switch_auto_close_state(self, args, body, method):
         try:
             gid = args["game_id"]
-            new_state = not self.game_helper.get_auto_close_setting(gid)
-            self.game_helper.set_auto_close_setting(gid, new_state)
-            return self._json_response(200, {"success": True, "state": new_state, "game_id": gid})
+            installation_id = args.get("installation_id", "")
+            distribution_id = int(args.get("distribution_id", -1))
+            new_state = not self.game_helper.get_auto_close_setting(
+                gid, installation_id, distribution_id
+            )
+            if not self.game_helper.set_auto_close_setting(
+                gid, new_state, installation_id, distribution_id
+            ):
+                return self._json_response(200, {
+                    "success": False, "error": "游戏记录已失效，请刷新后重试"
+                })
+            return self._json_response(200, {
+                "success": True,
+                "state": new_state,
+                "game_id": gid,
+                "installation_id": installation_id,
+                "distribution_id": distribution_id,
+            })
         except Exception as e:
             return self._json_response(200, {"success": False, "error": str(e)})
 
@@ -613,12 +648,17 @@ class LocalRequestHandler:
     def _get_game_auto_start(self, args, body, method):
         try:
             gid = args["game_id"]
-            info = self.game_helper.get_game_auto_start(gid)
+            installation_id = args.get("installation_id", "")
+            distribution_id = int(args.get("distribution_id", -1))
+            info = self.game_helper.get_game_auto_start(
+                gid, installation_id, distribution_id
+            )
             return self._json_response(200, {
                 "success": True, 
                 "enabled": info["enabled"], 
                 "path": info["path"], 
                 "installation_id": info.get("installation_id", ""),
+                "distribution_id": distribution_id,
                 "game_id": gid,
                 "independent_path_config": True
             })
@@ -630,6 +670,8 @@ class LocalRequestHandler:
             gid = args["game_id"]
             enabled = args.get("enabled") == "true"
             update_mode = args.get("update_mode", "")
+            installation_id = args.get("installation_id", "")
+            distribution_id = int(args.get("distribution_id", -1))
             game_path = ""
 
             game = self.game_helper.get_game(gid)
@@ -637,9 +679,22 @@ class LocalRequestHandler:
                 return self._json_response(200, {"success": False, "error": "游戏记录不存在"})
 
             if update_mode == "status_only":
-                self.game_helper.set_game_auto_start(gid, enabled)
+                if not self.game_helper.set_game_auto_start(
+                    gid, enabled, installation_id, distribution_id
+                ):
+                    return self._json_response(200, {
+                        "success": False, "error": "游戏记录已失效，请刷新后重试"
+                    })
+                info = self.game_helper.get_game_auto_start(
+                    gid, installation_id, distribution_id
+                )
                 return self._json_response(200, {
-                    "success": True, "enabled": enabled, "path": game.path if game else "", "game_id": gid
+                    "success": True,
+                    "enabled": enabled,
+                    "path": info.get("path", ""),
+                    "installation_id": info.get("installation_id", ""),
+                    "distribution_id": distribution_id,
+                    "game_id": gid,
                 })
 
             if enabled or update_mode == "path_only":
@@ -690,7 +745,9 @@ class LocalRequestHandler:
                                 shortcut = shell.CreateShortcut(sel_path)
                                 sel_path = shortcut.Targetpath
 
-                            game_helper.set_game_auto_start(gid, True)
+                            game_helper.set_game_auto_start(
+                                gid, True, installation_id, distribution_id
+                            )
                             game_helper.set_game_path(gid, sel_path)
                             selected_game = game_helper.get_game(gid)
                             if selected_game and (
@@ -751,7 +808,9 @@ class LocalRequestHandler:
                 game_path = ""
                 name = game.name if game else ""
 
-            self.game_helper.set_game_auto_start(gid, enabled)
+            self.game_helper.set_game_auto_start(
+                gid, enabled, installation_id, distribution_id
+            )
             self.game_helper.set_game_path(gid, game_path)
             selected_game = self.game_helper.get_game(gid)
             if selected_game and (
@@ -811,6 +870,8 @@ class LocalRequestHandler:
 
     def _launcher_status(self, args, body, method):
         try:
+            from nativebridge import NativeTaskRegistry
+
             gid = args["game_id"]
             short_gid = getShortGameId(gid)
             catalog_item = CloudRes().dynamic_game_catalog.get_game(short_gid) or {}
@@ -843,43 +904,12 @@ class LocalRequestHandler:
                         known_game.remove_installation(installation_id)
                     self.game_helper._save_games()
 
-            # Fever already knows the exact game id, distribution and executable.
-            # Reconcile every valid matching install before building launcher state;
-            # this is intentionally silent and never overwrites another path.
-            known_game = self.game_helper.get_existing_game(gid)
-            known_paths = {
-                os.path.normcase(os.path.normpath(item.path))
-                for item in (known_game.installations.values() if known_game else [])
-                if item.path
-            }
-            for fever_item in self.game_helper.list_fever_games():
-                fever_path = str(fever_item.get("path") or "")
-                if (
-                    getShortGameId(fever_item.get("game_id", "")) != short_gid
-                    or not fever_path
-                    or not os.path.exists(fever_path)
-                ):
-                    continue
-                normalized_fever_path = os.path.normcase(os.path.normpath(fever_path))
-                if normalized_fever_path in known_paths:
-                    continue
-                imported_gid = self.game_helper.import_fever_game(
-                    fever_item.get("game_id", gid),
-                    fever_item.get("distribution_id", -1),
-                    fever_path,
-                    create_shortcut=False,
-                    notify=False,
-                )
-                if imported_gid:
-                    known_paths.add(normalized_fever_path)
-
             game = self.game_helper.get_existing_game(gid)
             game_for_remote = self.game_helper.get_game_or_temp(gid)
             distribution_options = game_for_remote.get_distribution_options()
             distribution_ids = game_for_remote._normalize_distribution_ids(
                 distribution_options
             )
-            can_convert = CloudRes().is_convert_to_normal(short_gid)
             distribution_details = []
             file_info_by_distribution = {}
             launcher_data_by_distribution = {}
@@ -897,7 +927,7 @@ class LocalRequestHandler:
                 ))
             if game:
                 identified = False
-                for item in game.installations.values():
+                for item in list(game.installations.values()):
                     if item.distribution_id != -1:
                         continue
                     old_distribution_id = item.distribution_id
@@ -914,21 +944,16 @@ class LocalRequestHandler:
                 [item.get_non_sensitive_data() for item in game.installations.values()]
                 if game else []
             )
-            fever_info = None
-            for item in self.game_helper.list_fever_games():
-                if getShortGameId(item.get("game_id", "")) == short_gid:
-                    fever_info = item
-                    break
-            known_paths = {
-                os.path.normcase(os.path.normpath(item.path))
-                for item in (game.installations.values() if game else [])
-                if item.path
-            }
-            can_import_fever = bool(fever_info) and os.path.normcase(
-                os.path.normpath(fever_info.get("path", ""))
-            ) not in known_paths
+            fever_records = [
+                item for item in self.game_helper.list_fever_games()
+                if (
+                    getShortGameId(item.get("game_id", "")) == short_gid
+                    and os.path.isfile(str(item.get("path") or ""))
+                )
+            ]
             distributions = []
             for dist_id, launcher_data, file_info in distribution_details:
+                active_task = NativeTaskRegistry.find_pending_download(gid, dist_id)
                 target_ver = file_info.get("version_code", "") if file_info else ""
                 can_download = CloudRes().is_downloadable(short_gid) and file_info is not None
                 files = file_info.get("files", []) if file_info else []
@@ -936,6 +961,31 @@ class LocalRequestHandler:
                     item for item in installations
                     if item.get("distribution_id") == dist_id
                 ]
+                installation = matching_installations[0] if matching_installations else None
+                fever_match = next(
+                    (
+                        item for item in fever_records
+                        if int(item.get("distribution_id", -1)) == dist_id
+                    ),
+                    None,
+                )
+                fever_path = os.path.normcase(os.path.normpath(
+                    str((fever_match or {}).get("path") or "")
+                ))
+                installation_path = os.path.normcase(os.path.normpath(
+                    str((installation or {}).get("path") or "")
+                ))
+                distribution_can_import = bool(
+                    fever_match and fever_path and fever_path != installation_path
+                )
+                needs_update = bool(
+                    installation
+                    and installation.get("installed")
+                    and can_download
+                    and target_ver
+                    and str(installation.get("installed_version") or "")
+                    != str(target_ver)
+                )
                 distributions.append({
                     "distribution_id": dist_id,
                     "launcher": self._pick_launcher_fields(launcher_data),
@@ -952,8 +1002,12 @@ class LocalRequestHandler:
                             if isinstance(item, dict) and item.get("op", 1) == 1
                         ),
                     },
-                    "installations": matching_installations,
-                    "can_update": any(item.get("installed") for item in matching_installations),
+                    "installation": installation,
+                    "fever": fever_match or {},
+                    "can_import_fever": distribution_can_import,
+                    "can_update": bool(installation and installation.get("installed")),
+                    "needs_update": needs_update,
+                    "active_task": self._public_download_task(active_task),
                 })
             return self._json_response(200, {
                 "success": True, "game_id": gid,
@@ -961,17 +1015,9 @@ class LocalRequestHandler:
                 "platform_type": catalog_item.get("platform_type", "fever"),
                 "catalog_app_id": catalog_item.get("catalog_app_id"),
                 "game": {
-                    "installed": any(item.get("installed") for item in installations),
-                    "path": game.path if game else "",
-                    "version": game.get_version() if game else "",
-                    "can_convert": can_convert,
                     "default_distribution": game.get_default_distribution() if game else -1,
-                    "default_installation_id": game.default_installation_id if game else "",
-                    "installations": installations,
                 },
                 "distributions": distributions,
-                "can_import_fever": can_import_fever,
-                "fever": fever_info or {},
             })
         except Exception as e:
             self.logger.exception("获取启动器状态失败")
@@ -1501,6 +1547,8 @@ class LocalRequestHandler:
                     "display_name": item.get("display_name"),
                     "path": item.get("path"),
                     "distribution_id": item.get("distribution_id", -1),
+                    "version_code": item.get("version_code", ""),
+                    "content_id": item.get("content_id"),
                     "matched_game_id": matched,
                 })
             return self._json_response(200, {"success": True, "games": result})
@@ -1547,13 +1595,29 @@ class LocalRequestHandler:
         return self._json_response(200, {"uuid": uuid})
 
     def _get_login_delay(self, args, body, method):
+        installation_id = args.get("installation_id", "")
+        distribution_id = int(args.get("distribution_id", -1))
         return self._json_response(200, {
-            "delay": self.game_helper.get_login_delay(args.get("game_id", ""))
+            "delay": self.game_helper.get_login_delay(
+                args.get("game_id", ""), installation_id, distribution_id
+            ),
+            "installation_id": installation_id,
+            "distribution_id": distribution_id,
         })
 
     def _set_login_delay(self, args, body, method):
         try:
-            self.game_helper.set_login_delay(args["game_id"], int(args["delay"]))
+            installation_id = args.get("installation_id", "")
+            distribution_id = int(args.get("distribution_id", -1))
+            if not self.game_helper.set_login_delay(
+                args["game_id"],
+                int(args["delay"]),
+                installation_id,
+                distribution_id,
+            ):
+                return self._json_response(200, {
+                    "success": False, "error": "游戏记录已失效，请刷新后重试"
+                })
             return self._json_response(200, {"success": True})
         except Exception as e:
             return self._json_response(200, {"success": False, "error": str(e)})
@@ -1733,7 +1797,26 @@ class LocalRequestHandler:
 
     def _native_capabilities(self, args, body, method):
         from nativebridge import capabilities
-        return self._json_response(200, capabilities())
+        result = capabilities()
+        result["window_drag"] = bool(app_state.ui_mgr)
+        result["window_toggle_maximize"] = bool(app_state.ui_mgr)
+        return self._json_response(200, result)
+
+    def _native_window_drag(self, args, body, method):
+        ui_mgr = app_state.ui_mgr
+        started = bool(ui_mgr and ui_mgr.start_system_move())
+        return self._json_response(200, {
+            "success": started,
+            "supported": bool(ui_mgr),
+        })
+
+    def _native_window_toggle_maximize(self, args, body, method):
+        ui_mgr = app_state.ui_mgr
+        changed = bool(ui_mgr and ui_mgr.toggle_maximized())
+        return self._json_response(200, {
+            "success": changed,
+            "supported": bool(ui_mgr),
+        })
 
     def _native_pick_directory(self, args, body, method):
         from nativebridge import start_picker

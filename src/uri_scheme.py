@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import threading
+from urllib.parse import parse_qsl
 
 from logutil import setup_logger
 
@@ -29,6 +30,16 @@ logger = setup_logger()
 # Named-pipe / socket path used for single-instance signaling.
 _PIPE_NAME = r"\\.\pipe\idvlogin_uri_signal"
 _SOCKET_PATH_UNIX = "/tmp/idvlogin_uri_signal.sock"
+
+
+def parse_fully_encoded_query(query: str) -> dict[str, str]:
+    """Decode a QUrl query exactly once, including reserved characters.
+
+    Qt's pretty-decoded query representation intentionally leaves the colon in
+    a Windows drive letter encoded.  Parsing the fully encoded representation
+    matches the HTTP handler and preserves ``D:\\...`` as an absolute path.
+    """
+    return dict(parse_qsl(str(query or ""), keep_blank_values=True))
 
 
 def register_uri_scheme(executable_path: str | None = None) -> bool:
@@ -138,7 +149,10 @@ def parse_uri(uri: str) -> dict:
 # ------------------------------------------------------------------
 
 def signal_running_instance(
-    game_id: str, action: str = "open", installation_id: str = ""
+    game_id: str,
+    action: str = "open",
+    installation_id: str = "",
+    initial_view: str = "",
 ) -> bool:
     """Try to send *game_id* to an already-running instance.
 
@@ -149,6 +163,7 @@ def signal_running_instance(
         "game_id": game_id,
         "action": action,
         "installation_id": installation_id,
+        "initial_view": initial_view,
     }).encode("utf-8")
     if sys.platform == "win32":
         return _signal_via_named_pipe(payload)
@@ -159,8 +174,8 @@ def signal_running_instance(
 def start_uri_listener(callback):
     """Start a background thread that listens for incoming URI signals.
 
-    *callback* is called with ``(action: str, game_id: str)`` whenever another
-    process sends a signal via :func:`signal_running_instance`.
+    *callback* is called with ``(action, game_id, installation_id, initial_view)``
+    whenever another process sends a signal via :func:`signal_running_instance`.
     """
     t = threading.Thread(
         target=_listener_thread,
@@ -329,7 +344,8 @@ def _listener_named_pipe(callback):
                         game_id = msg.get("game_id", "")
                         action = msg.get("action", "open")
                         installation_id = msg.get("installation_id", "")
-                        callback(action, game_id, installation_id)
+                        initial_view = msg.get("initial_view", "")
+                        callback(action, game_id, installation_id, initial_view)
                 except Exception:
                     logger.debug("读取命名管道数据失败", exc_info=True)
 
@@ -358,7 +374,8 @@ def _listener_unix_socket(callback):
                     game_id = msg.get("game_id", "")
                     action = msg.get("action", "open")
                     installation_id = msg.get("installation_id", "")
-                    callback(action, game_id, installation_id)
+                    initial_view = msg.get("initial_view", "")
+                    callback(action, game_id, installation_id, initial_view)
             except Exception:
                 logger.debug("读取Unix socket数据失败", exc_info=True)
             finally:
