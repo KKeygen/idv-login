@@ -45,10 +45,11 @@ Name: "chinesesimplified"; MessagesFile: "{#LangFile}"
 
 [Messages]
 ErrorReplacingExistingFile=尝试替换现有文件时出错，很可能是您更新前还未关闭旧版本工具。请关闭正在运行的旧版工具后点击重试。原始信息：
+SelectDirLabel3=安装程序会将 [name] 放入下列文件夹。此工具为绿色版，安装工具过程不会写入注册表项目。
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标"
-Name: "desktopiconmgr"; Description: "创建渠道服管理界面快捷方式"; GroupDescription: "附加图标"
+Name: "desktopiconmgr"; Description: "体验新版GUI，在桌面上创建GUI快捷方式"; GroupDescription: "附加图标"
 
 [Files]
 Source: "..\dist\python-embed\*"; DestDir: "{app}\python-embed"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -60,10 +61,12 @@ Source: "..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\*"
+Type: files; Name: "{autodesktop}\IDV Login - 渠道服管理.lnk"
+Type: files; Name: "{autodesktop}\IDV Login - 新版界面.lnk"
 
 [Icons]
 Name: "{autodesktop}\IDV Login"; Filename: "{app}\点我启动工具.bat"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login.lnk'))
-Name: "{autodesktop}\IDV Login - 渠道服管理"; Filename: "{app}\点我启动工具.bat"; Parameters: "--open-ui"; Tasks: desktopiconmgr; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login - 渠道服管理.lnk'))
+Name: "{autodesktop}\IDV Login-GUI"; Filename: "{app}\点我启动工具.bat"; Parameters: "--open-ui"; Tasks: desktopiconmgr; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login-GUI.lnk'))
 
 [Run]
 Filename: "{app}\点我启动工具.bat"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
