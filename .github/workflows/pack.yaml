@@ -99,7 +99,7 @@ jobs:
 
       - name: Download Chinese language file
         run: |
-          Invoke-WebRequest -Uri https://github.com/jrsoftware/issrc/raw/main/Files/Languages/Unofficial/ChineseSimplified.isl -OutFile inno/ChineseSimplified.isl
+          Invoke-WebRequest -Uri https://github.com/jrsoftware/issrc/raw/main/Files/Languages/ChineseSimplified.isl -OutFile inno/ChineseSimplified.isl
         shell: pwsh
 
       - name: Build installer
