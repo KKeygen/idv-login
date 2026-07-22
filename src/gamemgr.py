@@ -2172,16 +2172,84 @@ class GameManager:
             self.logger.debug("读取Fever游戏列表失败")
         return result
 
+    def initialize_downloadable_installation_versions(self) -> int:
+        """Persist a cloud version baseline for remaining local installations.
+
+        Fever records are merged first because their registry version and
+        distribution are authoritative for that exact game path.  This pass
+        only hashes local installations that still have no version afterwards.
+        """
+        cloud = CloudRes()
+        changed_count = 0
+        for game in self.games.values():
+            short_game_id = getShortGameId(game.game_id)
+            if not cloud.is_downloadable(short_game_id):
+                continue
+            pending = [
+                item for item in game.installations.values()
+                if item.path
+                and os.path.isfile(item.path)
+                and not item.installed_version
+            ]
+            if not pending:
+                continue
+            distribution_options = game.get_distribution_options()
+            distribution_ids = game._normalize_distribution_ids(
+                distribution_options
+            )
+            if not distribution_ids:
+                continue
+            file_info_by_distribution = {
+                dist_id: game.get_file_distribution_info(dist_id) or {}
+                for dist_id in distribution_ids
+            }
+            launcher_data_by_distribution = {
+                dist_id: game.get_launcher_data_for_distribution(dist_id) or {}
+                for dist_id in distribution_ids
+            }
+            for installation in pending:
+                before = (
+                    installation.distribution_id,
+                    installation.installed_version,
+                    installation.content_id,
+                    installation.startup_path,
+                    installation.startup_args,
+                )
+                game.identify_installation_distribution(
+                    installation.installation_id,
+                    distribution_options,
+                    file_info_by_distribution,
+                    launcher_data_by_distribution,
+                    force=True,
+                )
+                after = (
+                    installation.distribution_id,
+                    installation.installed_version,
+                    installation.content_id,
+                    installation.startup_path,
+                    installation.startup_args,
+                )
+                if after == before:
+                    continue
+                changed_count += 1
+                installation.write_marker(game.game_id)
+                self.logger.info(
+                    "已初始化本地游戏版本基线: %s, installation=%s",
+                    game.game_id,
+                    installation.installation_id,
+                )
+        if changed_count:
+            self._save_games()
+        return changed_count
+
     def start_fever_auto_import(self) -> bool:
-        """Import complete Fever installations missing from local records.
+        """Merge complete Fever installs, then initialize local baselines.
 
         Registry parsing and distribution hash matching can take noticeable
-        time, so startup only schedules one daemon worker.  Existing valid
-        records always win; an automatic import never replaces a path the user
-        has already selected for the same distribution.
+        time, so startup only schedules one daemon worker.  An exact game/path
+        match is enriched in place; otherwise an existing concrete
+        distribution prevents a duplicate automatic import.
         """
-        if sys.platform != "win32":
-            return False
         if self._fever_import_thread and self._fever_import_thread.is_alive():
             return False
 
@@ -2190,11 +2258,15 @@ class GameManager:
                 imported = self.import_missing_fever_games()
                 if imported:
                     self.logger.info(
-                        "启动时自动导入Fever游戏完成: %s",
+                        "启动时自动导入或补齐Fever游戏完成: %s",
                         ", ".join(imported),
                     )
             except Exception:
                 self.logger.exception("启动时自动导入Fever游戏失败")
+            try:
+                self.initialize_downloadable_installation_versions()
+            except Exception:
+                self.logger.exception("初始化本地游戏版本基线失败")
 
         self._fever_import_thread = threading.Thread(
             target=_worker,
@@ -2225,15 +2297,56 @@ class GameManager:
                     changed = game.remove_installation(installation_id) or changed
 
                 normalized_target = os.path.normcase(os.path.normpath(target_path))
-                path_recorded = any(
-                    os.path.normcase(os.path.normpath(item.path or ""))
+                path_record = next((
+                    item for item in game.installations.values()
+                    if os.path.normcase(os.path.normpath(item.path or ""))
                     == normalized_target
-                    for item in game.installations.values()
-                )
-                distribution_recorded = game.get_installation_for_distribution(
+                ), None)
+                record_distribution_id = game._coerce_distribution_id(
                     record.get("distribution_id", -1)
-                ) is not None
-                if path_recorded or distribution_recorded:
+                )
+                distribution_record = game.get_installation_for_distribution(
+                    record_distribution_id
+                )
+                if path_record is not None:
+                    compatible_distribution = path_record.distribution_id in (
+                        -1,
+                        record_distribution_id,
+                    )
+                    record_version = str(record.get("version_code") or "")
+                    hydrated = False
+                    if compatible_distribution:
+                        if (
+                            path_record.distribution_id == -1
+                            and record_distribution_id != -1
+                        ):
+                            game._claim_distribution(
+                                path_record, record_distribution_id
+                            )
+                            hydrated = True
+                        if not path_record.installed_version and record_version:
+                            path_record.installed_version = record_version
+                            hydrated = True
+                        if (
+                            path_record.content_id is None
+                            and record.get("content_id") is not None
+                        ):
+                            path_record.content_id = record.get("content_id")
+                            hydrated = True
+                        if not path_record.startup_path and record.get("startup_path"):
+                            path_record.startup_path = str(record["startup_path"])
+                            hydrated = True
+                        if not path_record.startup_args and record.get("startup_args"):
+                            path_record.startup_args = str(record["startup_args"])
+                            hydrated = True
+                    if hydrated:
+                        path_record.updated_at = int(time.time())
+                        path_record.write_marker(game.game_id)
+                        changed = True
+                        if final_game_id not in imported:
+                            imported.append(final_game_id)
+                    continue
+                if distribution_record is not None:
                     continue
                 set_default = not game.installations
             else:
