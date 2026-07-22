@@ -10,8 +10,8 @@ pycryptodome==3.20.0
 Requests==2.33.1
 requests_toolbelt==1.0.0
 dnspython==2.6.1
-PyQt6==6.10.2
-PyQt6-WebEngine==6.9.0
+PyQt6==6.11.0
+PyQt6-WebEngine==6.11.0
 loguru==0.7.2
 aiohttp==3.9.5
 aiofiles==23.2.1
