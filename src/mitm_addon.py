@@ -298,7 +298,10 @@ class IDVLoginAddon:
         if payload.get("code") == 200 and payload.get("subcode") == 0:
             return
         self.logger.warning("uni_sauth 校验失败，账号登录已过期")
-        app_state.toast("账号登录已过期", duration=5000)
+        app_state.toast(
+            "登录已过期，请考虑重新扫码或在渠道服管理界面手动执行本渠道登录以保存更久时间。",
+            duration=5000,
+        )
 
     # ------------------------------------------------------------------
     # Request modification helpers

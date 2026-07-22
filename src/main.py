@@ -396,8 +396,7 @@ def initialize():
     os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
     genv.set("DOMAIN_TARGET", "service.mkey.163.com")
     genv.set("DOMAIN_TARGET_OVERSEA","sdk-os.mpsdk.easebar.com")
-    # Placeholder for the game's uni_sauth host.  Leave empty until assigned.
-    genv.set("DOMAIN_TARGET_AUTH_STATUS", "")
+    genv.set("DOMAIN_TARGET_AUTH_STATUS", "mgbsdk.matrix.netease.com")
     genv.set("FP_FAKE_DEVICE", os.path.join(genv.get("FP_WORKDIR"), "fakeDevice.json"))
     genv.set("FP_WEBCERT", os.path.join(genv.get("FP_WORKDIR"), "domain_cert_4.pem"))
     genv.set("FP_WEBKEY", os.path.join(genv.get("FP_WORKDIR"), "domain_key_4.pem"))
