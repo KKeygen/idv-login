@@ -34,7 +34,7 @@ class DynamicGameCatalog:
         "https://loadingbaycn.webapp.163.com/app/v1/game_library/app"
         "?force=1&app_id={}"
     )
-    CACHE_SCHEMA_VERSION = 1
+    CACHE_SCHEMA_VERSION = 2
     DEFAULT_REFRESH_INTERVAL = 24 * 60 * 60
 
     _MODIFIED = "modified"
@@ -99,7 +99,10 @@ class DynamicGameCatalog:
                 continue
             short_id = self._short_game_id(item.get("short_game_id"))
             distributions = item.get("download_distributions", [])
-            if not short_id or not isinstance(distributions, list) or not distributions:
+            platform_type = str(item.get("platform_type") or "fever")
+            if not short_id or not isinstance(distributions, list):
+                continue
+            if platform_type == "fever" and not distributions:
                 continue
             normalized_games.append(dict(item))
             games_by_short_id.setdefault(short_id, dict(item))
@@ -208,10 +211,11 @@ class DynamicGameCatalog:
                         app_id = int(app_data.get("app_id"))
                     except (TypeError, ValueError):
                         app_id = -1
-                    if app_id >= 0 and app_data.get("app_type") == 1:
+                    app_type = app_data.get("app_type")
+                    if app_id >= 0 and app_type in (1, 3):
                         normalized = {
                             "app_id": app_id,
-                            "app_type": 1,
+                            "app_type": app_type,
                             "display_name": str(
                                 app_data.get("display_name") or ""
                             ).strip(),
@@ -241,7 +245,7 @@ class DynamicGameCatalog:
     def _normalize_app_detail(payload: dict, expected_app_id: int) -> Optional[dict]:
         if payload.get("code") != 200 or not isinstance(payload.get("data"), dict):
             return None
-        data = payload["data"]
+        data = dict(payload["data"])
         short_id = str(data.get("game_id") or "").strip()
         if not short_id:
             return None
@@ -249,12 +253,9 @@ class DynamicGameCatalog:
             app_id = int(data.get("app_id", expected_app_id))
         except (TypeError, ValueError):
             app_id = expected_app_id
-        return {
-            "app_id": app_id,
-            "game_id": short_id,
-            "display_name": str(data.get("display_name") or "").strip(),
-            "logo": str(data.get("logo") or data.get("icon") or "").strip(),
-        }
+        data["app_id"] = app_id
+        data["game_id"] = short_id
+        return data
 
     @staticmethod
     def _build_games(
@@ -264,6 +265,8 @@ class DynamicGameCatalog:
         games_by_short_id = {}
         for app in homepage_apps:
             app_id = app.get("app_id")
+            app_type = int(app.get("app_type") or 1)
+            platform_type = "native_pc" if app_type == 3 else "fever"
             detail = app_details.get(str(app_id), {})
             short_id = str(detail.get("game_id") or "").strip()
             if not short_id:
@@ -272,8 +275,10 @@ class DynamicGameCatalog:
             cloud_game_id = str(config.get("cloud_game_id") or "").strip()
             existing = games_by_short_id.get(short_id)
             if existing:
-                if app_id not in existing["download_distributions"]:
+                if platform_type == "fever" and app_id not in existing["download_distributions"]:
                     existing["download_distributions"].append(app_id)
+                if app_id not in existing["catalog_app_ids"]:
+                    existing["catalog_app_ids"].append(app_id)
                 continue
             record = {
                 "game_id": cloud_game_id or short_id,
@@ -286,13 +291,18 @@ class DynamicGameCatalog:
                     or short_id
                 ),
                 "icon": (
-                    detail.get("logo")
+                    detail.get("icon")
+                    or detail.get("logo")
                     or app.get("logo")
                     or app.get("goods_image")
                     or config.get("icon")
                     or ""
                 ),
-                "download_distributions": [app_id],
+                "platform_type": platform_type,
+                "catalog_app_id": app_id,
+                "catalog_app_ids": [app_id],
+                "download_distributions": [app_id] if platform_type == "fever" else [],
+                "launcher": dict(detail),
             }
             games.append(record)
             games_by_short_id[short_id] = record
@@ -356,7 +366,9 @@ class DynamicGameCatalog:
                 if detail_key in app_details:
                     continue
                 detail_status, detail_payload, _ = self._request_json(
-                    f"app_detail:{detail_key}", self.APP_DETAIL_URL.format(app_id)
+                    f"app_detail:{detail_key}",
+                    self.APP_DETAIL_URL.format(app_id),
+                    {"channel": "mkt-h55"},
                 )
                 if detail_status == self._ERROR or detail_payload is None:
                     continue
@@ -381,7 +393,13 @@ class DynamicGameCatalog:
             write_json_restricted(self.cache_file, self._cache)
             self._apply_cache()
             if changed:
-                logger.info(f"动态游戏目录已更新，可下载游戏 {len(games)} 个")
+                downloadable = sum(
+                    1 for item in games if item.get("platform_type") == "fever"
+                )
+                logger.info(
+                    f"动态游戏目录已更新，共 {len(games)} 个游戏，"
+                    f"其中可下载 {downloadable} 个"
+                )
             return changed
         finally:
             with self._lock:
@@ -437,7 +455,9 @@ class DynamicGameCatalog:
         return {
             "game_id": item["short_game_id"],
             "download_distributions": list(item["download_distributions"]),
-            "downloadable": True,
+            "downloadable": item.get("platform_type") == "fever",
+            "platform_type": item.get("platform_type", "fever"),
+            "catalog_app_id": item.get("catalog_app_id"),
         }
 
     def get_status(self) -> dict:

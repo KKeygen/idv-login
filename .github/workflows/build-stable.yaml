@@ -89,6 +89,9 @@ jobs:
           mkdir dist
           Copy-Item -Recurse -Force python-embed dist/python-embed
           Copy-Item -Recurse -Force src dist/src
+          New-Item -ItemType Directory -Force -Path dist/assets | Out-Null
+          Copy-Item -Force assets/mpay.dll dist/assets/mpay.dll
+          Copy-Item -Force assets/mpay_default_skin.zip dist/assets/mpay_default_skin.zip
           Copy-Item -Force tools/点我启动工具.bat dist/点我启动工具.bat
         shell: pwsh
 

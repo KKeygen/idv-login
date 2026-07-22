@@ -1154,12 +1154,18 @@ class _CompatModeAddon:
         host = flow.request.host_header or flow.request.host
         if not host:
             return
+        host = str(host).lower()
 
         # 获取目标域名配置
         from envmgr import genv
         target_domains = {
-            genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
-            genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
+            str(domain).strip()
+            for domain in (
+                str(genv.get("DOMAIN_TARGET", "service.mkey.163.com")).lower(),
+                str(genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com")).lower(),
+                str(genv.get("DOMAIN_TARGET_AUTH_STATUS", "")).lower(),
+            )
+            if str(domain or "").strip()
         }
 
         # 如果是目标域名，修改 flow 的目标地址

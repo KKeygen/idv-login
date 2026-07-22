@@ -66,6 +66,15 @@ _dns_policy_mgr = None  # DnsPolicyManager instance for compat mode
 _dns_server = None      # LocalDnsServer instance for compat mode
 
 
+def _configured_target_domains():
+    domains = [
+        genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
+        genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
+        genv.get("DOMAIN_TARGET_AUTH_STATUS", ""),
+    ]
+    return [str(domain).strip() for domain in domains if str(domain or "").strip()]
+
+
 # -- 全局异常钩子 --
 def _global_excepthook(exc_type, exc_value, exc_tb):
     """处理主线程中未捕获的异常"""
@@ -141,6 +150,14 @@ def handle_exit():
         logger.info("程序关闭，正在清理！")
     else:
         print("程序关闭，正在清理！ (logger 未初始化)")
+
+    if app_state.fever_bridge is not None:
+        try:
+            app_state.fever_bridge.stop()
+        except Exception:
+            if logger:
+                logger.exception("停止平台托管登录失败")
+        app_state.fever_bridge = None
 
     # 停止 mitmproxy 代理
     proxy_mgr = app_state.proxy_mgr
@@ -379,6 +396,8 @@ def initialize():
     os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
     genv.set("DOMAIN_TARGET", "service.mkey.163.com")
     genv.set("DOMAIN_TARGET_OVERSEA","sdk-os.mpsdk.easebar.com")
+    # Placeholder for the game's uni_sauth host.  Leave empty until assigned.
+    genv.set("DOMAIN_TARGET_AUTH_STATUS", "")
     genv.set("FP_FAKE_DEVICE", os.path.join(genv.get("FP_WORKDIR"), "fakeDevice.json"))
     genv.set("FP_WEBCERT", os.path.join(genv.get("FP_WORKDIR"), "domain_cert_4.pem"))
     genv.set("FP_WEBKEY", os.path.join(genv.get("FP_WORKDIR"), "domain_key_4.pem"))
@@ -658,6 +677,51 @@ def _encode_repair_list_path(path):
     path = os.path.abspath(path).replace("\\", "/")
     return base64.b64encode(path.encode("utf-8")).decode("utf-8")
 
+
+def _download_core_log_path(game_id="", installation_id=""):
+    log_dir = os.path.join(
+        genv.get("FP_WORKDIR", os.getcwd()),
+        "download-core-logs",
+    )
+    os.makedirs(log_dir, exist_ok=True)
+    identity = f"{game_id}_{installation_id}" or "unknown"
+    safe_identity = "".join(
+        char if char.isalnum() or char in ("-", "_") else "_"
+        for char in identity
+    ).strip("_") or "unknown"
+    stamp = int(time.time() * 1000)
+    return os.path.join(
+        log_dir,
+        f"download_core_{safe_identity}_{stamp}_{os.getpid()}.log",
+    )
+
+
+_download_status_lock = threading.Lock()
+
+
+def _write_download_status(status_file, values):
+    if not status_file:
+        return
+    try:
+        with _download_status_lock:
+            current = {}
+            try:
+                with open(status_file, "r", encoding="utf-8") as status_handle:
+                    current = json.load(status_handle)
+            except (FileNotFoundError, OSError, ValueError, TypeError):
+                current = {}
+            if not isinstance(current, dict):
+                current = {}
+            current.update(values)
+            current["updated_at"] = int(time.time())
+            temp_file = status_file + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as status_handle:
+                json.dump(current, status_handle, ensure_ascii=False)
+            os.replace(temp_file, status_file)
+    except Exception:
+        # Progress reporting must never terminate the download itself.
+        pass
+
 def handle_download_task(task_file_path):
     if not task_file_path:
         print("缺少下载任务文件路径")
@@ -685,6 +749,8 @@ def handle_download_task(task_file_path):
     content_id = task_data.get("content_id")
     original_version = task_data.get("original_version", "")
     repair_list_path = task_data.get("repair_list_path", "")
+    progress_file = task_data.get("progress_file", "")
+    control_file = task_data.get("control_file", "")
     start_args = task_data.get("start_args", "")
     result = True
     ui_server_process = None
@@ -692,6 +758,12 @@ def handle_download_task(task_file_path):
     stop_event = None
     download_process = None
     use_download_ipc = bool(content_id) and distribution_id != -1 and download_root
+    core_error = {"value": ""}
+    _write_download_status(progress_file, {
+        "status": "pending",
+        "phase": "preparing",
+        "progress_percent": 0,
+    })
     try:
         if use_download_ipc:
             from download_binary import ensure_binary, allocate_ipc_ports
@@ -703,13 +775,21 @@ def handle_download_task(task_file_path):
                 heartbeat_port, progress_port = allocate_ipc_ports()
                 stop_event = threading.Event()
                 topic_bytes = str(content_id).encode("utf-8") if content_id else b""
+
+                def publish_progress(event):
+                    if event.get("success") is False:
+                        core_error["value"] = str(event.get("error") or "下载失败")
+                    _write_download_status(progress_file, event)
+
                 ui_server_thread = threading.Thread(
                     target=download_binary.main_ui_server,
                     kwargs={
                         "topic": topic_bytes,
                         "sub_port": heartbeat_port,
                         "pub_port": progress_port,
-                        "stop_event": stop_event
+                        "stop_event": stop_event,
+                        "on_event": publish_progress,
+                        "control_file": control_file,
                     }
                 )
                 ui_server_thread.daemon = True
@@ -717,7 +797,6 @@ def handle_download_task(task_file_path):
                 #等待几秒钟，确保UI服务器启动完成
                 import time
                 time.sleep(5)
-                creationflags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
                 encoded_path = _encode_download_path(download_root)
                 encoded_repair_list_path = _encode_repair_list_path(repair_list_path)
                 #./downloadIPC  --gameid:73 --contentid:434 --subport:1737 --pubport:1740 --path:RTpcRmV2ZXJBcHBzXGR3cmcy --env:live --oversea:0 --targetVersion:v3_3028_7e8d8ea06733136dd915a6e865440158 --originVersion:v3_2547 --scene:2 --rateLimit:0  --channel:platform --locale:zh_Hans  --isSSD:1 --isRepairMode:0
@@ -744,9 +823,26 @@ def handle_download_task(task_file_path):
                     download_cmd.append(f"--originVersion:{original_version}")
                 else:
                     download_cmd.append(f"--originVersion:")
-                download_process = subprocess.Popen(download_cmd, creationflags=creationflags)
-                exit_code = download_process.wait()
-                result = exit_code == 0
+                core_log_path = _download_core_log_path(game_id, installation_id)
+                _write_download_status(progress_file, {
+                    "core_log_path": core_log_path,
+                })
+                creationflags = (
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    if sys.platform == "win32"
+                    else 0
+                )
+                logger_local.info(f"下载核心输出日志: {core_log_path}")
+                with open(core_log_path, "ab", buffering=0) as core_log:
+                    download_process = subprocess.Popen(
+                        download_cmd,
+                        stdin=subprocess.DEVNULL,
+                        stdout=core_log,
+                        stderr=subprocess.STDOUT,
+                        creationflags=creationflags,
+                    )
+                    exit_code = download_process.wait()
+                result = exit_code == 0 and not core_error["value"]
         if result and game_id and version_code:
             from gamemgr import GameManager
             game_mgr = GameManager()
@@ -763,6 +859,7 @@ def handle_download_task(task_file_path):
                     installation.installed_version = version_code
                     installation.distribution_id = distribution_id
                     installation.content_id = content_id
+                    installation.source = "download"
                     installation.startup_args = start_args or installation.startup_args
                     installation.updated_at = int(time.time())
                     if not installation.write_marker(game_id):
@@ -795,6 +892,13 @@ def handle_download_task(task_file_path):
             os.remove(task_file_path)
         except Exception as e:
             logger_local.exception(f"删除下载任务文件失败: {e}")
+        if control_file:
+            try:
+                os.remove(control_file)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger_local.exception(f"删除下载控制文件失败: {e}")
         try:#尝试用explorer打开下载完成的目录
             if download_root and os.path.exists(download_root):
                 #使用正斜杠避免路径问题
@@ -809,9 +913,27 @@ def handle_download_task(task_file_path):
                     subprocess.Popen(["xdg-open", download_root])
         except Exception as e:
             logger_local.exception(f"打开下载目录失败: {e}")
+        _write_download_status(progress_file, {
+            "status": "done",
+            "success": bool(result),
+            "phase": "finished" if result else "failed",
+            "progress_percent": 100 if result else 0,
+            "error": "" if result else (core_error["value"] or "下载核心异常退出"),
+            "game_id": game_id,
+            "installation_id": installation_id,
+            "distribution_id": distribution_id,
+            "target_version": version_code,
+            "content_id": content_id,
+        })
         return result
     except Exception as e:
         logger_local.exception(f"下载任务执行失败: {e}")
+        _write_download_status(progress_file, {
+            "status": "done",
+            "success": False,
+            "phase": "failed",
+            "error": str(e),
+        })
     finally:
         from gamemgr import Game
         game=Game(game_id=game_id,path=os.path.join(download_root,"dummy.exe"))
@@ -904,8 +1026,7 @@ def generate_certificates_if_needed():
         # ── 生成服务器证书 (仍用于某些内部流程) ──
         srv_key = m_certmgr.generate_private_key(bits=2048)
         srv_cert = m_certmgr.generate_cert(
-            [genv.get("DOMAIN_TARGET"), genv.get("DOMAIN_TARGET_OVERSEA"), "localhost"],
-            srv_key, ca_cert, ca_key,
+            [*_configured_target_domains(), "localhost"], srv_key, ca_cert, ca_key,
         )
         m_certmgr.export_cert(genv.get("FP_WEBCERT"), srv_cert)
         m_certmgr.export_key(genv.get("FP_WEBKEY"), srv_key)
@@ -986,6 +1107,7 @@ def setup_network_proxy(proxy_port):
     from uimgr import UIManager
     ui_mgr = UIManager(game_helper=game_helper, ui_logger=ui_logger)
     app_state.ui_mgr = ui_mgr
+    game_helper.start_fever_auto_import()
 
     # Create the mitmproxy addon
     from mitm_addon import IDVLoginAddon
@@ -1005,6 +1127,7 @@ def setup_network_proxy(proxy_port):
     uri_action = genv.get("URI_STARTUP_ACTION", "")
     uri_game_id = genv.get("URI_STARTUP_GAME_ID", "")
     uri_installation_id = genv.get("URI_STARTUP_INSTALLATION_ID", "")
+    uri_initial_view = genv.get("URI_STARTUP_VIEW", "")
     auto_games = game_helper.list_auto_start_games()
     proxy_mode = genv.get("proxy_mode", "")
     if not proxy_mode:
@@ -1058,12 +1181,23 @@ def setup_network_proxy(proxy_port):
     register_uri_scheme()
 
     # Start the URI listener so that new --uri invocations signal this instance
-    def _on_uri_signal(action: str, game_id: str, installation_id: str = ""):
+    def _on_uri_signal(
+        action: str,
+        game_id: str,
+        installation_id: str = "",
+        initial_view: str = "",
+    ):
         logger.info(
             f"收到 URI 信号: action={action}, game_id={game_id}, "
-            f"installation_id={installation_id}"
+            f"installation_id={installation_id}, view={initial_view}"
         )
-        if action == "start" and game_id:
+        if action == "fever-channel-accounts":
+            bridge = app_state.fever_bridge
+            target_game_id = game_id or getattr(
+                bridge, "active_target_game_id", ""
+            )
+            ui_mgr.open_for_game(target_game_id, "accounts")
+        elif action == "start" and game_id:
             game = game_helper.get_game(game_id)
             if game:
                 logger.info(f"通过信号启动游戏: {game.name or game_id}")
@@ -1071,14 +1205,16 @@ def setup_network_proxy(proxy_port):
             else:
                 logger.warning(f"信号指定的游戏未找到: {game_id}")
         else:
-            ui_mgr.open_for_game(game_id)
+            ui_mgr.open_for_game(game_id, initial_view)
 
     start_uri_listener(_on_uri_signal)
 
     # If we were launched via --uri / --open-ui, open the UI
     if genv.get("URI_STARTUP_OPEN_UI"):
         startup_game_id = genv.get("URI_STARTUP_GAME_ID", "")
-        ui_mgr.open_for_game(startup_game_id)
+        ui_mgr.open_for_game(startup_game_id, uri_initial_view)
+        genv.set("URI_STARTUP_OPEN_UI", "")
+        genv.set("URI_STARTUP_VIEW", "")
 
     # 根据模式执行不同的启动逻辑
     if proxy_mode == "compat":
@@ -1094,11 +1230,13 @@ def setup_network_proxy(proxy_port):
             genv.set("URI_STARTUP_ACTION", "")
             genv.set("URI_STARTUP_GAME_ID", "")
             genv.set("URI_STARTUP_INSTALLATION_ID", "")
+            genv.set("URI_STARTUP_VIEW", "")
         elif auto_games:
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
             for g in auto_games:
-                g.start()
+                installation = g.get_auto_start_installation()
+                g.start(installation.installation_id if installation else "")
     elif uri_action == "start" and uri_game_id:
         # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
         game = game_helper.get_game(uri_game_id)
@@ -1111,6 +1249,7 @@ def setup_network_proxy(proxy_port):
         genv.set("URI_STARTUP_ACTION", "")
         genv.set("URI_STARTUP_GAME_ID", "")
         genv.set("URI_STARTUP_INSTALLATION_ID", "")
+        genv.set("URI_STARTUP_VIEW", "")
     elif proxy_mode == "global":
         # 次优先级：全局模式 → 设置系统/用户级代理
         _set_proxy(proxy_port)
@@ -1120,7 +1259,8 @@ def setup_network_proxy(proxy_port):
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
             for g in auto_games:
-                g.start()
+                installation = g.get_auto_start_installation()
+                g.start(installation.installation_id if installation else "")
         else:
             logger.info("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
     elif auto_games:
@@ -1128,7 +1268,8 @@ def setup_network_proxy(proxy_port):
         names = ", ".join(g.name for g in auto_games)
         logger.info(f"进程代理模式，启动自启游戏: {names}")
         for g in auto_games:
-            g.start()
+            installation = g.get_auto_start_installation()
+            g.start(installation.installation_id if installation else "")
     else:
         # 进程代理模式且没有自启游戏
         logger.info("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
@@ -1148,10 +1289,7 @@ def _setup_compat_mode(addon):
     global m_proxy, _dns_policy_mgr, _dns_server
 
     # 目标域名
-    target_domains = [
-        genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
-        genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
-    ]
+    target_domains = _configured_target_domains()
 
     # 0. 检测并处理 443 端口占用
     _check_and_handle_port_443()
@@ -1553,11 +1691,15 @@ if __name__ == "__main__":
             action = params.get("action", "open")
             game_id = params.get("game_id", "")
             installation_id = params.get("installation_id", "")
+            initial_view = params.get("view", "")
             
             # idvlogin://start?game_id=xxx - 启动工具并仅启动该游戏（进程代理模式）
             # idvlogin://open?game_id=xxx - 打开 UI
+            # idvlogin://fever-channel-accounts - 打开当前游戏的渠道账号管理
             # 两种 action 都先尝试信号已运行实例
-            if signal_running_instance(game_id, action, installation_id):
+            if signal_running_instance(
+                game_id, action, installation_id, initial_view
+            ):
                 # 已运行实例收到信号，退出本进程
                 sys.exit(0)
             # 无已运行实例，作为新实例启动
@@ -1569,6 +1711,7 @@ if __name__ == "__main__":
                 # No running instance — fall through and start normally.
                 # Store the game_id so the UI opens for it after startup.
                 genv.set("URI_STARTUP_GAME_ID", game_id)
+                genv.set("URI_STARTUP_VIEW", initial_view)
                 genv.set("URI_STARTUP_OPEN_UI", "1")
     except SystemExit:
         raise

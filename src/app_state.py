@@ -26,6 +26,8 @@ cloud_res: CloudRes | None = None
 app: QApplication | None = None
 ui_mgr: UIManager | None = None
 proxy_mgr: MitmProxyManager | None = None
+fever_bridge = None
+fever_bridge_target_game_ids: set[str] = set()
 
 # 用于跨线程调度的辅助对象
 _main_thread_invoker = None
