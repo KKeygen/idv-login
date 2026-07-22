@@ -9,7 +9,7 @@
     "module": "src.AutoFillUtils",
     "marshal_sha256": "21629aa582e8825683463fbd5b12af052b9568bc35444731e38fb6b919f2fc8e",
     "source_sha256": "bf8cdc50f7fc59d99d8e9ab70d4619a612026233d8cc70d1d108602c9a6db098",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.AutoFillUtils",
@@ -28,6 +28,12 @@
     "marshal_sha256": "7b13700e98330217f772fb00ad826273379fc3e4620b977b81442624acbb7811",
     "source_sha256": "9160e92a855b58e2cbcb804cd888736d4ef051dcd20bc1af6b0a6106804beccd",
     "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+  },
+  {
+    "module": "src.app_state",
+    "marshal_sha256": "5191937d1635f59d5701d77e09eb104a743d7db4f29de50441a1faa705405eab",
+    "source_sha256": "961d10b32fe5529fee5a35a1e0c45c86fdb65311f27152228bdc2c489769b3fb",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.app_state",
@@ -321,7 +327,7 @@
     "module": "src.cert_utils",
     "marshal_sha256": "84297f6ba404a9bab22f83ef6f0c022643ea7da94e44f9d00045d04937d26827",
     "source_sha256": "bff65a4f178ea3fa7ca9263d76e8c033416b72e893c44293f3d167c0a56e4014",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.certmgr",
@@ -339,7 +345,7 @@
     "module": "src.certmgr",
     "marshal_sha256": "25fab67dfb3466de5335ec9f29c5e516c0de33a53f7a44d431ca72dfdba6c9d5",
     "source_sha256": "35187dc21dc45c5a40d90ad3d4db8786a12baa822f535f81b0e57f54e0752474",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.certmgr",
@@ -411,7 +417,7 @@
     "module": "src.channelHandler.WebLoginUtils",
     "marshal_sha256": "312c814dde002596f29e6991806a0c9c0982fccaf7d29ac76fceecd1a515cf5a",
     "source_sha256": "d960c98669fddfb5bbea53ece3b69184029fe026f91a541efeb8c9b7598fa6e1",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.bilibiliChannelHandler",
@@ -423,19 +429,19 @@
     "module": "src.channelHandler.bilibiliChannelHandler",
     "marshal_sha256": "fd47ddfeb5ae09a004b5be6728ac417be5d14d8bec083f5b2f6a6fed6c189879",
     "source_sha256": "5df5ea01248ebd99dc24fe82a9dfd5d44fb1a6bd19d83ba7707b057799caf40a",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.bilibiliLogin.__init__",
     "marshal_sha256": "200f88de0f19c9deb4e86ce965d1ff3184080d6e18f4f3d034eec8b1834d2346",
     "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.bilibiliLogin.bilibiliChannel",
     "marshal_sha256": "fcbae14666970d5c7318a6c84272769450cf5b8c714014f6e94da37b054e4fb6",
     "source_sha256": "07ea71df4ced08f8f16029c108fdc8d5c3979a6f09fb2a4c7d7a7bd05ee1f38d",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.bilibiliLogin.bilibiliChannel",
@@ -459,7 +465,7 @@
     "module": "src.channelHandler.channelUtils",
     "marshal_sha256": "d3eb43da48254eaa1d5f66bb26e6a90d960deca5b81eb7c83effdd0459213503",
     "source_sha256": "56b7eaf6ca761011e68e3dae0b85ff9a4c71b367971f9a9642f0d03fc78be78d",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.channelUtils",
@@ -477,31 +483,31 @@
     "module": "src.channelHandler.honorChannelHandler",
     "marshal_sha256": "24baec454925c98fa16910eca2b55a5fbb9c3c1f41d1a8d758eb2a8bc03e07df",
     "source_sha256": "e6596413cceb028786b9ef5f22e4444c904b108db60668236285e92182ba6b60",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.honorLogin.__init__",
     "marshal_sha256": "200f88de0f19c9deb4e86ce965d1ff3184080d6e18f4f3d034eec8b1834d2346",
     "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.honorLogin.consts",
     "marshal_sha256": "cb33601745cbc64925891cdae6a94c6d59c03a97bfe79ed9e33a91e8dafb21c3",
     "source_sha256": "3e13c8258436c1f08513c8080a62dcc0f1816fe6b691b89622f66087e22c4929",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.honorLogin.honorChannel",
     "marshal_sha256": "8ea514483319373039a8420eed555262608d20a4c2b31a10b5c15dfc72395721",
     "source_sha256": "04ee39341fde3d4aa31bbe0795035130c5af5852dce9cd3d6a1dd1ba89cd7861",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.honorLogin.utils",
     "marshal_sha256": "f0b5443e972457836743015ad9a4a9024b4bfc7d69ab6ee3fc59d6f9b07b4e17",
     "source_sha256": "c4efbaf221de4a8af46dc50a26464f8dc980a20e00c0b8e11667f11bbc700d4c",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.huaChannelHandler",
@@ -519,7 +525,7 @@
     "module": "src.channelHandler.huaChannelHandler",
     "marshal_sha256": "2f7cd86be100bd41653a4bbcb84ef5142c045b7e6b1198444c4e847712472ec2",
     "source_sha256": "77f15d23cff00b33e95ff76e9a5ca8f9a16cfa17249f8eab732c8c5e902a0f41",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.huaChannelHandler",
@@ -561,7 +567,7 @@
     "module": "src.channelHandler.huaLogin.consts",
     "marshal_sha256": "771704866564ca6f738a00822a4370ffd8847e8965df02c07df39fce8d560bb6",
     "source_sha256": "9dea18205124c8c0d987cf71a93e3240a17a3f69df13c190d8fbd121ab3dbd5c",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.huaLogin.huaChannel",
@@ -585,7 +591,7 @@
     "module": "src.channelHandler.huaLogin.huaChannel",
     "marshal_sha256": "0a5d4ff48b6e2ace5157bf715562b5834d81f7d77e2825693df6e2aae5269018",
     "source_sha256": "6895475ab11e18e2f686c6d9e33bddb01a6966e40ad8a5c6c3c706737e81e16a",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.huaLogin.huaChannel",
@@ -639,7 +645,7 @@
     "module": "src.channelHandler.huaLogin.utils",
     "marshal_sha256": "c7a51879e7f68d4fd0b3a0cd6b71522424e94955027c06ed21ac66f59273c83e",
     "source_sha256": "e65a0d036bdded67e00ef9bfec4ddf909f36885dbbd43293d04e2e74daf155cd",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.miChannelHandler",
@@ -669,7 +675,7 @@
     "module": "src.channelHandler.miChannelHandler",
     "marshal_sha256": "0b279aae4489de22b2142fdfa4fa98783992c6296835fca8394368281bd8dbdd",
     "source_sha256": "a99dda746af16f4ced536ec25872ea598a7fe9397171e6a858a8173d8c911f39",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.miChannelHandler",
@@ -693,7 +699,7 @@
     "module": "src.channelHandler.miLogin.consts",
     "marshal_sha256": "d2e2d4032f0da9a20f2520a8f06b593863aad5448c2ab9f542e7c1f4aa058c95",
     "source_sha256": "f40d2b0d0c5741437d36ad6489f9773407216a04444c4a790f4b8b03673b180b",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.miLogin.miChannel",
@@ -711,7 +717,7 @@
     "module": "src.channelHandler.miLogin.miChannel",
     "marshal_sha256": "5e2b742d4bfec9f98c221d80f75cda1ccd98c4c5cf2241106001b3500ff9216e",
     "source_sha256": "a099c0e180bb14c7cba8561dafef5ab087f05f25ec7459e90e056b6d9932443c",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.miLogin.miChannel",
@@ -735,7 +741,7 @@
     "module": "src.channelHandler.miLogin.utils",
     "marshal_sha256": "35a23c60061fdf457e93439ff5814dcff1a88b64a30738ad0f78b30cebdc9431",
     "source_sha256": "05ab65bb4c655424ec4a571da0323293d7730932108a86be1bfb28d4d39da8ba",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.miLogin.utils",
@@ -765,7 +771,7 @@
     "module": "src.channelHandler.oppoChannelHandler",
     "marshal_sha256": "898b2b8d9caaf664262c18fa3d1e3108aa58aca0d16ab5d7600c7a8208f84046",
     "source_sha256": "e10524c6a091d4644df2100850856ad953725e3fea5f577013afc8871a6ccc3d",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoChannelHandler",
@@ -789,7 +795,7 @@
     "module": "src.channelHandler.oppoGameSdk.__init__",
     "marshal_sha256": "200f88de0f19c9deb4e86ce965d1ff3184080d6e18f4f3d034eec8b1834d2346",
     "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoGameSdk.client",
@@ -807,13 +813,13 @@
     "module": "src.channelHandler.oppoGameSdk.client",
     "marshal_sha256": "150477474a298d69187f27c9cf4d284ee6bc4003bee5a60a2c85474b94de7d94",
     "source_sha256": "a9eb4c91a974f39727254417cd826717ede0e227416223441293f4e3779f7da5",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoGameSdk.gamesdk_latest_role_pb2",
     "marshal_sha256": "039f98fdec725c11e452dddd986a6848884f1da747ff2eaa0b860a24ae080019",
     "source_sha256": "234ac152e9fa97c69135732d4788c9236fed6817b1825e593d80f16fb398f984",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoGameSdk.gamesdk_latest_role_pb2",
@@ -831,7 +837,7 @@
     "module": "src.channelHandler.oppoGameSdk.gamesdk_login_pb2",
     "marshal_sha256": "a514aba88ba3a4476bb1a49a9ec116c395d399106483ecc754967fe2b7e71a1a",
     "source_sha256": "176adec83c32accbb637343fe7c95a1e66b70fabcef7a801d3f77fcb7579a715",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoGameSdk.gamesdk_login_pb2",
@@ -855,19 +861,19 @@
     "module": "src.channelHandler.oppoGameSdk.sign2",
     "marshal_sha256": "edc58823711f93c11cb6490a1602bc7aa2032caae20f0173ce8e1bbb069488e3",
     "source_sha256": "b0a5382480243558fe419708ce4d287095a91bf9c21ff9a2bfd468fde53ecd75",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoLogin.__init__",
     "marshal_sha256": "200f88de0f19c9deb4e86ce965d1ff3184080d6e18f4f3d034eec8b1834d2346",
     "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoLogin.consts",
     "marshal_sha256": "e80adfb3142765085c32ac5c6c906f2d3974430dac68db834524ae41627dfc87",
     "source_sha256": "74f6d28993b0677433e1ed657a1b0c003c3cf23e19335e61d58e1fca484349ad",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoLogin.consts",
@@ -879,7 +885,7 @@
     "module": "src.channelHandler.oppoLogin.jsbridge",
     "marshal_sha256": "1530f19ef02d6a0abb95115759ef9974502f5c03bb0e8eaa5bfc478f03d637c5",
     "source_sha256": "378ad43c266583b1b5155ae18781960addf7994ce0b5a8569f13d0c85185efee",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoLogin.jsbridge",
@@ -915,7 +921,7 @@
     "module": "src.channelHandler.oppoLogin.oppoChannel",
     "marshal_sha256": "fae82962d2fd89cb2cc07f3bf499ae2ce3857ff1f6c4a0fa24457dfaf884984c",
     "source_sha256": "93005e1edded09fd46898d174f4ae81c436403d8c11424478adfa12eb3b608d0",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoLogin.oppoChannel",
@@ -957,13 +963,13 @@
     "module": "src.channelHandler.oppoOpenAccount.__init__",
     "marshal_sha256": "200f88de0f19c9deb4e86ce965d1ff3184080d6e18f4f3d034eec8b1834d2346",
     "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoOpenAccount.client",
     "marshal_sha256": "761e7367bd2c60c96b2dbdc98f25840e4e063c973ba2fc41baac385a81008fdb",
     "source_sha256": "d5bc5c95408c9debc320202b840e20f9b193af996512484197601722089d36e8",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoOpenAccount.client",
@@ -981,7 +987,7 @@
     "module": "src.channelHandler.oppoOpenAccount.crypto",
     "marshal_sha256": "26eba4c7fc046477e30b3e3454de3ef2ccb7360f25645237f9a5579e97cec457",
     "source_sha256": "77afb634d9ad9ac061eca0f658aec47222f86d7e87aac9b9a2188fdb2e14ac0b",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoOpenAccount.crypto",
@@ -993,7 +999,7 @@
     "module": "src.channelHandler.oppoOpenAccount.envinfo",
     "marshal_sha256": "f759eff6876511567da85e4bb137b19f697b2b699d60eb595d9c23d8f03eb8d1",
     "source_sha256": "82c7bce761fb31f043aae8a31460db82b9b95fbc113cdcdae184c4c5426ee147",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoOpenAccount.envinfo",
@@ -1005,7 +1011,7 @@
     "module": "src.channelHandler.oppoOpenAccount.models",
     "marshal_sha256": "21f37fde01a2d75cce27a177f4a10b5fcb535374c83664287aeb1b2c6e3421bf",
     "source_sha256": "1ce18a22ac1592e8b487e265f65ce8820f5738faebe05212589d856bb1319b1f",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoOpenAccount.models",
@@ -1029,7 +1035,7 @@
     "module": "src.channelHandler.oppoOpenAccount.sign",
     "marshal_sha256": "bb04d4bfd0b05f3310e89d17ee4b1e7c7194a254d4f537ba16b97c1b31ab54b0",
     "source_sha256": "c0ddc7d6e0180599af1489eef6eed1cafe35bacbc978172ec08297dcb220d9a3",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.oppoOpenAccount.sign",
@@ -1047,7 +1053,7 @@
     "module": "src.channelHandler.qqChannelHandler",
     "marshal_sha256": "cc486e1948a4ff42d3a5c5e3c1e9222458bef8335aac798335ae3f60c718ddae",
     "source_sha256": "8ec1f1f5cd49e4538549e8098cab15a0965726420dd3fdf2e4920fcb2c7a88b0",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.qqLogin.qqChannel",
@@ -1059,7 +1065,7 @@
     "module": "src.channelHandler.qqLogin.qqChannel",
     "marshal_sha256": "d11c0251a1227f00e4958fb02f417a2985420afee7dd11d0127eac6e67e50bc6",
     "source_sha256": "e2d3f87a991f02662d66d65c1ca8baa1eeb8ba196654fc65def49e4b22e4b78c",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.ucChannelHandler",
@@ -1071,7 +1077,7 @@
     "module": "src.channelHandler.ucChannelHandler",
     "marshal_sha256": "d305442328d3282385c6151fd44557eb5e0e7fc562f249a9aef016a8b287acf2",
     "source_sha256": "7f35233be4c4ceb107569e2395d0f237aee6a8c49ed643743609702ea2248ac9",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.ucChannelHandler",
@@ -1083,7 +1089,7 @@
     "module": "src.channelHandler.ucLogin.__init__",
     "marshal_sha256": "200f88de0f19c9deb4e86ce965d1ff3184080d6e18f4f3d034eec8b1834d2346",
     "source_sha256": "6dcf072b886afd6ef16cd6b8eb5a8be68a5f48a96cb86c72eac830f18be370ca",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.ucLogin.consts",
@@ -1095,7 +1101,7 @@
     "module": "src.channelHandler.ucLogin.consts",
     "marshal_sha256": "af2f3b67db501d380b5a09ffe119a401d2a9d23fb3e1af747f559a061cba3f22",
     "source_sha256": "d0351e73b4a4b03a6c9b41ee7a6e34642189d8f491afed5f8444575a20571118",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.ucLogin.consts",
@@ -1107,13 +1113,13 @@
     "module": "src.channelHandler.ucLogin.crypto",
     "marshal_sha256": "0e1d937a8da22b8c6bd19a50a53f699cd3f316395d7294534c97f68bf773c744",
     "source_sha256": "3c1be4730597d9d64fd580d6e6fd8a4a585dab0b589d2255992e2daab3650f7e",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.ucLogin.ucChannel",
     "marshal_sha256": "b5f0beb0445142a02c89c6c277e1cd2425daf383438aacdfa4208f066fb83a46",
     "source_sha256": "16e79abaa46a51e9d55d423ba984cd18f1845623924af1ed5189396b924bc023",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.ucLogin.ucChannel",
@@ -1179,7 +1185,7 @@
     "module": "src.channelHandler.vivoChannelHandler",
     "marshal_sha256": "7977a18fe101dc8556b9735ce168450b43f13443808b3df04e4edc6e7262de70",
     "source_sha256": "def17d18cd1916a899f3b01edfbd71fff087588548c6fc75f8d888e6f0a8d0dc",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.vivoLogin.vivoChannel",
@@ -1197,7 +1203,7 @@
     "module": "src.channelHandler.vivoLogin.vivoChannel",
     "marshal_sha256": "acc7135cc7e7b61f67be2f7b5bcb1dcfad95059b99ebe547cc6d9e4c7e538b0a",
     "source_sha256": "3d3ae3a9dca0132c0287f9e9ba6676b29ee7d2834a0b0b9ba2414371a491a6a8",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.vivoLogin.vivoChannel",
@@ -1245,7 +1251,7 @@
     "module": "src.channelHandler.wechatChannelHandler",
     "marshal_sha256": "2606a081240a940efc24c34aa36bd6e3299fd11d7b29f4d54ede3dbe47c0b7bc",
     "source_sha256": "73f37f4af277267e5a0586aa05f6d2be3df5e12077af6e5113e70d97d85842f5",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.wechatChannelHandler",
@@ -1299,7 +1305,7 @@
     "module": "src.channelHandler.wechatLogin.wechatChannel",
     "marshal_sha256": "c54620c89701bec943f05b28da5fd051894b27b6f758e21c3f9275d02a091c29",
     "source_sha256": "e606e5ea3b16112005e11f085d7a49801933d597c83c3734c70adf87037d1630",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelHandler.wechatLogin.wechatChannel",
@@ -1323,7 +1329,7 @@
     "module": "src.channelmgr",
     "marshal_sha256": "7de5e33ad6aaddbcc71b6d8305aaf10fb63da62ed866246b59b941f188961ddb",
     "source_sha256": "247941e74046d4f3bedec6eb278c1a32add868b384e69de12f271d01bff2453b",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.channelmgr",
@@ -1477,6 +1483,12 @@
   },
   {
     "module": "src.cloudRes",
+    "marshal_sha256": "f361bddd72cee7d977590d9d6ca32e7fae754a7fb5a837417ec6212142232886",
+    "source_sha256": "8c6294e75e730f1ca6f13ca6d9f8ffb0430190f6279bc5e55bfc0b33e5ce2e5e",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.cloudRes",
     "marshal_sha256": "ffecd7fbec8117ec5d6e21353c10163afe32bd9e34abef6c0847f0b5c0b1fa26",
     "source_sha256": "bbecbdb370336587b1cbec82b4d7e8f3504072e8b6ceb95af02b36e77d314837",
     "commit_sha": "355a796240acaa6157d997e23238d1ed50dabea3"
@@ -1503,7 +1515,7 @@
     "module": "src.cloudSync",
     "marshal_sha256": "bc2d8df650b183fc74ec21b05af2aa91b3384b59a5e29ed80efab065954399e1",
     "source_sha256": "29a77ec5172b3b4d2a8892debb3a4da157a9712f23c233f198f7e81f99765233",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.cloudSync",
@@ -1599,7 +1611,7 @@
     "module": "src.const",
     "marshal_sha256": "69f49d84e10c6e4fbdbde97c7867370b959ebee019030436d685a30045bddca5",
     "source_sha256": "e45bc4c9034cc81437130254b7bf462710ccff66f10411c7b85fdff6ff4017af",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.debugmgr",
@@ -1611,7 +1623,7 @@
     "module": "src.debugmgr",
     "marshal_sha256": "d4427bb921da8e8f0c546162dacd0ec7b735d10f74df29728bfe4abd1d7abc0b",
     "source_sha256": "41a21100592be1165896ff0eaf999718df77f36a9bbcb855707ad86da40932aa",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.debugmgr",
@@ -1686,6 +1698,12 @@
     "commit_sha": "b1497238ce61abcc78fd292754f97d139229f03d"
   },
   {
+    "module": "src.download_binary",
+    "marshal_sha256": "752f7b913e4e7eb372b76711f7bba7bee54d0d546796da480809fc7b1a550b1b",
+    "source_sha256": "dbb9dbd1deac276084947b9ae73a24aa3c80eb817e2764a11a6ae7bbb54bd856",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
     "module": "src.envmgr",
     "marshal_sha256": "f1379d4a4f62860df3cdfcc429b91fcbe9a9582ccab05917602f11b561a95478",
     "source_sha256": "00f477ffa9679c33c664c1bb540b43b096b670e21b53f5f5e38d11bb8513415c",
@@ -1701,7 +1719,7 @@
     "module": "src.envmgr",
     "marshal_sha256": "7bd2fd283ab09c8ab052cba74a1824db362ee68135fba35bad75270e5ecce947",
     "source_sha256": "20bebaaa518f6fab2990b86ee3f2cad8f3716b7efd3aa9ecb152c247acc49c18",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.envmgr",
@@ -1728,10 +1746,40 @@
     "commit_sha": "02ace04c0809837a32de5a142f15bade1ca8849f"
   },
   {
+    "module": "src.fever_assets",
+    "marshal_sha256": "478a191735fbc8b8563c0556004f5c02d00231a82166180a196a8d9e396fd681",
+    "source_sha256": "0485cecdbeee25e62d243022863c6586523566f561ec0ca2b779294c8db490ab",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.fever_bridge",
+    "marshal_sha256": "6a594bc14edc67ec2e334726a695bf6c83320f562bb8bf8884f0ad0f9655abb4",
+    "source_sha256": "f92d38b0cee168043c5948b54f3a4e8cb9c15ba9e58c9f7a01828a04fea33b39",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.fever_ipc",
+    "marshal_sha256": "d951c74ac207c3b78f104fe90e6e2965bce9ead7074d7c1842397913fcbdb2c8",
+    "source_sha256": "956b7cadaa43f7cab1c701c83bd403da16decaf43ebc9b90b2293adbe5635454",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.fever_skin",
+    "marshal_sha256": "76125d1f3ba77d849d90bfafed0a20efc17602173a6d874423ee21d7e9e8173b",
+    "source_sha256": "98f0c2fcef61ddaff2a80e357abe9234c9bce044af9650b26e52535360eb5ded",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
     "module": "src.gamecatalog",
     "marshal_sha256": "81a795dbc9a966b66023b8cb3a0c3d2d924b729183627de3135294d781b4ebf9",
     "source_sha256": "23e19c721d3b6c3b0f043a869018f3f1ed68191adfb6a0d8221147fd81416692",
     "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+  },
+  {
+    "module": "src.gamecatalog",
+    "marshal_sha256": "be59759d8397a15cc0ac813ada52693be3f0819d73d312f4c19103889f8551c9",
+    "source_sha256": "c1c75a91847781358334872602bdbd998705cbf69544eaba1f682f949632f4a6",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.gamemgr",
@@ -1786,6 +1834,12 @@
     "marshal_sha256": "b4c2aa0a3ac638aef0189df5a8038b6329fc64fe2358dd8193ff3d626c59d49a",
     "source_sha256": "9796fd9fb32e9aa5db4578701c5d91b161f21be1d1ad5506ed98bc9843727590",
     "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+  },
+  {
+    "module": "src.gamemgr",
+    "marshal_sha256": "f1e495cde01d380f61de21e00a029e68620aca14b376564beb018a245db879d0",
+    "source_sha256": "ae1f0ca0626c04bfd9bca1de864d7bf44e009bf58e50f3f295635df9448da461",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.gamemgr",
@@ -1845,13 +1899,13 @@
     "module": "src.hostmgr",
     "marshal_sha256": "605f519575ce42ed8d2cd941c3bcd96e19f461a1a192f116f49b1332e00a1caa",
     "source_sha256": "f67f07b5c77fe8b9e2e0c69dae3d8957ea1537f357173d74ee938add12b7fbce",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.hotfixmgr",
     "marshal_sha256": "5e5e8d534becf26193c6643cd8646cc98fd9629bf3ed343ef6497c0ecd0cd36b",
     "source_sha256": "10b231615f1d0b56f61518db6f521b88b1a198604276197057658b12ee860d32",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.hotfixmgr",
@@ -1933,6 +1987,12 @@
   },
   {
     "module": "src.local_handler",
+    "marshal_sha256": "e8b7fc6001ad1ec0a97fceddae74bef84a5c3a9d4c007d803d2adc87c07f5e88",
+    "source_sha256": "3f9293f810e347d67192e24d2e862abed4e4a4b4997c2e5261b5198f71a4e276",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.local_handler",
     "marshal_sha256": "0aef52b51a91ca41763376e074c98250f4bc4a353ef3abbb788df339324f8ec2",
     "source_sha256": "5495705c227fec7f0f843eef1c39ae3f16e819a8353aa19b9ec363b9db848678",
     "commit_sha": "c504ba2cf754b0d09ee420415c108d0705ae1534"
@@ -1989,7 +2049,7 @@
     "module": "src.login_stack_mgr",
     "marshal_sha256": "b76bed8636700720846487b70d71f6266a0f840e0e6fa71148d6cb65aa25487c",
     "source_sha256": "9400a834bb2549e1ec756ac64c6550fd1ac576180d1265281fee3aa413e69bf6",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.login_stack_mgr",
@@ -2007,7 +2067,7 @@
     "module": "src.logutil",
     "marshal_sha256": "b0ffdcc07960cb044a3c1ba3df08471ac6edb00425ecea8794f33f317e46095b",
     "source_sha256": "9c5c6a1ba359c579c22fbb0953b1ae7996225bd7653ef085313318cf8b2aad42",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.logutil",
@@ -2074,6 +2134,12 @@
     "marshal_sha256": "5bb72a034f3f5e397db253f9b4b7b595d1fbef0ef3f65086bb4ab5b0cfb511d8",
     "source_sha256": "19c59f04694dc62bfd384b228889003528654e72b13828e851c0945243d69669",
     "commit_sha": "105d971701a0fe5642dda97312cf0d66a620f63a"
+  },
+  {
+    "module": "src.main",
+    "marshal_sha256": "b8ff8969156865f96a7cf004f4d3cd513b47ce862996bcf7b40464e1a688d445",
+    "source_sha256": "1a1f4d3b69883e854c1003236847d3d62ad8b125dc521505a8d4a00972274869",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.main",
@@ -2263,6 +2329,12 @@
   },
   {
     "module": "src.mitm_addon",
+    "marshal_sha256": "efd7bf7eebd8fbc2378ecec34da1d3a11dbca37fe50f04474164b2b58829b137",
+    "source_sha256": "36f7a8aaae5edb31e31876773438262651e1a6580d1a70603bdaaf2f357eb8a8",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.mitm_addon",
     "marshal_sha256": "771f8f318efd152b85befe7517157c1cdad813fe0341b27bbd0a4b4fdb005716",
     "source_sha256": "47e03613e9e5b74389e8383782ddae60760063ec10fee06b12763f9377fc0433",
     "commit_sha": "e6699bc329810e86fa02509080ca30ab3d36a2c1"
@@ -2353,6 +2425,12 @@
   },
   {
     "module": "src.mitm_proxy",
+    "marshal_sha256": "9b85cfcc7514d1eb2cacb2724af758e95b50de36a94ea10601df43ed5a3bb7e2",
+    "source_sha256": "92ec34c893c781bdb0a45b659e60c2564a78bd71787dd5a3fcd38a3327e7847a",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.mitm_proxy",
     "marshal_sha256": "986862e90dd00c18b426662976d5cd37eb64e685696a752d9316aa3e288b6374",
     "source_sha256": "9811fb575ff7bd56891380ac1f4106968043394fdbb519f14393ae67afe540c2",
     "commit_sha": "3592ccd8eea3a082fc30937ba91a4031566e4f7d"
@@ -2394,6 +2472,18 @@
     "commit_sha": "6db968a9f740661b0fef0334f556be7dcac94dde"
   },
   {
+    "module": "src.mpay_request_policy",
+    "marshal_sha256": "b0b8c1bb423a4eba81ed28b4cba1a73a00af86f18d48fecb1292c3d4c7353707",
+    "source_sha256": "8069a70dcd2b6e146cd792264669cf9b6520520126bfe0846ab628fa2a91983b",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.nativebridge",
+    "marshal_sha256": "0da3c4433e1d4b11c677af998c9846f5bf77d141f56ca65db3fe1cfc3cf3e8da",
+    "source_sha256": "77c20ab34a4d0a5769ab88dfe3d0b26473b91bf7be2ed6533fe068e0dd502402",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
     "module": "src.proxy_env",
     "marshal_sha256": "0dcc6bf5047c5f55b73a01dfa24f2b50f75d114ea45c48629711fbe0fa0c434b",
     "source_sha256": "000f1c09d8bf4e8d8fe01858ecdebeb29a1b3d88c1b057bb9cee6b60784b6dbd",
@@ -2403,7 +2493,7 @@
     "module": "src.proxy_env",
     "marshal_sha256": "92547fec6cefe72b58a099af7b608f3c92bf317af08d7d1b3ca9ccccbb8c8bca",
     "source_sha256": "27c5eaa17057ef92469c3fe597b0c44b475ef09cd5d82cad68b4c612115ebba7",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.proxy_env",
@@ -2469,13 +2559,13 @@
     "module": "src.python_hosts.__init__",
     "marshal_sha256": "d3b2ae904ac8db6ebeee157c08bdc258c865d560481f2c8dd4a7832de388b0ef",
     "source_sha256": "cf063450aa9d1ba5bf773eca892c14153ee4f45a278c1b2e6ad57509674335f7",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.python_hosts.exception",
     "marshal_sha256": "90d8c3da33d1652223221e6511b1199dc337a5e04efebb5d04593be2210480c8",
     "source_sha256": "308f0adb24cdd21806bfdeda82340238f442f4f8683b00112eb30417fbd0974d",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.python_hosts.exception",
@@ -2493,13 +2583,13 @@
     "module": "src.python_hosts.hosts",
     "marshal_sha256": "720a6db12244c52d3c9e47ed618939e0c3e23a97453744a9c3a5c04cfa0bb96c",
     "source_sha256": "f4d49dcc1b4125007470f59a978b0570247d90b134ef56f19c8b106c4fd7673c",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.python_hosts.utils",
     "marshal_sha256": "eb7dd36b5b0a1a3e099adb59bea0f253b1f750b6cfb6afc95dddbeae0af14651",
     "source_sha256": "dcb88fc72dac04d3eac230c671801ffba397b20002347769dd83c85719dbbe06",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.python_hosts.utils",
@@ -2523,7 +2613,7 @@
     "module": "src.riskWmUtils",
     "marshal_sha256": "bad7187791629e46fd238544888b2cfed90e5f0c845f007c754b573369564086",
     "source_sha256": "de02ab9f3c4ff924d4259a760595ed3c6c00788dcf1d8a521290c2295f860263",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.run_once",
@@ -2593,6 +2683,12 @@
   },
   {
     "module": "src.run_once",
+    "marshal_sha256": "30ea5a2335f94c395b6bfa4f0b7cd2c45534f9ce51126684e8ae3e53869461ca",
+    "source_sha256": "c7c19cb1356cf0da631009fd2b256c7a14a2bc0eaef47685cd8a552cf74659b0",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.run_once",
     "marshal_sha256": "c7bf04d8158d4d1c3df1a28d182bbeb5ef30c1d036fde60a37d6bbcdb330d15a",
     "source_sha256": "cb1fdc513b617fd81dd32d0449c32e5a9dad3ce13a99ea1ea0c1dc1839f807c4",
     "commit_sha": "d24fb91b0a1a7e0827a948c484fc6ae15e49f389"
@@ -2649,7 +2745,7 @@
     "module": "src.secure_write",
     "marshal_sha256": "c0fe75f718bdfa3e0ae0f1e061a5b4ac3f1f23ed52f1e2464c3670eada70bf0c",
     "source_sha256": "774180ab4ea2ede794050ae21d6da00b3d33c8695fb9d9100b400052aa478294",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.secure_write",
@@ -2661,7 +2757,7 @@
     "module": "src.shortcutmgr",
     "marshal_sha256": "e0734b33a77f356648f68616c49d58cd668bc7a2e8057ca4273c4c3ae9b416d2",
     "source_sha256": "17447dc5cd72466a4dec7b7aee9476bfab92d3a08f192c69bfccd10d771954d1",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.shortcutmgr",
@@ -2685,7 +2781,7 @@
     "module": "src.ssl_utils",
     "marshal_sha256": "94f46f74d4f0dbbb0aba93a9463a04aad0a631b0daec28a6e4f5736df3813d99",
     "source_sha256": "e7b6bfab8ba02d505b5369f172eedd32d7f5fedc19eba781a3bff06c896d97e9",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.uimgr",
@@ -2728,6 +2824,12 @@
     "marshal_sha256": "49c4678d89568f9c27cfd2ea249ee9bf40e993e42e7b2bf370681e65817398cc",
     "source_sha256": "7553818419ed6120e258529f73b3baf19d760225e3838c2e53a560d74bf081ee",
     "commit_sha": "105d971701a0fe5642dda97312cf0d66a620f63a"
+  },
+  {
+    "module": "src.uimgr",
+    "marshal_sha256": "d07eb6f956060a66ea8ad8cfa066fd85ef78c99d6e30fa9225c4d31a1dc79a3e",
+    "source_sha256": "978a7a90f26e805fef7e7ca4468f2066af8d71f5936c84578887690c42bab215",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   },
   {
     "module": "src.uimgr",
@@ -2779,6 +2881,12 @@
   },
   {
     "module": "src.uri_scheme",
+    "marshal_sha256": "90736572c01932ac81ad4dbced47c68106e545fd5a6bab37efd0fdcdae8043d7",
+    "source_sha256": "7bfe608543f22518d8a47a443e2594f0f90f536634b96ac71468d8193d682c71",
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
+  },
+  {
+    "module": "src.uri_scheme",
     "marshal_sha256": "ab29b9f1e02b56766e423e93a83c33962b6d0d396d531c276ee3a80b385f0375",
     "source_sha256": "7e0391ded46dcba517d3babc571d6d0f698f20755b3c695f7c45feb9e2220ad9",
     "commit_sha": "f90aa3aa671c0ee7885ff7e8cb38bd5471c2766e"
@@ -2808,6 +2916,6 @@
   {
     "module": "点我启动工具.bat",
     "source_sha256": "ee7f3ead5d4561431a79a886b34bf64a5e704f96711d1d313a6d453d3de29bda",
-    "commit_sha": "8c55055dede26351990a9d95f9819de8137e4a83"
+    "commit_sha": "1e1160aadbf127d3b753cee2236b43b1d2578778"
   }
 ]
