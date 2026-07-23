@@ -1991,6 +1991,10 @@ class LocalRequestHandler:
         )
 
         if method != "GET":
+            if "enabled" in payload:
+                genv.set(
+                    "FEVER_BRIDGE_ENABLED", bool(payload.get("enabled")), True
+                )
             if "forced" in payload:
                 valid_distributions = game.get_distributions() if game else []
                 if (
@@ -2009,16 +2013,14 @@ class LocalRequestHandler:
                         "success": False, "error": "保存分发强制设置失败"
                     })
 
-        # Retire the global preview switch.  Hosted MPay is now enabled only
-        # by the explicit per-game, per-distribution setting above.
-        if genv.get("FEVER_BRIDGE_ENABLED", False):
-            genv.set("FEVER_BRIDGE_ENABLED", False, True)
-        enabled = False
+        enabled = bool(genv.get("FEVER_BRIDGE_ENABLED", False))
         forced = bool(
             game and game.is_fever_bridge_forced(distribution_id)
         )
-        eligible_by_default = False
-        effective = fever_managed and forced
+        eligible_by_default = fever_managed and not manual_feature
+        effective = fever_managed and (
+            forced or (enabled and eligible_by_default)
+        )
         current_target_disabled = (
             method != "GET"
             and bool(game_id)
@@ -2026,7 +2028,8 @@ class LocalRequestHandler:
             and getShortGameId(game_id) in app_state.fever_bridge_target_game_ids
         )
         no_bridge_setting_enabled = (
-            not any(
+            not enabled
+            and not any(
                 item.force_fever_bridge_distributions
                 for item in self.game_helper.games.values()
             )
