@@ -1,5 +1,5 @@
 {
-  "lastModified": 1784791806,
+  "lastModified": 1784824030,
   "version": "v6.2.0-beta",
   "hotfix": [
     {
@@ -469,6 +469,14 @@
       "target_module": "local_handler",
       "target_commit": "d1986dc377f8ebc3c095998450e5515be15c2b5c",
       "note": "修复平台托管启动方式的默认判断和设置范围。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "208c1836aab56e2f65b7dc735c75597a50e04d5f",
+      "note": "修复平台托管登录在游戏完成登录前提前关闭，以及自动登录完成后未按设置关闭的问题。"
     }
   ],
   "shortcuts": [
