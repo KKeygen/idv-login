@@ -1,5 +1,5 @@
 {
-  "lastModified": 1784782310,
+  "lastModified": 1784783724,
   "version": "v6.2.0-beta",
   "hotfix": [
     {
@@ -437,6 +437,14 @@
       "target_module": "download_binary",
       "target_commit": "8cd07ded4cfd0319f96f5e3fc1d16f7a49c0b4d4",
       "note": "修复游戏下载或更新实际完成后，界面仍一直显示正在下载的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "uimgr",
+      "target_commit": "45f2deb25e9ecba78ce6ae4f0262ad9f4caf9ea5",
+      "note": "加快兼容模式下启动器界面的加载速度。"
     }
   ],
   "shortcuts": [
