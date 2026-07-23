@@ -749,8 +749,8 @@ class UIManager:
             self._window.setCentralWidget(self._view)
 
         # The default WebEngine profile is off-the-record.  Give the launcher
-        # its own stable profile so idvlogin://app localStorage survives a
-        # process restart without sharing data with browser/login profiles.
+        # its own stable profile so localStorage survives a process restart
+        # without sharing data with browser/login profiles.
         from envmgr import genv
 
         profile_root = os.path.join(
@@ -775,7 +775,17 @@ class UIManager:
     def _do_open_for_game(self, game_id: str = "", initial_view: str = ""):
         """Show the UI window for the given *game_id*."""
         self._ensure_window()
-        url = QUrl("idvlogin://app/_idv-login/index")
+        import app_state
+
+        is_compat = (
+            getattr(getattr(app_state, "proxy_mgr", None), "mode", "")
+            == "compat"
+        )
+        url = QUrl(
+            "https://localhost/_idv-login/index"
+            if is_compat
+            else "idvlogin://app/_idv-login/index"
+        )
         query = QUrlQuery()
         if game_id:
             query.addQueryItem("game_id", game_id)
