@@ -1053,10 +1053,17 @@ class MitmProxyManager:
             )
 
         self._master = DumpMaster(opts, with_dumper=False)
-        self._master.addons.add(self.addon)
         if self.mode == "compat":
-            # 兼容模式添加特殊的请求重写 addon
+            # connection_strategy is registered by mitmproxy's built-in
+            # proxyserver addon during DumpMaster construction, so it cannot
+            # be passed to Options(...) above.  Update it only after the
+            # option exists.  This works with both mitmproxy 10.2 and 11.1.
+            self._master.options.update(connection_strategy="lazy")
+            # Route by the original SNI before the MPay addon classifies or
+            # rewrites the request.  Otherwise requests for another upstream
+            # look like DOMAIN_TARGET and may have their signed body changed.
             self._master.addons.add(_CompatModeAddon())
+        self._master.addons.add(self.addon)
         self._master.addons.add(_ResponseLogAddon())
         await self._master.run()
 
@@ -1147,14 +1154,16 @@ class _CompatModeAddon:
     此 addon 负责根据 Host 头将请求路由到正确的上游服务器。
     """
 
-    def request(self, flow):
-        from mitmproxy import http
-
-        # 获取原始 Host 头
-        host = flow.request.host_header or flow.request.host
+    @staticmethod
+    def _normalize_host(value):
+        host = str(value or "").strip().lower().rstrip(".")
         if not host:
-            return
-        host = str(host).lower()
+            return ""
+        if host.startswith("["):
+            return host.split("]", 1)[0] + "]"
+        return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+    def request(self, flow):
 
         # 获取目标域名配置
         from envmgr import genv
@@ -1168,12 +1177,33 @@ class _CompatModeAddon:
             if str(domain or "").strip()
         }
 
-        # 如果是目标域名，修改 flow 的目标地址
-        if host in target_domains:
-            # 重写请求的目标服务器为真实服务器
-            flow.request.host = host
-            flow.request.port = 443
-            flow.request.scheme = "https"
+        # Reverse mode has already replaced request.host with the default
+        # upstream by the time request hooks run.  client_conn.sni still holds
+        # the hostname from the original TLS ClientHello, so prefer it over
+        # the (possibly rewritten) Host header.
+        candidates = (
+            getattr(flow.client_conn, "sni", ""),
+            flow.request.host_header,
+            flow.request.host,
+        )
+        host = next(
+            (
+                normalized
+                for candidate in candidates
+                if (normalized := self._normalize_host(candidate)) in target_domains
+            ),
+            "",
+        )
+        if not host:
+            return
+
+        upstream = (host, 443)
+        if flow.server_conn.address != upstream:
+            flow.server_conn.address = upstream
+        flow.server_conn.sni = host
+        flow.request.host = host
+        flow.request.port = 443
+        flow.request.scheme = "https"
 
     def responseheaders(self, flow):
         if flow.response and "alt-svc" in flow.response.headers:
@@ -1181,7 +1211,35 @@ class _CompatModeAddon:
 
 
 class _ResponseLogAddon:
-    """仅将非 200/404 的响应以 DEBUG 级别写入日志，不输出到控制台。"""
+    """Log failed HTTP exchanges without persisting request/response bodies."""
+
+    @staticmethod
+    def _url(flow):
+        try:
+            url = flow.request.pretty_url
+        except Exception:
+            url = str(getattr(flow.request, "url", ""))
+        # Query strings routinely contain login codes, tickets and device
+        # identifiers.  The host and path are sufficient for diagnostics.
+        return str(url).split("?", 1)[0].split("#", 1)[0]
 
     def response(self, flow):
-        pass
+        if flow.response is None:
+            return
+        if flow.response.status_code in (200, 404):
+            return
+        logger.debug(
+            "[HTTP] {} {} -> {} {}",
+            flow.request.method,
+            self._url(flow),
+            flow.response.status_code,
+            flow.response.reason,
+        )
+
+    def error(self, flow):
+        logger.debug(
+            "[HTTP] {} {} -> network error: {}",
+            flow.request.method,
+            self._url(flow),
+            flow.error,
+        )
