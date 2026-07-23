@@ -1057,7 +1057,10 @@ class LocalRequestHandler:
                     if installation.distribution_id != -1
                     else None
                 ) or {}
-                if not installation.startup_args:
+                cloud_startup_args = game.get_cloud_startup_args()
+                if cloud_startup_args:
+                    installation.startup_args = cloud_startup_args
+                elif not installation.startup_args:
                     installation.startup_args = str(
                         launcher_data.get("startup_params") or ""
                     )
@@ -1093,7 +1096,11 @@ class LocalRequestHandler:
             file_info = game.get_file_distribution_info(dist_id)
             if not file_info:
                 return self._json_response(404, {"success": False, "error": "未找到文件分发信息"})
-            startup_args = launcher_data.get("startup_params", "") or ""
+            startup_args = (
+                game.get_cloud_startup_args()
+                or launcher_data.get("startup_params", "")
+                or ""
+            )
             content_id = file_info.get("app_content_id")
 
             # New browser/WebEngine UI: directory selection is a separate HTTP

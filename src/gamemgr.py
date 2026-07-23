@@ -451,6 +451,10 @@ class Game:
     ) -> GameInstallation:
         normalized_path = GameInstallation._normalize_path(path)
         dist_id = self._coerce_distribution_id(distribution_id)
+        # A manually maintained cloud argument is authoritative.  Fever's
+        # registry and launcher API remain useful fallbacks for games without
+        # one, but must not replace an explicit cloud override.
+        startup_args = self.get_cloud_startup_args() or str(startup_args or "")
         existing = None
         if installation_id:
             existing = self.installations.get(str(installation_id))
@@ -678,14 +682,14 @@ class Game:
                 self.logger.exception("启动平台托管登录失败")
                 self.last_start_error = "平台托管登录启动失败；请确认真实发烧平台未在运行且 mpay 资源完整"
                 return False
-        start_args = installation.startup_args if installation else ""
+        start_args = self.get_cloud_startup_args()
+        if not start_args:
+            start_args = installation.startup_args if installation else ""
         if use_fever_bridge and not start_args and installation.distribution_id != -1:
             launcher_data = self.get_launcher_data_for_distribution(
                 installation.distribution_id
             ) or {}
             start_args = str(launcher_data.get("startup_params") or "")
-        if not start_args and self.can_convert_to_normal():
-            start_args = CloudRes().get_start_argument(getShortGameId(self.game_id)) or ""
         if sys.platform == "win32":
             # 规范化路径
             game_path = os.path.normpath(game_path)
@@ -1126,7 +1130,7 @@ class Game:
                 installation.startup_path = startup_path
             elif not installation.startup_path:
                 installation.startup_path = os.path.basename(installation.path)
-            installation.startup_args = str(
+            installation.startup_args = self.get_cloud_startup_args() or str(
                 selected_launcher_data.get("startup_params") or ""
             )
         installation.updated_at = int(time.time())
@@ -1178,6 +1182,12 @@ class Game:
         short_game_id = getShortGameId(self.game_id)
         distributions = cloud_res.get_download_distributions(short_game_id)
         return self._normalize_distribution_ids(distributions)
+
+    def get_cloud_startup_args(self) -> str:
+        """Return the authoritative manually maintained launch arguments."""
+        return str(
+            CloudRes().get_start_argument(getShortGameId(self.game_id)) or ""
+        )
         
     def get_launcher_data_for_distribution(self, distribution_id: int) -> Optional[dict]:
         """获取指定分发ID的启动器数据"""
@@ -1326,8 +1336,8 @@ class Game:
             "progress_file": os.path.abspath(progress_file) if progress_file else "",
             "control_file": os.path.abspath(control_file) if control_file else "",
             "original_version": installation.installed_version,
-            "start_args": installation.startup_args
-            or CloudRes().get_start_argument(getShortGameId(self.game_id))
+            "start_args": self.get_cloud_startup_args()
+            or installation.startup_args
             or ""
         }
         task_file_path = self._create_download_task_file(task_data)
@@ -2336,7 +2346,14 @@ class GameManager:
                         if not path_record.startup_path and record.get("startup_path"):
                             path_record.startup_path = str(record["startup_path"])
                             hydrated = True
-                        if not path_record.startup_args and record.get("startup_args"):
+                        cloud_startup_args = game.get_cloud_startup_args()
+                        if (
+                            cloud_startup_args
+                            and path_record.startup_args != cloud_startup_args
+                        ):
+                            path_record.startup_args = cloud_startup_args
+                            hydrated = True
+                        elif not path_record.startup_args and record.get("startup_args"):
                             path_record.startup_args = str(record["startup_args"])
                             hydrated = True
                     if hydrated:
@@ -2420,7 +2437,10 @@ class GameManager:
             startup_path=(
                 target.get("startup_path") or os.path.basename(executable_path)
             ),
-            startup_args=target.get("startup_args", ""),
+            startup_args=(
+                game.get_cloud_startup_args()
+                or target.get("startup_args", "")
+            ),
             set_default=set_default,
         )
         self.identify_game_installation(
