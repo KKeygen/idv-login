@@ -678,14 +678,26 @@ class Game:
                 self.logger.exception("启动平台托管登录失败")
                 self.last_start_error = "平台托管登录启动失败；请确认真实发烧平台未在运行且 mpay 资源完整"
                 return False
-        start_args = installation.startup_args if installation else ""
-        if use_fever_bridge and not start_args and installation.distribution_id != -1:
+        start_args = ""
+        if use_fever_bridge and installation.distribution_id != -1:
+            # A Fever-hosted launch must use the distribution's launcher
+            # parameters.  The installation record may contain the manually
+            # maintained standalone parameters (including --is_multi_start)
+            # from an older hotfix; those parameters deliberately bypass the
+            # Fever IPC path and must not leak into a hosted launch.
             launcher_data = self.get_launcher_data_for_distribution(
                 installation.distribution_id
             ) or {}
             start_args = str(launcher_data.get("startup_params") or "")
-        if not start_args and self.can_convert_to_normal():
-            start_args = CloudRes().get_start_argument(getShortGameId(self.game_id)) or ""
+        elif not use_fever_bridge:
+            # A normal launch must prefer the manually maintained cloud
+            # parameters so an imported Fever record cannot make the game
+            # believe the real Fever client is present.
+            start_args = str(
+                CloudRes().get_start_argument(getShortGameId(self.game_id)) or ""
+            )
+            if not start_args:
+                start_args = installation.startup_args if installation else ""
         if sys.platform == "win32":
             # 规范化路径
             game_path = os.path.normpath(game_path)
