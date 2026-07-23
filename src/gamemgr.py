@@ -645,8 +645,6 @@ class Game:
 
     def should_use_fever_bridge(self, installation: GameInstallation) -> bool:
         forced = self.is_fever_bridge_forced(installation.distribution_id)
-        if not genv.get("FEVER_BRIDGE_ENABLED", False) and not forced:
-            return False
         cloud_res = CloudRes()
         short_game_id = getShortGameId(self.game_id)
         return bool(
@@ -668,6 +666,9 @@ class Game:
             self.last_start_error = "游戏路径无效或不存在"
             return False
         self.active_installation_id = installation.installation_id
+        cloud_res = CloudRes()
+        short_game_id = getShortGameId(self.game_id)
+        has_manual_feature = cloud_res.has_manual_game_feature(short_game_id)
         use_fever_bridge = self.should_use_fever_bridge(installation)
         if use_fever_bridge:
             from fever_bridge import FeverBridge
@@ -694,13 +695,17 @@ class Game:
             ) or {}
             start_args = str(launcher_data.get("startup_params") or "")
         elif not use_fever_bridge:
-            # A normal launch must prefer the manually maintained cloud
-            # parameters so an imported Fever record cannot make the game
-            # believe the real Fever client is present.
-            start_args = str(
-                CloudRes().get_start_argument(getShortGameId(self.game_id)) or ""
-            )
-            if not start_args:
+            if has_manual_feature:
+                # A manually maintained cloud entry is authoritative even when
+                # it deliberately specifies an empty argument string.  Falling
+                # back to imported Fever arguments would make a normal launch
+                # falsely claim that the platform is present.
+                start_args = str(
+                    cloud_res.get_start_argument(short_game_id) or ""
+                )
+            else:
+                # Games outside both the manual cloud configuration and the
+                # Fever PC catalog keep the original standalone behavior.
                 start_args = installation.startup_args if installation else ""
         if sys.platform == "win32":
             # 规范化路径

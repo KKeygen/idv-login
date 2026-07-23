@@ -34,7 +34,7 @@ class DynamicGameCatalog:
         "https://loadingbaycn.webapp.163.com/app/v1/game_library/app"
         "?force=1&app_id={}"
     )
-    CACHE_SCHEMA_VERSION = 2
+    CACHE_SCHEMA_VERSION = 3
     DEFAULT_REFRESH_INTERVAL = 24 * 60 * 60
 
     _MODIFIED = "modified"
@@ -102,7 +102,7 @@ class DynamicGameCatalog:
             platform_type = str(item.get("platform_type") or "fever")
             if not short_id or not isinstance(distributions, list):
                 continue
-            if platform_type == "fever" and not distributions:
+            if platform_type != "fever" or not distributions:
                 continue
             normalized_games.append(dict(item))
             games_by_short_id.setdefault(short_id, dict(item))
@@ -212,7 +212,10 @@ class DynamicGameCatalog:
                     except (TypeError, ValueError):
                         app_id = -1
                     app_type = app_data.get("app_type")
-                    if app_id >= 0 and app_type in (1, 3):
+                    # Only type 1 represents a directly managed Windows game.
+                    # Type 3 entries are emulator APKs without a Windows
+                    # startup path and must not enter the PC launcher catalog.
+                    if app_id >= 0 and app_type == 1:
                         normalized = {
                             "app_id": app_id,
                             "app_type": app_type,
@@ -265,8 +268,7 @@ class DynamicGameCatalog:
         games_by_short_id = {}
         for app in homepage_apps:
             app_id = app.get("app_id")
-            app_type = int(app.get("app_type") or 1)
-            platform_type = "native_pc" if app_type == 3 else "fever"
+            platform_type = "fever"
             detail = app_details.get(str(app_id), {})
             short_id = str(detail.get("game_id") or "").strip()
             if not short_id:
@@ -275,7 +277,7 @@ class DynamicGameCatalog:
             cloud_game_id = str(config.get("cloud_game_id") or "").strip()
             existing = games_by_short_id.get(short_id)
             if existing:
-                if platform_type == "fever" and app_id not in existing["download_distributions"]:
+                if app_id not in existing["download_distributions"]:
                     existing["download_distributions"].append(app_id)
                 if app_id not in existing["catalog_app_ids"]:
                     existing["catalog_app_ids"].append(app_id)
@@ -301,7 +303,7 @@ class DynamicGameCatalog:
                 "platform_type": platform_type,
                 "catalog_app_id": app_id,
                 "catalog_app_ids": [app_id],
-                "download_distributions": [app_id] if platform_type == "fever" else [],
+                "download_distributions": [app_id],
                 "launcher": dict(detail),
             }
             games.append(record)

@@ -919,12 +919,6 @@ class LocalRequestHandler:
                 launcher_data_by_distribution[dist_id] = launcher_data or {}
                 file_info_by_distribution[dist_id] = file_info
                 distribution_details.append((dist_id, launcher_data, file_info))
-            if not distribution_details and catalog_item.get("platform_type") == "native_pc":
-                distribution_details.append((
-                    -1,
-                    catalog_item.get("launcher") or {},
-                    None,
-                ))
             if game:
                 identified = False
                 for item in list(game.installations.values()):
@@ -1982,22 +1976,19 @@ class LocalRequestHandler:
         manual_feature = bool(game_id) and cloud_res.has_manual_game_feature(
             getShortGameId(game_id)
         )
+        configurable = fever_managed and manual_feature
 
         if method != "GET":
-            if "enabled" in payload:
-                genv.set(
-                    "FEVER_BRIDGE_ENABLED", bool(payload.get("enabled")), True
-                )
             if "forced" in payload:
                 valid_distributions = game.get_distributions() if game else []
                 if (
-                    not fever_managed
+                    not configurable
                     or game is None
                     or distribution_id not in valid_distributions
                 ):
                     return self._json_response(400, {
                         "success": False,
-                        "error": "只能为已识别分发的发烧托管游戏设置强制模式",
+                        "error": "只有带独立云配置的发烧平台游戏可以切换启动方式",
                     })
                 if not self.game_helper.set_fever_bridge_forced(
                     game_id, distribution_id, bool(payload.get("forced"))
@@ -2006,13 +1997,12 @@ class LocalRequestHandler:
                         "success": False, "error": "保存分发强制设置失败"
                     })
 
-        enabled = bool(genv.get("FEVER_BRIDGE_ENABLED", False))
         forced = bool(
             game and game.is_fever_bridge_forced(distribution_id)
         )
         eligible_by_default = fever_managed and not manual_feature
         effective = fever_managed and (
-            forced or (enabled and eligible_by_default)
+            forced or eligible_by_default
         )
         current_target_disabled = (
             method != "GET"
@@ -2020,24 +2010,15 @@ class LocalRequestHandler:
             and not effective
             and getShortGameId(game_id) in app_state.fever_bridge_target_game_ids
         )
-        no_bridge_setting_enabled = (
-            not enabled
-            and not any(
-                item.force_fever_bridge_distributions
-                for item in self.game_helper.games.values()
-            )
-        )
-        if (
-            current_target_disabled or no_bridge_setting_enabled
-        ) and app_state.fever_bridge is not None:
+        if current_target_disabled and app_state.fever_bridge is not None:
             app_state.fever_bridge.stop()
             app_state.fever_bridge = None
         return self._json_response(200, {
             "success": True,
-            "enabled": enabled,
             "forced": forced,
             "effective": effective,
             "eligible_by_default": eligible_by_default,
+            "configurable": configurable,
             "manual_feature": manual_feature,
             "fever_managed": fever_managed,
             "distribution_id": distribution_id,
