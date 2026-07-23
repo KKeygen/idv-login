@@ -1,5 +1,5 @@
 {
-  "lastModified": 1784773170,
+  "lastModified": 1784779512,
   "version": "v6.1.0-mac",
   "hotfix": [
     {
@@ -410,7 +410,7 @@
       "need_hotfix_version": [
         "v6.2.0-beta"
       ],
-      "target_module": "gamemgr",
+      "target_module": "local_handler",
       "target_commit": "a3b1cc285328c0f48975655a59b30e6b45e6c45c",
       "note": "撤回今早两次游戏启动相关热更新，恢复v6.2.0-beta发布版行为。"
     },
@@ -418,9 +418,25 @@
       "need_hotfix_version": [
         "v6.2.0-beta"
       ],
-      "target_module": "local_handler",
-      "target_commit": "a3b1cc285328c0f48975655a59b30e6b45e6c45c",
-      "note": "撤回今早两次游戏启动相关热更新，恢复v6.2.0-beta发布版行为。"
+      "target_module": "gamemgr",
+      "target_commit": "5dedf1410b703703e6351cce2d31f1d44f36cf18",
+      "note": "修复普通启动与发烧平台模拟启动的参数混用，避免网络错误或登录后无法进入游戏。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "mitm_proxy",
+      "target_commit": "5e0c38ff9e821dcb13d5205766a5ea103e75542e",
+      "note": "修复兼容模式同时访问多个登录服务器时的错误路由，并减少诊断日志中的敏感和冗余内容。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "download_binary",
+      "target_commit": "8cd07ded4cfd0319f96f5e3fc1d16f7a49c0b4d4",
+      "note": "修复游戏下载或更新实际完成后，界面仍一直显示正在下载的问题。"
     }
   ],
   "shortcuts": [
