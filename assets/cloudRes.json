@@ -1,5 +1,5 @@
 {
-  "lastModified": 1784740798,
+  "lastModified": 1784769476,
   "version": "v6.2.0-beta",
   "hotfix": [
     {
@@ -405,6 +405,22 @@
       "target_module": "main",
       "target_commit": "fdb6149f94cd80d39f293b81b35a8c7166c68875",
       "note": "修复macOS兼容模式下本地DNS端口冲突导致无法启动的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "d1c0cddefe517c2a934b1bf44d0b1dfa591c7081",
+      "note": "修复了存在发烧平台安装记录时，第五人格从工具启动存在网络错误的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "local_handler",
+      "target_commit": "d1c0cddefe517c2a934b1bf44d0b1dfa591c7081",
+      "note": "修复了存在发烧平台安装记录时，第五人格从工具启动存在网络错误的问题。"
     }
   ],
   "shortcuts": [
