@@ -1,5 +1,5 @@
 {
-  "lastModified": 1784783724,
+  "lastModified": 1784786160,
   "version": "v6.2.0-beta",
   "hotfix": [
     {
@@ -418,14 +418,6 @@
       "need_hotfix_version": [
         "v6.2.0-beta"
       ],
-      "target_module": "gamemgr",
-      "target_commit": "5dedf1410b703703e6351cce2d31f1d44f36cf18",
-      "note": "修复普通启动与发烧平台模拟启动的参数混用，避免网络错误或登录后无法进入游戏。"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.2.0-beta"
-      ],
       "target_module": "mitm_proxy",
       "target_commit": "5e0c38ff9e821dcb13d5205766a5ea103e75542e",
       "note": "修复兼容模式同时访问多个登录服务器时的错误路由，并减少诊断日志中的敏感和冗余内容。"
@@ -445,6 +437,14 @@
       "target_module": "uimgr",
       "target_commit": "45f2deb25e9ecba78ce6ae4f0262ad9f4caf9ea5",
       "note": "加快兼容模式下启动器界面的加载速度。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "5833486d58cb839b140e6de05f48ed4cf220358c",
+      "note": "保留普通启动与发烧平台模拟启动参数修复，并缓存发烧平台游戏注册表信息，避免读取游戏状态时重复扫描注册表。"
     }
   ],
   "shortcuts": [
