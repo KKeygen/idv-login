@@ -1,5 +1,5 @@
 {
-  "lastModified": 1784770059,
+  "lastModified": 1784770928,
   "version": "v6.2.0-beta",
   "hotfix": [
     {
@@ -411,16 +411,16 @@
         "v6.2.0-beta"
       ],
       "target_module": "gamemgr",
-      "target_commit": "493851366ccc15cbbd67ddcc229c89b1539e3fa4",
-      "note": "修复了存在发烧平台安装记录时，第五人格从工具启动存在网络错误的问题；同时确保仅在用户显式开启后使用平台托管登录。"
+      "target_commit": "b0ff3462cf5b526a4615dd35c9d522e1d51b27a1",
+      "note": "修复了存在发烧平台安装记录时，第五人格从工具启动存在网络错误的问题。"
     },
     {
       "need_hotfix_version": [
         "v6.2.0-beta"
       ],
       "target_module": "local_handler",
-      "target_commit": "493851366ccc15cbbd67ddcc229c89b1539e3fa4",
-      "note": "修复了存在发烧平台安装记录时，第五人格从工具启动存在网络错误的问题；同时确保仅在用户显式开启后使用平台托管登录。"
+      "target_commit": "b0ff3462cf5b526a4615dd35c9d522e1d51b27a1",
+      "note": "修复了存在发烧平台安装记录时，第五人格从工具启动存在网络错误的问题。"
     }
   ],
   "shortcuts": [
