@@ -29,6 +29,9 @@ UI_HEARTBEAT_PAYLOAD = b"4"
 # after a pause resumes the persisted download state.
 UI_PAUSE_PAYLOAD = b"1"
 UI_RESUME_PAYLOAD = b"2"
+# downloadIPC keeps its command loop alive after StateFlags=8.  Command 3
+# synchronously drains the downloader and exits the helper with code 0.
+UI_FINISH_PAYLOAD = b"3"
 UI_CONTROL_PAYLOADS = {
     "pause": UI_PAUSE_PAYLOAD,
     "resume": UI_RESUME_PAYLOAD,
@@ -358,6 +361,7 @@ def main_ui_server(
     last_control_sequence = 0
     pending_control = None
     core_ready = False
+    finish_sent = False
     progress_reporter = ProgressReporter()
     
     # 使用 Poller 实现高效的 I/O 多路复用
@@ -409,6 +413,17 @@ def main_ui_server(
                                 line = progress_reporter.render_if_due(data)
                                 if line:
                                     print(line, flush=True)
+                                if (
+                                    data.get("StateFlags") == STATE_FINISHED
+                                    and not finish_sent
+                                ):
+                                    # A finished download does not make the Go
+                                    # helper leave its receive loop.  Complete
+                                    # the IPC handshake so the supervisor's
+                                    # process.wait() can proceed to persist the
+                                    # installation and publish status=done.
+                                    sender.send_multipart([topic, UI_FINISH_PAYLOAD])
+                                    finish_sent = True
                             except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
                                 print(f"<-- [数据] 类型: {msg_type}, 长度: {len(payload)}")
                         else:
@@ -448,7 +463,10 @@ def main_ui_server(
             # resulting state callback is the acknowledgement.
             _send_control_once(sender, topic, pending_control, core_ready)
 
-            if current_time - last_heartbeat_time > UI_HEARTBEAT_INTERVAL_S:
+            if (
+                not finish_sent
+                and current_time - last_heartbeat_time > UI_HEARTBEAT_INTERVAL_S
+            ):
                 # 构造消息: [topic, payload] -> [b"434", b"4"]
                 # 注意：Worker (Client) 那边接收的是 2-part message
                 sender.send_multipart([topic, UI_HEARTBEAT_PAYLOAD])
