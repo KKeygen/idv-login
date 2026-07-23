@@ -241,6 +241,11 @@ class IDVLoginAddon:
         try:
             request_role = self._classify_mpay_request(flow)
             if request_role == ROLE_BRIDGED_GAME:
+                # op14 only transfers the one-shot ticket/code to the game.
+                # Login is complete from the game's perspective only after its
+                # own MPay instance exchanges that value successfully.
+                if path == "/mpay/api/users/login/qrcode/exchange_token":
+                    self._handle_bridged_game_exchange_token_response(flow)
                 return
             if request_role == ROLE_HOSTED_FEVER_MPAY:
                 if self._re_login_methods.match(path):
@@ -264,7 +269,9 @@ class IDVLoginAddon:
                     self._hold_hosted_channel_query(flow, effective_game_id)
                 elif path == "/mpay/api/users/login/qrcode/exchange_token":
                     self._handle_exchange_token_response(
-                        flow, self._effective_hosted_game_id(flow)
+                        flow,
+                        self._effective_hosted_game_id(flow),
+                        allow_auto_close=False,
                     )
                 return
             if self._re_login_methods.match(path):
@@ -704,7 +711,10 @@ class IDVLoginAddon:
             return False
 
     def _handle_exchange_token_response(
-        self, flow: http.HTTPFlow, effective_game_id: str = ""
+        self,
+        flow: http.HTTPFlow,
+        effective_game_id: str = "",
+        allow_auto_close: bool = True,
     ):
         is_selected = bool(self.genv.get("CHANNEL_ACCOUNT_SELECTED"))
         try:
@@ -802,7 +812,11 @@ class IDVLoginAddon:
                         flow.response.content = json.dumps(resp_data).encode()
 
             if is_selected:
-                if flow.response.status_code == 200 and self.game_helper.get_auto_close_setting(game_id):
+                if (
+                    allow_auto_close
+                    and flow.response.status_code == 200
+                    and self.game_helper.get_auto_close_setting(game_id)
+                ):
                     self._trigger_auto_close()
             else:
                 if flow.response.status_code == 200 and self.genv.get("SCAN_RECORD_ENABLED", True):
@@ -814,6 +828,36 @@ class IDVLoginAddon:
                         )
         except Exception:
             self.logger.exception("处理 exchange_token 响应失败")
+
+    def _handle_bridged_game_exchange_token_response(
+        self, flow: http.HTTPFlow
+    ) -> None:
+        """Close only after the game has exchanged its handed-off ticket."""
+        try:
+            if flow.response.status_code != 200:
+                return
+            form_data = {}
+            content_type = flow.request.headers.get("content-type", "")
+            if "application/x-www-form-urlencoded" in content_type:
+                from urllib.parse import parse_qs
+
+                raw = flow.request.content.decode("utf-8", errors="replace")
+                parsed = parse_qs(raw, keep_blank_values=True)
+                form_data = {
+                    key: value[0] if len(value) == 1 else value
+                    for key, value in parsed.items()
+                }
+            elif "application/json" in content_type:
+                form_data = json.loads(flow.request.content or b"{}")
+
+            game_id = (
+                flow.request.query.get("game_id", "")
+                or form_data.get("game_id", "")
+            )
+            if game_id and self.game_helper.get_auto_close_setting(game_id):
+                self._trigger_auto_close()
+        except Exception:
+            self.logger.exception("处理游戏 exchange_token 完成状态失败")
 
     def _handle_data_upload_response(self, flow: http.HTTPFlow):
         try:
