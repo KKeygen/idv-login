@@ -34,6 +34,10 @@ from logutil import setup_logger
 from cloudRes import CloudRes
 from channelHandler.channelUtils import getShortGameId, cmp_game_id
 
+_FEVER_GAMES_CACHE_KEY = "_fever_games_registry_cache_v1"
+_FEVER_GAMES_CACHE_LOCK = threading.RLock()
+
+
 def calculate_xxh64(file_path):
     h = xxhash.xxh64() # 初始化 64位 对象
     with open(file_path, "rb") as f:
@@ -2111,6 +2115,26 @@ class GameManager:
     def list_fever_games(self) -> List[dict]:
         if sys.platform != "win32":
             return []
+        cached_games = genv.get(_FEVER_GAMES_CACHE_KEY, None)
+        if isinstance(cached_games, list):
+            return [dict(item) for item in cached_games if isinstance(item, dict)]
+
+        with _FEVER_GAMES_CACHE_LOCK:
+            # The startup import worker and the UI may arrive here together.
+            # Only the first caller should enumerate the registry; all other
+            # callers reuse this process-local genv snapshot.
+            cached_games = genv.get(_FEVER_GAMES_CACHE_KEY, None)
+            if isinstance(cached_games, list):
+                return [
+                    dict(item) for item in cached_games if isinstance(item, dict)
+                ]
+
+            result = self._read_fever_games_registry()
+            genv.set(_FEVER_GAMES_CACHE_KEY, result, cached=False)
+            return [dict(item) for item in result]
+
+    def _read_fever_games_registry(self) -> List[dict]:
+        """Read a fresh Fever registry snapshot without consulting the cache."""
         import winreg
         result = []
         try:
@@ -2371,6 +2395,7 @@ class GameManager:
                 create_shortcut=False,
                 notify=False,
                 set_default=set_default,
+                refresh_registry=False,
             )
             if imported_game_id and imported_game_id not in imported:
                 imported.append(imported_game_id)
@@ -2388,10 +2413,19 @@ class GameManager:
         create_shortcut: bool = True,
         notify: bool = True,
         set_default: bool = True,
+        refresh_registry: bool = True,
     ) -> Optional[str]:
         if not game_id:
             return None
-        fever_games = self.list_fever_games()
+        if refresh_registry:
+            # An explicit import is the only in-process operation that must see
+            # registry changes made after startup.  Hold the same lock used by
+            # readers so concurrent launcher-status calls reuse this refresh.
+            with _FEVER_GAMES_CACHE_LOCK:
+                genv.set(_FEVER_GAMES_CACHE_KEY, None, cached=False)
+                fever_games = self.list_fever_games()
+        else:
+            fever_games = self.list_fever_games()
         target = None
         for item in fever_games:
             same_game = cmp_game_id(item.get("game_id"), game_id)
