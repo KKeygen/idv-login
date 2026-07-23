@@ -645,19 +645,17 @@ class Game:
 
     def should_use_fever_bridge(self, installation: GameInstallation) -> bool:
         forced = self.is_fever_bridge_forced(installation.distribution_id)
-        if not genv.get("FEVER_BRIDGE_ENABLED", False) and not forced:
+        # Hosted MPay is strictly opt-in per distribution.  A legacy global
+        # preview flag must never silently route an imported Fever game into
+        # the simulator; only the setting written by the current game UI may
+        # enable it.
+        if not forced:
             return False
         cloud_res = CloudRes()
         short_game_id = getShortGameId(self.game_id)
-        return bool(
-            cloud_res.is_fever_managed_game(
-                short_game_id, installation.distribution_id
-            )
-            and (
-                forced
-                or not cloud_res.has_manual_game_feature(short_game_id)
-            )
-        )
+        return bool(cloud_res.is_fever_managed_game(
+            short_game_id, installation.distribution_id
+        ))
 
     def start(self, installation_id: str = ""):
         self.last_start_error = ""
