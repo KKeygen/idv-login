@@ -38,7 +38,7 @@ class genv:
     def reset_cache():
         """Delete persistent tool state and prevent recreating it before restart."""
         with genv._cache_lock:
-            cache_path = os.path.abspath(genv._cachePath)
+            cache_path = os.path.abspath(_cachePath)
             genv._cache_writes_disabled = True
             try:
                 os.remove(cache_path)
