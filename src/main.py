@@ -503,12 +503,18 @@ def initialize():
         )
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtNetwork import QNetworkProxyFactory, QNetworkProxy
-    from uimgr import register_url_scheme
+    from uimgr import (
+        configure_application_icon,
+        configure_windows_app_identity,
+        register_url_scheme,
+    )
     # Register custom URL schemes before creating QApplication
     register_url_scheme()
+    configure_windows_app_identity()
 
     argv = sys.argv if sys.argv else ["idv-login"]
     app = QApplication(argv)
+    configure_application_icon(app)
     app_state.app = app
     # 初始化主线程调度器，必须在 app 设置后、其他线程启动前调用
     app_state._ensure_invoker()
@@ -1579,6 +1585,8 @@ def main(cli_args=None):
     global logger
     if cli_args is None:
         cli_args = CLI_ARGS
+    from console_capture import install_console_capture
+    install_console_capture()
     prepare_platform_workdir()
     
     # 设置工作目录

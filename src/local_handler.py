@@ -47,6 +47,8 @@ class LocalRequestHandler:
     _cloud_sync_lock = threading.Lock()
     _auto_push_generation = {"value": 0}
     _pending_imports = {}  # {task_id: {"status": "pending"|"done", "success": bool}}
+    _reset_lock = threading.Lock()
+    _reset_started = False
 
     def __init__(self, *, game_helper, logger):
         self.game_helper = game_helper
@@ -148,6 +150,8 @@ class LocalRequestHandler:
             "/_idv-login/cloud-sync/access-logs": self._cloud_sync_access_logs,
             "/_idv-login/index": self._serve_index,
             "/_idv-login/export-logs": self._export_logs,
+            "/_idv-login/diagnostics/terminal": self._diagnostics_terminal,
+            "/_idv-login/diagnostics/reset-state": self._diagnostics_reset_state,
             "/_idv-login/open-external-url": self._open_external_url,
             "/_idv-login/proxy-mode": self._get_proxy_mode,
             "/_idv-login/set-proxy-mode": self._set_proxy_mode,
@@ -2063,6 +2067,38 @@ class LocalRequestHandler:
             return self._json_response(404, {"success": False, "error": "日志文件不存在"})
         except Exception as e:
             return self._json_response(500, {"success": False, "error": str(e)})
+
+    def _diagnostics_terminal(self, args, body, method):
+        from console_capture import read_console_output
+        result = read_console_output(args.get("cursor", 0))
+        result["success"] = True
+        return self._json_response(200, result)
+
+    def _diagnostics_reset_state(self, args, body, method):
+        if method != "POST":
+            return self._json_response(405, {"success": False, "error": "Method not allowed"})
+        with LocalRequestHandler._reset_lock:
+            if LocalRequestHandler._reset_started:
+                return self._json_response(202, {"success": True, "restarting": True})
+            config_path = genv.reset_cache()
+            LocalRequestHandler._reset_started = True
+
+        self.logger.warning("用户已重置工具状态，config.json 已删除，工具即将重启")
+
+        def restart():
+            time.sleep(0.5)
+            try:
+                import hotfixmgr
+                hotfixmgr.restart_self("工具状态已重置")
+            except Exception:
+                self.logger.exception("重置工具状态后重启失败")
+
+        threading.Thread(target=restart, name="reset-tool-state", daemon=True).start()
+        return self._json_response(202, {
+            "success": True,
+            "restarting": True,
+            "deleted": os.path.basename(config_path),
+        })
 
     def _open_external_url(self, args, body, method):
         """使用系统默认浏览器打开外部 URL。"""
