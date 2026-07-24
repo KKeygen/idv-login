@@ -615,11 +615,26 @@ def cloudBuildInfo():
 def prepare_platform_workdir():
     if sys.platform=='win32':
         kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.GetStdHandle.restype = ctypes.c_void_p
+        kernel32.GetConsoleMode.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        kernel32.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         HandlerRoutine = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
         global _console_ctrl_handler
         _console_ctrl_handler = HandlerRoutine(ctrl_handler)
         kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, True)
         kernel32.SetConsoleMode(kernel32.GetStdHandle(-10), (0x4|0x80|0x20|0x2|0x10|0x1|0x00|0x100))
+        # ENABLE_VIRTUAL_TERMINAL_PROCESSING belongs to the output handles.
+        # Preserve their existing modes and only add ANSI support.
+        for std_handle_id in (-11, -12):
+            output_handle = kernel32.GetStdHandle(std_handle_id)
+            output_mode = ctypes.c_uint()
+            if output_handle and kernel32.GetConsoleMode(
+                output_handle, ctypes.byref(output_mode)
+            ):
+                kernel32.SetConsoleMode(output_handle, output_mode.value | 0x0004)
         genv.set("FP_WORKDIR", os.path.join(os.environ["PROGRAMDATA"], "idv-login"))
     elif sys.platform=='darwin':
         setup_signal_handlers()
