@@ -2474,14 +2474,10 @@ class GameManager:
             startup_args=target.get("startup_args", ""),
             set_default=set_default,
         )
-        self.identify_game_installation(
-            final_game_id,
-            installation.installation_id,
-            force=True,
-            persist=False,
-        )
-        # Distribution matching provides cloud launch metadata, while Fever's
-        # registry records the version that is actually installed on disk.
+        # Fever's registry already provides the authoritative distribution,
+        # version, content id, startup path, and startup arguments.  Do not
+        # re-classify this installation by hashing every cloud distribution:
+        # that is both redundant and needlessly expensive during import.
         if target.get("version_code"):
             installation.installed_version = str(target["version_code"])
         if target.get("content_id") is not None:

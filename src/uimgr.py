@@ -40,7 +40,7 @@ from PyQt6.QtWebEngineCore import (
     QWebEnginePage,
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPen
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -68,6 +68,62 @@ _cdn_cache: dict[str, tuple[str, bytes]] = {}
 
 # Disk cache directory (initialised lazily via _get_cdn_cache_dir)
 _cdn_cache_dir: str | None = None
+
+
+def configure_windows_app_identity():
+    """Give the launcher a stable Windows taskbar identity."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "KKeygen.idv-login.GUI"
+        )
+    except Exception as exc:
+        logger.debug(f"设置 Windows 应用标识失败: {exc}")
+
+
+def _launcher_icon_path() -> str:
+    candidates = []
+    install_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates.extend([
+        os.path.join(install_root, "icon.ico"),
+        os.path.join(install_root, "assets", "icon.ico"),
+        os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "icon.ico"),
+    ])
+    bundle_root = getattr(sys, "_MEIPASS", "")
+    if bundle_root:
+        candidates.extend([
+            os.path.join(bundle_root, "icon.ico"),
+            os.path.join(bundle_root, "assets", "icon.ico"),
+        ])
+    return next((path for path in candidates if os.path.isfile(path)), "")
+
+
+def configure_application_icon(app):
+    """Set the process-wide icon used by launcher windows and the taskbar."""
+    icon_path = _launcher_icon_path()
+    if not icon_path:
+        logger.warning("未找到启动器图标，任务栏可能继续使用 Qt 默认图标")
+        return
+    icon = QIcon(icon_path)
+    if icon.isNull():
+        logger.warning(f"启动器图标无法读取: {icon_path}")
+        return
+    app.setWindowIcon(icon)
+
+
+def _minimize_console_window():
+    """Minimize the owning Python console after the GUI is visible."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+    except Exception as exc:
+        logger.debug(f"最小化控制台窗口失败: {exc}")
 
 
 def _get_cdn_cache_dir() -> str:
@@ -731,6 +787,7 @@ class UIManager:
         else:
             self._window = QMainWindow()
         self._window.setWindowTitle("渠道服账号管理")
+        self._window.setWindowIcon(app.windowIcon())
         if isinstance(self._window, _WindowsFramelessWindow):
             screen = self._window.screen() or app.primaryScreen()
             available = screen.availableGeometry() if screen is not None else None
@@ -797,6 +854,7 @@ class UIManager:
         self._window.raise_()
         self._window.activateWindow()
         self._force_foreground()
+        _minimize_console_window()
 
     def _force_foreground(self):
         """Use Win32 API to reliably bring the window to the foreground."""

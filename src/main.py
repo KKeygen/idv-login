@@ -503,12 +503,18 @@ def initialize():
         )
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtNetwork import QNetworkProxyFactory, QNetworkProxy
-    from uimgr import register_url_scheme
+    from uimgr import (
+        configure_application_icon,
+        configure_windows_app_identity,
+        register_url_scheme,
+    )
     # Register custom URL schemes before creating QApplication
     register_url_scheme()
+    configure_windows_app_identity()
 
     argv = sys.argv if sys.argv else ["idv-login"]
     app = QApplication(argv)
+    configure_application_icon(app)
     app_state.app = app
     # 初始化主线程调度器，必须在 app 设置后、其他线程启动前调用
     app_state._ensure_invoker()
@@ -609,11 +615,26 @@ def cloudBuildInfo():
 def prepare_platform_workdir():
     if sys.platform=='win32':
         kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.GetStdHandle.restype = ctypes.c_void_p
+        kernel32.GetConsoleMode.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint),
+        ]
+        kernel32.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         HandlerRoutine = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
         global _console_ctrl_handler
         _console_ctrl_handler = HandlerRoutine(ctrl_handler)
         kernel32.SetConsoleCtrlHandler(_console_ctrl_handler, True)
         kernel32.SetConsoleMode(kernel32.GetStdHandle(-10), (0x4|0x80|0x20|0x2|0x10|0x1|0x00|0x100))
+        # ENABLE_VIRTUAL_TERMINAL_PROCESSING belongs to the output handles.
+        # Preserve their existing modes and only add ANSI support.
+        for std_handle_id in (-11, -12):
+            output_handle = kernel32.GetStdHandle(std_handle_id)
+            output_mode = ctypes.c_uint()
+            if output_handle and kernel32.GetConsoleMode(
+                output_handle, ctypes.byref(output_mode)
+            ):
+                kernel32.SetConsoleMode(output_handle, output_mode.value | 0x0004)
         genv.set("FP_WORKDIR", os.path.join(os.environ["PROGRAMDATA"], "idv-login"))
     elif sys.platform=='darwin':
         setup_signal_handlers()
@@ -1579,6 +1600,8 @@ def main(cli_args=None):
     global logger
     if cli_args is None:
         cli_args = CLI_ARGS
+    from console_capture import install_console_capture
+    install_console_capture()
     prepare_platform_workdir()
     
     # 设置工作目录

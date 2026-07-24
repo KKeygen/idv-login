@@ -297,7 +297,7 @@ def _build_remote_source_info(module_name: str, commit: str) -> Tuple[str, List[
     return url, fallbacks
 
 
-def _restart_self(reason: str = ""):
+def restart_self(reason: str = ""):
     try:
         if reason:
             logger.info(f"【热更新】即将重启: {reason}")
@@ -600,7 +600,7 @@ def pre_start_check_and_rollback_if_needed():
         _add_skipped(pending_ids)
         _set_pending_ids([])
         # 回滚完毕后，重启。
-        _restart_self("已回滚所有待验证热更新")
+        restart_self("已回滚所有待验证热更新")
         return
 
     # 若上次正常退出，则确认 hotfix 生效
@@ -699,7 +699,7 @@ def handle_if_needed(cloudres):
 
     if success_any:
         _set_pending_ids(applied_ids)
-        _restart_self("已应用热更新")
+        restart_self("已应用热更新")
 
 
 def handle_exit_skip_if_active():
