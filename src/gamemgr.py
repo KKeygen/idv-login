@@ -26,7 +26,7 @@ import base64
 import shlex
 import threading
 import uuid
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any
 import xxhash
 from envmgr import genv
 import app_state
@@ -36,6 +36,249 @@ from channelHandler.channelUtils import getShortGameId, cmp_game_id
 
 _FEVER_GAMES_CACHE_KEY = "_fever_games_registry_cache_v1"
 _FEVER_GAMES_CACHE_LOCK = threading.RLock()
+
+
+# D3D_FEATURE_LEVEL
+_FEATURE_LEVEL_NAMES = {
+    0x9100: "9_1",
+    0x9200: "9_2",
+    0x9300: "9_3",
+    0xA000: "10_0",
+    0xA100: "10_1",
+    0xB000: "11_0",
+    0xB100: "11_1",
+    0xC000: "12_0",
+    0xC100: "12_1",
+    0xC200: "12_2",
+}
+
+_D3D_DRIVER_TYPE_HARDWARE = 1
+_D3D11_SDK_VERSION = 7
+_E_INVALIDARG = 0x80070057
+
+
+def _hresult_hex(hr: int) -> str:
+    return f"0x{hr & 0xFFFFFFFF:08X}"
+
+
+class _D3D12GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_uint32),
+        ("Data2", ctypes.c_uint16),
+        ("Data3", ctypes.c_uint16),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+    @classmethod
+    def from_string(cls, value: str) -> "_D3D12GUID":
+        u = uuid.UUID(value)
+        return cls(
+            u.time_low,
+            u.time_mid,
+            u.time_hi_version,
+            (ctypes.c_ubyte * 8)(*u.bytes[8:]),
+        )
+
+
+def check_dx11() -> "dict[str, Any] | bool":
+    """
+    检查默认硬件显卡是否支持 Direct3D 11，
+    并返回它能使用的最高 Feature Level。
+
+    非 Windows 平台直接返回 True（视为支持）。
+    """
+    if os.name != "nt":
+        return True
+
+    try:
+        d3d11 = ctypes.WinDLL("d3d11.dll")
+    except OSError as exc:
+        return {
+            "runtime_available": False,
+            "supported": False,
+            "feature_level": None,
+            "reason": str(exc),
+        }
+
+    create_device = d3d11.D3D11CreateDevice
+    create_device.argtypes = [
+        ctypes.c_void_p,                  # pAdapter
+        ctypes.c_uint32,                  # DriverType
+        ctypes.c_void_p,                  # Software
+        ctypes.c_uint32,                  # Flags
+        ctypes.POINTER(ctypes.c_uint32),  # pFeatureLevels
+        ctypes.c_uint32,                  # FeatureLevels
+        ctypes.c_uint32,                  # SDKVersion
+        ctypes.POINTER(ctypes.c_void_p),  # ppDevice
+        ctypes.POINTER(ctypes.c_uint32),  # pFeatureLevel
+        ctypes.POINTER(ctypes.c_void_p),  # ppImmediateContext
+    ]
+    create_device.restype = ctypes.c_long
+
+    # 某些旧版 D3D11 运行时不认识 11_1。
+    # 因此先带 11_1 测试，收到 E_INVALIDARG 后去掉 11_1 重试。
+    attempts = [
+        [0xB100, 0xB000, 0xA100, 0xA000, 0x9300, 0x9200, 0x9100],
+        [0xB000, 0xA100, 0xA000, 0x9300, 0x9200, 0x9100],
+    ]
+
+    last_hr = -1
+
+    for index, values in enumerate(attempts):
+        levels = (ctypes.c_uint32 * len(values))(*values)
+        selected_level = ctypes.c_uint32(0)
+
+        hr = create_device(
+            None,                         # 默认适配器
+            _D3D_DRIVER_TYPE_HARDWARE,
+            None,
+            0,
+            levels,
+            len(values),
+            _D3D11_SDK_VERSION,
+            None,                         # 只探测，不创建设备
+            ctypes.byref(selected_level),
+            None,
+        )
+
+        last_hr = hr
+
+        if hr >= 0:
+            level = selected_level.value
+            return {
+                "runtime_available": True,
+                # 这里把 FL 11_0 以上定义为“完整支持 DX11”
+                "supported": level >= 0xB000,
+                "feature_level": _FEATURE_LEVEL_NAMES.get(
+                    level, f"unknown ({level:#x})"
+                ),
+                "hresult": _hresult_hex(hr),
+            }
+
+        if index == 0 and (hr & 0xFFFFFFFF) == _E_INVALIDARG:
+            continue
+
+        break
+
+    return {
+        "runtime_available": True,
+        "supported": False,
+        "feature_level": None,
+        "hresult": _hresult_hex(last_hr),
+    }
+
+
+def check_dx12() -> "dict[str, Any] | bool":
+    """
+    检查默认显卡是否可以创建 Direct3D 12 设备，
+    并返回它支持的最高 Feature Level。
+
+    非 Windows 平台直接返回 True（视为支持）。
+    """
+    if os.name != "nt":
+        return True
+
+    try:
+        d3d12 = ctypes.WinDLL("d3d12.dll")
+    except OSError as exc:
+        return {
+            "runtime_available": False,
+            "supported": False,
+            "feature_level": None,
+            "reason": str(exc),
+        }
+
+    create_device = d3d12.D3D12CreateDevice
+    create_device.argtypes = [
+        ctypes.c_void_p,                  # pAdapter
+        ctypes.c_uint32,                  # MinimumFeatureLevel
+        ctypes.POINTER(_D3D12GUID),       # riid
+        ctypes.POINTER(ctypes.c_void_p),  # ppDevice
+    ]
+    create_device.restype = ctypes.c_long
+
+    # IID_ID3D12Device
+    iid_d3d12_device = _D3D12GUID.from_string(
+        "189819F1-1DB6-4B57-BE54-1821339B85F7"
+    )
+
+    # 从高到低测试。
+    # D3D12 本身最低允许 Feature Level 11_0。
+    levels = [0xC200, 0xC100, 0xC000, 0xB100, 0xB000]
+
+    last_hr = -1
+
+    for level in levels:
+        hr = create_device(
+            None,                         # 默认适配器
+            level,
+            ctypes.byref(iid_d3d12_device),
+            None,                         # 只探测，不创建设备
+        )
+
+        last_hr = hr
+
+        # ppDevice=None 时，成功通常返回 S_FALSE，也就是 1。
+        # HRESULT >= 0 均代表成功。
+        if hr >= 0:
+            return {
+                "runtime_available": True,
+                "supported": True,
+                "feature_level": _FEATURE_LEVEL_NAMES[level],
+                "hresult": _hresult_hex(hr),
+            }
+
+    return {
+        "runtime_available": True,
+        "supported": False,
+        "feature_level": None,
+        "hresult": _hresult_hex(last_hr),
+    }
+
+
+def _dx_supported(result: "dict[str, Any] | bool") -> bool:
+    """把 check_dx11/check_dx12 的返回值归一化为是否支持。"""
+    if isinstance(result, bool):
+        return result
+    return bool(result.get("supported", False))
+
+
+def _append_dx_startup_params(
+    start_args: str, launcher_data: Optional[dict]
+) -> str:
+    """根据客户端最高 Direct3D 能力，从云端 launcher_data.extend_data 追加 dx 启动参数。
+
+    云配置示例（game_library/app?app_id=...）::
+
+        "extend_data": {
+            "hide_game_store_free_gain_button": false,
+            "dx11_startup_params": "--dx11",
+            "dx12_startup_params": "--dx12",
+        }
+
+    客户端支持 DX12 时追加 ``dx12_startup_params``，否则支持 DX11 时追加
+    ``dx11_startup_params``；两者都不支持或配置缺失则原样返回。
+    """
+    extend_data = (launcher_data or {}).get("extend_data") or {}
+    if not isinstance(extend_data, dict):
+        return start_args
+    dx12_params = str(extend_data.get("dx12_startup_params") or "")
+    dx11_params = str(extend_data.get("dx11_startup_params") or "")
+    if not dx12_params and not dx11_params:
+        return start_args
+    if os.name != "nt":
+        print(
+            "正在检测本机DX11/12配置，当前设备非Windows，请确保您的Wine/Crossover兼容层正常设置"
+        )
+    if _dx_supported(check_dx12()):
+        params = dx12_params
+    elif _dx_supported(check_dx11()):
+        params = dx11_params
+    else:
+        return start_args
+    if not params:
+        return start_args
+    return (start_args + " " + params).strip()
 
 
 def calculate_xxh64(file_path):
@@ -694,6 +937,7 @@ class Game:
                 installation.distribution_id
             ) or {}
             start_args = str(launcher_data.get("startup_params") or "")
+            start_args = _append_dx_startup_params(start_args, launcher_data)
         elif not use_fever_bridge:
             if has_manual_feature:
                 # A manually maintained cloud entry is authoritative even when
