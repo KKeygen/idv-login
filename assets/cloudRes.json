@@ -1,5 +1,5 @@
 {
-  "lastModified": 1784903783,
+  "lastModified": 1785774600,
   "version": "v6.2.1-stable",
   "hotfix": [
     {
@@ -442,25 +442,9 @@
       "need_hotfix_version": [
         "v6.2.0-beta"
       ],
-      "target_module": "gamemgr",
-      "target_commit": "5833486d58cb839b140e6de05f48ed4cf220358c",
-      "note": "保留普通启动与发烧平台模拟启动参数修复，并缓存发烧平台游戏注册表信息，避免读取游戏状态时重复扫描注册表。"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.2.0-beta"
-      ],
       "target_module": "gamecatalog",
       "target_commit": "d1986dc377f8ebc3c095998450e5515be15c2b5c",
       "note": "修复动态游戏目录分类，仅保留可由工具直接管理的PC游戏。"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.2.0-beta"
-      ],
-      "target_module": "gamemgr",
-      "target_commit": "d1986dc377f8ebc3c095998450e5515be15c2b5c",
-      "note": "修复遗忘之海等游戏提示需要使用启动器的问题，并保持已有游戏的启动配置。"
     },
     {
       "need_hotfix_version": [
@@ -477,6 +461,15 @@
       "target_module": "mitm_addon",
       "target_commit": "208c1836aab56e2f65b7dc735c75597a50e04d5f",
       "note": "修复平台托管登录在游戏完成登录前提前关闭，以及自动登录完成后未按设置关闭的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "d49b96911617dee50efda48143abfcc34fa38a5e",
+      "note": "修复了使用工具启动《遗忘之海》时，会提示“请从启动器启动游戏”弹窗的问题"
     }
   ],
   "shortcuts": [
