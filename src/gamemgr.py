@@ -955,6 +955,17 @@ class Game:
             # 规范化路径
             game_path = os.path.normpath(game_path)
             game_dir = os.path.dirname(game_path)
+            if use_fever_bridge:
+                # 模拟发烧平台托管启动：默认以安装目录作为工作目录；
+                # 仅 cloudRes.should_start_from_exe_path 名单内的游戏沿用
+                # 现有逻辑（exe 所在目录）。
+                if not cloud_res.is_should_start_from_exe_path(short_game_id):
+                    install_dir = self._root_from_executable(
+                        game_path,
+                        installation.startup_path if installation else "",
+                    )
+                    if install_dir:
+                        game_dir = install_dir
             
             # 设置进程的工作目录为游戏所在目录
             startupinfo = subprocess.STARTUPINFO()

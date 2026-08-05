@@ -347,3 +347,22 @@ class CloudRes:
         if not isinstance(domains, list):
             return []
         return domains
+
+    def should_start_from_exe_path(self):
+        """返回需要从 exe 所在目录启动的 game_id 名单。
+
+        名单记录的是游戏库接口反推出来的 game_id 字段（如 "h74"）。
+        模拟发烧平台托管启动时，名单内的游戏继续以 exe 所在目录为工作目录，
+        其余游戏以安装目录作为启动路径。
+        """
+        data = self.local_data or {}
+        names = data.get("should_start_from_exe_path") or []
+        if not isinstance(names, list):
+            return []
+        return [str(name) for name in names]
+
+    def is_should_start_from_exe_path(self, shortGameId):
+        return any(
+            cmp_game_id(item, str(shortGameId))
+            for item in self.should_start_from_exe_path()
+        )
