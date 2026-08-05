@@ -1,5 +1,5 @@
 {
-  "lastModified": 1785905167,
+  "lastModified": 1785907487,
   "version": "v6.2.1-stable",
   "hotfix": [
     {
@@ -468,8 +468,17 @@
         "v6.2.1-stable"
       ],
       "target_module": "gamemgr",
-      "target_commit": "d49b96911617dee50efda48143abfcc34fa38a5e",
-      "note": "修复了使用工具启动《遗忘之海》时，会提示“请从启动器启动游戏”弹窗的问题"
+      "target_commit": "76471588c55c6680719a4dec0304e603230e3eb7",
+      "note": "修复了蛋仔派对等游戏无法正常启动的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable"
+      ],
+      "target_module": "cloudRes",
+      "target_commit": "76471588c55c6680719a4dec0304e603230e3eb7",
+      "note": "修复了蛋仔派对等游戏无法正常启动的问题"
     }
   ],
   "shortcuts": [
