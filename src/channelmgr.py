@@ -387,6 +387,27 @@ class ChannelManager:
                         tmp_channel.request_user_login(
                             on_complete=_finish_import, login_method="web"
                         )
+                elif channle_name == "huawei":
+                    # 华为登录：QR 扫码在后台线程阻塞轮询，Web 浏览器走 Qt 主线程
+                    hua_method = login_method if login_method else "qr"
+                    if hua_method == "qr":
+                        import threading
+                        import app_state
+                        def _run_huawei_qr():
+                            try:
+                                self.logger.info("华为登录：开始扫码登录")
+                                tmp_channel.request_user_login(login_method="qr")
+                                success = tmp_channel.is_token_valid()
+                                self.logger.info(f"华为登录：is_token_valid={success}")
+                            except Exception:
+                                self.logger.exception("华为扫码登录失败")
+                                success = False
+                            app_state.run_on_main_thread(lambda: _finish_import(success))
+                        threading.Thread(target=_run_huawei_qr, daemon=True).start()
+                    else:
+                        tmp_channel.request_user_login(
+                            on_complete=_finish_import, login_method="web"
+                        )
                 else:
                     tmp_channel.request_user_login(on_complete=_finish_import)
             except Exception:

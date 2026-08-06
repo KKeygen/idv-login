@@ -1,399 +1,525 @@
+# coding=UTF-8
+"""华为渠道登录（两种模式，对齐 bilibili）。
+
+- 扫码登录（qr）：web UI 展示二维码，手机扫码确认；阻塞式，后台线程调用。
+- 网页登录（web）：内嵌浏览器打开华为登录页，URL 变为 loginSuccess.html 即视为
+  扫码成功，随后轮询一次取结果换 ST。
+
+共同流程：getqrInfo → 确认 → loginByQrCode 换 ST → silent_token（按游戏包名变换）
+签发 access_token → getGameAuthSign → gameAuthSign（游戏登录会话）。
+"""
+import base64
+import io
 import json
 import os
+import random
+import re
 import string
 import time
+from urllib.parse import parse_qs, urlparse
+
 import requests
 from faker import Faker
+
 from envmgr import genv
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
-#from channelHandler.huaLogin.consts import DEVICE,QRCODE_BODY
-from channelHandler.huaLogin.consts import DEVICE,hms_redirect_uri,hms_scope,hms_scope_g37,COMMON_PARAMS
-from channelHandler.huaLogin.utils import get_authorization_code,exchange_code_for_token
 from channelHandler.WebLoginUtils import WebBrowser
-from PyQt6.QtWebEngineCore import QWebEngineUrlRequestJob,QWebEngineUrlSchemeHandler
-from PyQt6.QtCore import pyqtSlot, QTimer
-from PyQt6.QtWidgets import QCheckBox,QComboBox,QInputDialog,QPushButton,QMessageBox
-from AutoFillUtils import RecordMgr
-DEVICE_RECORD = 'huawei_device.json'
+from channelHandler.huaLogin.consts import DEVICE, COMMON_PARAMS
+
+DEVICE_RECORD = "huawei_device.json"
+QRCODE_CACHE_KEY = "HUAWEI_QRCODE_CACHE"
+
+# ── HMS 扫码登录 HTTP 端点 ─────────────────────────────────
+
+QR_HOST = "https://id1.cloud.huawei.com"
+AS_HOST = "https://setting1.hicloud.com"
+APP_ID = "com.huawei.hwid"
+VER = "53000"
+UA = "com.huawei.hwid/5.3.0.312 (Linux; Android 12; SM-G9910) RestClient/5.3.0.312"
 
 
-class HuaweiBrowser(WebBrowser):
-    class HuaweiRequestInterceptor(QWebEngineUrlSchemeHandler):
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.parent = parent
+def _ctr_id() -> str:
+    return str(int(time.time() * 1000)) + "".join(random.choices("0123456789", k=19))
 
-        def requestStarted(self, info: QWebEngineUrlRequestJob):
-            url = info.requestUrl().toString()
-            print(f"Intercepted request: {url}")
-            if url.startswith("hms://"):
-                self.parent.handle_hms_redirect(info.requestUrl())
 
-    def __init__(self, real_game_id=None):
-        super().__init__("huawei",True)
-        self.logger=setup_logger()
-        self.real_game_id = real_game_id
-        self.pending_hms_url = None
-        self.intercept_request = self.HuaweiRequestInterceptor(self)
-        self.profile.removeAllUrlSchemeHandlers()
-        self.profile.installUrlSchemeHandler(b"hms", self.intercept_request)
-        self.autoFillMgr=RecordMgr()
-        self.records=self.autoFillMgr.list_records()
-        
-        # 如果是g37游戏，添加解除授权按钮到工具栏
-        if self.real_game_id == "g37":
-            self.deauth_button = QPushButton("解除阴阳师授权")
-            self.deauth_button.clicked.connect(self.show_deauth_page)
-            self.toolBarLayout.addWidget(self.deauth_button)
-            self.deauth_completed = False
-        #check genv for default account
-        defaultAccount=genv.get(f"defaultAutoFill{genv.get('GLOB_LOGIN_UUID','')}",None)
-        if defaultAccount:
-            #make sure default account is in records and then put it in index 0
-            if defaultAccount in self.records:
-                self.records.remove(defaultAccount)
-                self.records.insert(0,defaultAccount)
-        self.autoFillCheckBox=QCheckBox("记住账号密码")
-        self.toolBarLayout.addWidget(self.autoFillCheckBox)
-        self.autoFillCheckBox.setChecked(genv.get("autoFill",False))
-        self.autoFillCheckBox.stateChanged.connect(self.saveAutoFillOption)
-        
-        self.bypassCheckBox=QCheckBox("跳过二次验证")
-        self.toolBarLayout.addWidget(self.bypassCheckBox)
-        self.bypassCheckBox.setChecked(genv.get("bypass_double_check",False))
-        self.bypassCheckBox.stateChanged.connect(self.saveByPassOption)
+def render_qr_base64(content: str) -> str:
+    """将文本渲染为 QR 码 PNG，返回 base64 字符串（不含 data: 前缀）。"""
+    import qrcode
 
-        #增加一个下拉菜单QComboBox
-        self.accountComboBox=QComboBox()
-        self.toolBarLayout.addWidget(self.accountComboBox)
-        self.accountComboBox.addItems(self.records)
-        self.accountComboBox.currentIndexChanged.connect(self.onAccountChanged)
-        self.accountComboBox.textActivated.connect(self.onAccountChanged)
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=2,
+    )
+    qr.add_data(content)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
-        #增加一个按钮，文本为“填充”
-        self.fillButton=QPushButton("填充")
-        self.toolBarLayout.addWidget(self.fillButton)
-        self.fillButton.clicked.connect(self.onAccountChanged)
 
-        self.deleteButton=QPushButton("删除")
-        self.toolBarLayout.addWidget(self.deleteButton)
-        self.deleteButton.clicked.connect(self.deleteAccount)
+class HwQrSession:
+    """维护华为扫码登录的会话 cookie（JSESSIONID 等）。"""
 
-    def deleteAccount(self):
-        account=self.accountComboBox.currentText()
-        self.autoFillMgr.remove_record(account)
-        self.accountComboBox.removeItem(self.accountComboBox.currentIndex())
-        if len(self.records)>0:
-            self.accountComboBox.setCurrentIndex(0)
-        self.logger.info(f"删除账号{account}")
+    def __init__(self):
+        self.logger = setup_logger()
+        self.session = requests.Session()
+        self._last_qr_code = ""
 
-    def saveByPassOption(self):
-        checked=self.bypassCheckBox.isChecked()
-        if checked:
-            #show warning, QMessagebox
-            reply=QMessageBox.warning(self,"警告","跳过二次验证会使账号密码明文存储在本机内，存在安全风险。\n开启后，请不要将工作目录下的文件随意分享给他人。是否继续？",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
-            if reply==QMessageBox.StandardButton.No:
-                self.bypassCheckBox.setChecked(False)
-                return
-        genv.set("bypass_double_check",checked,True)
+    def post(self, url: str, body: str, ctype: str):
+        headers = {
+            "Connection": "Keep-Alive",
+            "Content-Type": ctype,
+            "Authorization": str(int(time.time() * 1000)),
+            "User-Agent": UA,
+        }
+        full = url + "&ctrID=" + _ctr_id()
+        r = self.session.post(
+            full,
+            data=body.encode("utf-8") if isinstance(body, str) else body,
+            headers=headers,
+            timeout=30,
+            verify=should_verify_ssl(),
+        )
+        return r.status_code, r.text
 
-    def onAccountChanged(self):
-        #get account
-        account=self.accountComboBox.currentText()
-        #check if has * mask
-        if "*" in account:
-            #ask for full account
-            if self.bypassCheckBox.isChecked():
-                text,ok=QInputDialog.getText(self,"关闭二次验证","密码已被加密，请输入完整的账号来解密，本次解密后该账号不再需要二次验证。",text=account)
-            else:
-                text,ok=QInputDialog.getText(self,"二次验证","密码已被加密，请输入完整的账号来解密",text=account)
-            if ok:
-                #find password
-                password=self.autoFillMgr.find_password(text)
-                if password:
-                    self.insertAcctPwd(text,password)
-                    if self.bypassCheckBox.isChecked():
-                        self.autoFillMgr.untruncate_username(text)
-                else:
-                    self.logger.info("未找到密码，账号输入错误或者未保存")
-        else:
-            #find password
-            password=self.autoFillMgr.find_password(account)
-            if password:
-                self.insertAcctPwd(account,password)
-            else:
-                self.logger.info("未找到密码，账号输入错误或者未保存")
+    def get_qr_info(self):
+        """取二维码信息。
 
-    def insertAcctPwd(self,account,password):
-        js_code = f"""
-            function inputVal(t,val){{
-                let evt = document.createEvent('HTMLEvents');
-                evt.initEvent('input', true, true);
-                t.value=val;
-                t.dispatchEvent(evt)
-            }};
-            (function() {{
-                let inputs = document.querySelectorAll('input');
-                let accountInput = Array.prototype.find.call(inputs, input => input.getAttribute('ht') === 'input_pwdlogin_account');
-                let pwdInput = Array.prototype.find.call(inputs, input => input.getAttribute('ht') === 'input_pwdlogin_pwd');
-                if (accountInput && pwdInput) {{
-                    //activate
-                    accountInput.focus();
-                    inputVal(accountInput,"{account}");
-                    pwdInput.focus();
-                    inputVal(pwdInput,"{password}");
-                    return true;
-                }}
-                return false;
-            }})();
+        Returns:
+            dict: {content, qrCode, qrToken, sessionID, expiredTime, ...}
+            失败返回 None。
         """
-        self.page.runJavaScript(js_code)
-    def saveAutoFillOption(self):
-        checked=self.autoFillCheckBox.isChecked()
-        genv.set("autoFill",checked,True)
+        url = (
+            f"{QR_HOST}/DimensionalCode/getqrInfo?Version={VER}"
+            f"&cVersion=1&blackScreen=0&appBrand=HUAWEI"
+        )
+        body = (
+            "version=53000&appID=com.huawei.hwid&loginChannel=7000700"
+            "&reqClientType=701&confirmFlag=1&lang=zh_CN"
+        )
+        try:
+            st, content = self.post(url, body, "application/x-www-form-urlencoded; charset=UTF-8")
+            if st != 200:
+                self.logger.error(f"getqrInfo HTTP {st}: {content[:300]}")
+                return None
+            data = json.loads(content)
+            self._last_qr_code = str(data.get("qrCode", ""))
+            return data
+        except Exception as e:
+            self.logger.error(f"getqrInfo 请求异常: {e}")
+            return None
 
-    def verify(self, url):
-        return url.startswith("hms://")
+    def poll(self, qr_token: str):
+        """单次轮询扫码状态。
 
-    def parseReslt(self, url):
+        Returns:
+            dict | None: 解析后的响应体；已确认时含 userID/userAccount/code。
+            未确认或解析失败返回 None。
+        """
+        url = (
+            f"{QR_HOST}/DimensionalCode/async?Version={VER}"
+            f"&cVersion=1&blackScreen=0&appBrand=HUAWEI"
+        )
+        try:
+            st, content = self.post(url, f"qrToken={qr_token}", "application/x-www-form-urlencoded; charset=UTF-8")
+            if st != 200:
+                return None
+            return json.loads(content)
+        except Exception:
+            return None
+
+    def login_by_qrcode(self, scan_result: dict, device_uuid: str):
+        """用扫码结果换取 ST。
+
+        Args:
+            scan_result: poll() 返回的已确认结果。
+            device_uuid: 设备 uuid（同时用于 deviceID 与 silent_token 的 device_id）。
+
+        Returns:
+            tuple[str, str]: (serviceToken, 原始 XML 响应)；失败时 serviceToken 为空。
+        """
+        uid = str(scan_result.get("userID") or "")
+        account = str(scan_result.get("userAccount") or "")
+        code = str(scan_result.get("code") or "")
+        site = str(scan_result.get("siteID") or "1")
+        acct_type = str(scan_result.get("accountType") or "0")
+        qr_code = self._last_qr_code
+
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<LoginByQrCodeReq>"
+            f"<version>{VER}</version>"
+            f"<accountType>{acct_type}</accountType>"
+            f"<userAccount>{account}</userAccount>"
+            f"<userID>{uid}</userID>"
+            f"<qrCode>{qr_code}</qrCode>"
+            f"<qrSiteID>{site}</qrSiteID>"
+            f"<code>{code}</code>"
+            f"<appID>{APP_ID}</appID>"
+            "<reqClientType>7</reqClientType>"
+            "<loginChannel>7000000</loginChannel>"
+            "<osVersion>12</osVersion>"
+            "<plmn></plmn>"
+            f"<uuid>{device_uuid}</uuid>"
+            "<languageCode>zh_CN</languageCode>"
+            "<deviceSecure>0</deviceSecure>"
+            "<mainAcctLogin>1</mainAcctLogin>"
+            "<clientID></clientID>"
+            "<riskToken></riskToken>"
+            "<deviceInfo>"
+            f"<deviceID>{device_uuid}</deviceID>"
+            "<deviceType>6</deviceType>"
+            "<terminalType>Android</terminalType>"
+            "</deviceInfo>"
+            "<loginType>1</loginType>"
+            "</LoginByQrCodeReq>"
+        )
+        url = (
+            f"{AS_HOST}/AccountServer/IDM/loginByQrCode?Version={VER}"
+            f"&cVersion=1&blackScreen=0&appBrand=HUAWEI"
+        )
+        try:
+            st, content = self.post(url, xml, "text/html; charset=UTF-8")
+            if st != 200:
+                self.logger.error(f"loginByQrCode HTTP {st}: {content[:300]}")
+                return "", content
+            m = re.search(r"<serviceToken>([^<]+)</serviceToken>", content)
+            if not m:
+                self.logger.error(f"loginByQrCode 未返回 serviceToken: {content[:300]}")
+                return "", content
+            return m.group(1), content
+        except Exception as e:
+            self.logger.error(f"loginByQrCode 请求异常: {e}")
+            return "", ""
+
+
+def transform_service_token(st: str, package_name: str) -> str:
+    """ST 变换：前20字符 + SHA256(ST + ":" + 游戏包名)。"""
+    import hashlib
+
+    if not st:
+        return ""
+    digest = hashlib.sha256((st + ":" + package_name).encode("utf-8")).hexdigest()
+    return st[:20] + digest
+
+
+def silent_token(st: str, package_name: str, client_id: str, device_id: str):
+    """用 ST 为指定游戏包名签发 access_token/refresh_token。
+
+    Returns:
+        dict: silent_token 响应；成功含 access_token/refresh_token/open_id。
+    """
+    from urllib.parse import urlencode
+
+    transformed = transform_service_token(st, package_name)
+    q = urlencode({"client_id": client_id, "sdkVersion": "61400300"})
+    url = f"https://oauth-login.platform.hicloud.com/oauth2/v3/silent_token?{q}"
+    body = urlencode({
+        "grant_type": "service_token",
+        "service_token": transformed,
+        "scope": "openid",
+        "device_type": "6",
+        "package_name": package_name,
+        "siteId": "1",
+        "device_id": device_id,
+        "need_code": "true",
+        "client_id": client_id,
+    })
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Connection": "Keep-Alive",
+        "Authorization": str(int(time.time() * 1000)),
+        "User-Agent": UA,
+    }
+    try:
+        r = requests.post(
+            url + "&ctrID=" + _ctr_id(),
+            data=body.encode("utf-8"),
+            headers=headers,
+            timeout=30,
+            verify=should_verify_ssl(),
+        )
+        return r.json()
+    except Exception as e:
+        setup_logger().error(f"silent_token 请求异常: {e}")
+        return {}
+
+
+class HuaweiLoginBrowser(WebBrowser):
+    """网页登录：打开华为登录页；URL 跳转到 loginSuccess.html 视为成功。"""
+
+    def __init__(self, login_url: str):
+        super().__init__("huawei", True)
+        self.logger = setup_logger()
+        self.setWindowTitle("华为账号登录")
+        self._login_url = login_url
+
+    def verify(self, url: str) -> bool:
+        parsed = urlparse(url)
+        if not parsed.path.endswith("/CAS/mobile/loginSuccess.html"):
+            return False
+        qs = parse_qs(parsed.query)
+        return qs.get("isSuccess", ["0"])[0] == "1"
+
+    def parseReslt(self, url: str) -> bool:
+        print(url)
         self.result = url
         return True
 
-    @pyqtSlot(bool)
-    def on_load_finished(self, ok):
-        if ok:
-            if len(self.autoFillMgr.list_records())==1:
-                pass
-
-
-
-    def invokeSaveAccountPwdPair(self):
-        if self.autoFillCheckBox.isChecked():
-            js_code = r"""
-                (function() {
-                let inputs = document.querySelectorAll('input');
-                let accountInput = Array.prototype.find.call(inputs, input => input.getAttribute('ht') === 'input_pwdlogin_account');
-                let pwdInput = Array.prototype.find.call(inputs, input => input.getAttribute('ht') === 'input_pwdlogin_pwd');
-                if (accountInput && pwdInput && accountInput.value && pwdInput.value) {
-                    //build json
-                    let json = {
-                        account: accountInput.value,
-                        pwd: pwdInput.value
-                    };
-                    return JSON.stringify(json);
-                }
-                return JSON.stringify({});
-                })();
-            """
-            self.page.runJavaScript(js_code, self.js_callback)
-        else:
-            self.logger.info("未开启记住账密")
-
-    def handle_hms_redirect(self, url):
-        self.pending_hms_url = url
-        if self.autoFillCheckBox.isChecked():
-            self.invokeSaveAccountPwdPair()
-            QTimer.singleShot(300, self.finish_pending_hms_redirect)
-        else:
-            self.finish_pending_hms_redirect()
-
-    def finish_pending_hms_redirect(self):
-        if self.pending_hms_url is None:
-            return
-        pending_url = self.pending_hms_url
-        self.pending_hms_url = None
-        self.notify(pending_url)
-
-    def js_callback(self, result):
-        if result:
-            data=json.loads(result)
-            #check key
-            if "account" in data and "pwd" in data:
-                if self.autoFillCheckBox.isChecked():
-                    self.logger.info("读取账号密码成功")
-                    if self.bypassCheckBox.isChecked():
-                        record=self.autoFillMgr.add_untruncate_record(data["account"],data["pwd"])
-                    else:
-                        record=self.autoFillMgr.add_record(data["account"],data["pwd"])
-                    genv.set(f"defaultAutoFill{genv.get('GLOB_LOGIN_UUID','')}",record.truncated_username,True)
-        self.finish_pending_hms_redirect()
-
-    def show_deauth_page(self):
-        """显示解除授权页面"""
-        deauth_url = "https://id1.cloud.huawei.com/AMW/portal/userCenter/oauth/appList.html?lang=zh-cn"
-        self.set_url(deauth_url)
-        self.deauth_button.setText("我已解除授权")
-        self.deauth_button.clicked.disconnect()
-        self.deauth_button.clicked.connect(self.confirm_deauth)
-    
-    def confirm_deauth(self):
-        """确认解除授权完成"""
-        self.deauth_completed = True
-        self.deauth_button.hide()
-        # 继续正常的OAuth流程
-        if hasattr(self, 'oauth_url'):
-            super().set_url(self.oauth_url)
-    
-    def run(self):
-        # 如果是g37游戏，先显示解除授权页面
-        if self.real_game_id == "g37":
-            self.show_deauth_page()
-            self.show()
-            # 等待用户完成解除授权
-            while not self.deauth_completed:
-                from PyQt6.QtWidgets import QApplication
-                QApplication.processEvents()
-        
-        # 调用父类的run方法
-        return super().run()
-    
-    def set_url(self, url):
-        # 如果是g37游戏且是OAuth URL，先保存起来
-        if self.real_game_id == "g37" and "oauth-login.cloud.huawei.com" in url:
-            self.oauth_url = url
-            return
-        super().set_url(url)
-
-    def notify(self, url):
-        if self.verify(url.toString()):
-            if self.parseReslt(url.toString()):
-                try:
-                    self.profile.removeAllUrlSchemeHandlers()
-                except Exception:
-                    pass
-                self.cleanup()
 
 class HuaweiLogin:
+    """华为登录：qr 扫码 / web 浏览器两种模式 → ST → 游戏 AT → gameAuthSign。"""
 
-    def __init__(self, channelConfig, refreshToken=None, real_game_id=None):
-
+    def __init__(self, channelConfig, serviceToken=None, real_game_id=None):
         os.chdir(os.path.join(os.environ["PROGRAMDATA"], "idv-login"))
         self.logger = setup_logger()
         self.channelConfig = channelConfig
-        self.refreshToken = refreshToken
-        self.accessToken=None
-        self.code_verifier=None
-        self.lastLoginTime = 0
+        self.serviceToken = serviceToken
+        self.accessToken = None
         self.expiredTime = 0
+        self._at_game = ""  # accessToken 对应的短 game_id
         self.real_game_id = real_game_id
-        self._active_browser: HuaweiBrowser = None  # 异步模式下保持强引用
+        self._qr_cancelled = False
+        self._active_browser: HuaweiLoginBrowser = None
+        self.device = self._load_or_create_device()
+        self._ensure_device_uuid()
+
+    # ── 设备 ────────────────────────────────────────────────
+
+    def _load_or_create_device(self):
         if os.path.exists(DEVICE_RECORD):
             with open(DEVICE_RECORD, "r", encoding="utf-8") as f:
-                self.device = json.load(f)
-        else:
-            self.device = self.makeFakeDevice()
+                return json.load(f)
+        device = self.makeFakeDevice()
+        from secure_write import write_json_restricted
+        write_json_restricted(DEVICE_RECORD, device)
+        return device
+
+    def _ensure_device_uuid(self):
+        if not str(self.device.get("device_uuid", "") or "").strip():
+            import uuid as uuid_mod
+            self.device["device_uuid"] = str(uuid_mod.uuid4())
             from secure_write import write_json_restricted
             write_json_restricted(DEVICE_RECORD, self.device)
+
+    def _device_uuid(self) -> str:
+        return str(self.device.get("device_uuid", "") or "").strip()
+
+    def _device_id(self) -> str:
+        return self._device_uuid().replace("-", "")[:16]
 
     def makeFakeDevice(self):
         fake = Faker()
         device = DEVICE.copy()
         manufacturers = ["Samsung", "Huawei", "Xiaomi", "OPPO"]
-        #deviceId is a 64 char string 
-        import random
-
-        device["deviceId"] = ''.join(random.choice('abcdef' + string.digits) for _ in range(64))
+        import uuid as uuid_mod
+        device["deviceId"] = "".join(random.choice("abcdef" + string.digits) for _ in range(64))
+        device["device_uuid"] = str(uuid_mod.uuid4())
         device["brand"] = random.choice(manufacturers)
-        device['romVersion']=fake.lexify(
-        text="V???IR release-keys", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    )
-        device["androidVersion"]=random.choice(["12","13","11"])
-        device["manufacturer"]=device["brand"]
-        device["phoneType"] = fake.lexify(text="SM-????", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        device["romVersion"] = fake.lexify(
+            text="V???IR release-keys", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        )
+        device["androidVersion"] = random.choice(["12", "13", "11"])
+        device["manufacturer"] = device["brand"]
+        device["phoneType"] = fake.lexify(
+            text="SM-????", letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        )
         return device
-    
-    def verify(self,code):
-        return code.startswith("hms://")
-    
-    def newOAuthLogin(self, on_complete=None):
-        client_id = str(self.channelConfig["app_id"])
-        redirect_uri = hms_redirect_uri
-        
-        # 根据游戏ID选择scope
-        if self.real_game_id == "g37":
-            scope = hms_scope_g37
-        else:
-            scope = hms_scope
-            
-        auth_url, self.code_verifier = get_authorization_code(client_id, redirect_uri, scope)
-        huaWebLogin=HuaweiBrowser(self.real_game_id)
-        huaWebLogin.set_url(auth_url)
-        res=(huaWebLogin.run())
 
-        if res is None:
-            # 异步模式：浏览器已显示，等待用户登录完成
-            # 必须保持对 browser 的强引用，否则函数返回后局部变量被销毁，
-            # 导致 profile 被释放而 WebEnginePage 仍在运行。
-            self._active_browser = huaWebLogin
-            if on_complete is not None:
-                def _on_async_done(browser):
-                    self._active_browser = None  # 登录完成后释放引用
-                    try:
-                        if not browser.result or browser.result == "":
-                            self.logger.warning("华为登录未完成（用户取消或窗口关闭）")
-                            on_complete(False)
-                            return
-                        self.standardCallback(browser.result)
-                        on_complete(self.refreshToken is not None)
-                    except Exception:
-                        self.logger.exception("华为异步登录处理失败")
-                        on_complete(False)
-                huaWebLogin._async_completion_callback = _on_async_done
-            return
+    # ── 二维码状态缓存（web UI 轮询展示，扫码模式用） ───────
 
-        self.standardCallback(res)
+    def _update_qrcode_cache(self, status, qrcode_base64="", uuid=""):
+        cache = genv.get(QRCODE_CACHE_KEY, {})
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[self.real_game_id if self.real_game_id else "_default"] = {
+            "status": status,
+            "qrcode_base64": qrcode_base64,
+            "uuid": uuid,
+            "timestamp": int(time.time()),
+        }
+        genv.set(QRCODE_CACHE_KEY, cache)
 
-    def standardCallback(self, url, cookies={}):
-        client_id = str(self.channelConfig["app_id"])
-        redirect_uri = hms_redirect_uri
-        code=""
-        try:
-            code = url.split("code=")[1]
-        except Exception as e:
-            print("获取code失败,Code为空")
-            return False
-        #进行urldecode
-        import urllib.parse
-        code=urllib.parse.unquote(code)
-        code=code.replace(" ","+")
-        token_response = exchange_code_for_token(client_id, code, self.code_verifier, redirect_uri)
-        self.refreshToken = token_response.get("refresh_token")
-        self.lastLoginTime=int(time.time())
-        self.expiredTime=self.lastLoginTime+token_response.get("expires_in")
-        self.accessToken=token_response.get("access_token")
+    def cancel_qr(self):
+        """取消正在进行的扫码轮询（web UI 关闭弹窗时调用）。"""
+        self._qr_cancelled = True
 
+    # ── 扫码登录（qr：web UI 展示二维码，阻塞轮询） ─────────
 
-    def initAccountData(self) -> object:
-        """获取账号数据。
-        
-        调用者需要确保在调用前 accessToken 是有效的。
-        如果 accessToken 过期或为 None，应先调用 newOAuthLogin() 获取新 token。
+    def qrLogin(self):
+        """扫码登录主流程（阻塞，直到扫码完成/超时/取消）。
+
+        由调用方（manual_import）在后台线程执行。
+
+        Returns:
+            bool: 是否成功获取 ST。
         """
-        if self.refreshToken is None:
-            return None
-        if self.accessToken is None:
-            return None
-        
-        url = "https://jgw-drcn.jos.dbankcloud.cn/gameservice/api/gbClientApi"
+        self._qr_cancelled = False
+        self._update_qrcode_cache("loading")
 
+        qr_session = HwQrSession()
+        qr_info = qr_session.get_qr_info()
+        if not qr_info:
+            self.logger.error("获取华为登录二维码失败")
+            self._update_qrcode_cache("failed")
+            return False
+
+        qr_b64 = render_qr_base64(str(qr_info.get("content", "")))
+        self._update_qrcode_cache("ready", qrcode_base64=qr_b64, uuid=self._device_uuid())
+
+        scan = self._poll_scan(qr_session, qr_info)
+        if scan is None:
+            if self._qr_cancelled:
+                self.logger.info("华为扫码登录已取消")
+                self._update_qrcode_cache("cancelled")
+            else:
+                self.logger.warning("华为扫码登录超时")
+                self._update_qrcode_cache("expired")
+            return False
+
+        self._update_qrcode_cache("scanned")
+        st, _resp = qr_session.login_by_qrcode(scan, self._device_uuid())
+        if not st:
+            self.logger.error("华为扫码换 ST 失败")
+            self._update_qrcode_cache("failed")
+            return False
+
+        self.serviceToken = st
+        self.logger.info("华为扫码登录成功，已获取 ST")
+        self._update_qrcode_cache("verified")
+        return True
+
+    def _poll_scan(self, qr_session, qr_info):
+        qr_token = str(qr_info.get("qrToken", ""))
+        try:
+            expired = int(qr_info.get("expiredTime", 0))
+        except (TypeError, ValueError):
+            expired = 0
+        deadline = (expired / 1000.0 - 5) if expired else time.time() + 180
+        while time.time() < deadline:
+            if self._qr_cancelled:
+                return None
+            r = qr_session.poll(qr_token)
+            if isinstance(r, dict) and r.get("userID"):
+                return r
+            time.sleep(0.5)
+        return None
+
+    # ── 网页登录（web：内嵌浏览器打开登录页） ───────────────
+
+    def webLogin(self, on_complete=None):
+        """网页登录：getqrInfo → 浏览器打开登录页 → loginSuccess → 轮询换 ST。"""
+        qr_session = HwQrSession()
+        qr_info = qr_session.get_qr_info()
+        if not qr_info:
+            self.logger.error("获取华为登录二维码信息失败")
+            if on_complete is not None:
+                on_complete(False)
+            return False
+
+        login_url = str(qr_info.get("content", ""))
+        qr_token = str(qr_info.get("qrToken", ""))
+        browser = HuaweiLoginBrowser(login_url)
+        browser.set_url(login_url)
+        self._active_browser = browser
+        resp = browser.run()
+
+        if resp is None:
+            if on_complete is not None:
+                def _on_async_done(b):
+                    self._active_browser = None
+                    try:
+                        self._exchange_st(qr_session, qr_token)
+                        success = self.serviceToken is not None
+                    except Exception:
+                        self.logger.exception("华为异步登录回调失败")
+                        success = False
+                    on_complete(success)
+                browser._async_completion_callback = _on_async_done
+            return None
+
+        # 同步模式：run() 已阻塞至登录完成
+        self._exchange_st(qr_session, qr_token)
+        return self.serviceToken is not None
+
+    def _exchange_st(self, qr_session, qr_token):
+        """URL 已跳转 loginSuccess，poll 一次取扫码结果并换 ST。"""
+        r = qr_session.poll(qr_token)
+        if not (isinstance(r, dict) and r.get("userID")):
+            self.logger.error("登录成功后轮询未取到扫码结果")
+            return
+        st, _resp = qr_session.login_by_qrcode(r, self._device_uuid())
+        if not st:
+            self.logger.error("华为登录换 ST 失败")
+            return
+        self.serviceToken = st
+        self.logger.info("华为登录成功，已获取 ST")
+
+    # ── 游戏 token / 账号数据 ───────────────────────────────
+
+    def ensure_game_token(self, game_cfg, short_game_id):
+        """为指定游戏保证有效 accessToken（ST → silent_token）。
+
+        Returns:
+            bool: 是否成功。
+        """
+        now = int(time.time())
+        if (
+            self.accessToken
+            and self._at_game == short_game_id
+            and now < self.expiredTime - 60
+        ):
+            return True
+        if not self.serviceToken:
+            self.logger.warning("华为缺少 ST，无法签发游戏 token")
+            return False
+        package_name = str(game_cfg.get("package_name") or "").strip()
+        client_id = str(game_cfg.get("app_id") or "").strip()
+        if not package_name or not client_id:
+            self.logger.error(f"华为渠道配置缺失 package_name/app_id: {game_cfg}")
+            return False
+        resp = silent_token(self.serviceToken, package_name, client_id, self._device_id())
+        if not isinstance(resp, dict) or "access_token" not in resp:
+            self.logger.error(f"silent_token 签发失败: {resp}")
+            self.accessToken = None
+            return False
+        self.accessToken = resp["access_token"]
+        try:
+            self.expiredTime = now + int(resp.get("expire_in", 3600))
+        except (TypeError, ValueError):
+            self.expiredTime = now + 3600
+        self._at_game = short_game_id
+        self.logger.info(f"华为 silent_token 签发成功 (game={short_game_id})")
+        return True
+
+    def initAccountData(self, game_cfg):
+        """用 accessToken 获取账号数据（getGameAuthSign）。
+
+        调用者需先 ensure_game_token() 保证 accessToken 有效。
+        """
+        if not self.accessToken:
+            return None
+        url = "https://jgw-drcn.jos.dbankcloud.cn/gameservice/api/gbClientApi"
         headers = {
             "User-Agent": f"com.huawei.hms.game/6.14.0.300 (Linux; Android 12; {self.device.get('phoneType')}) RestClient/7.0.6.300",
-            "Content-Type": "application/x-www-form-urlencoded"
+            "Content-Type": "application/x-www-form-urlencoded",
         }
-
         body = COMMON_PARAMS.copy()
-        body.update(self.device)
+        body.update({k: v for k, v in self.device.items() if k != "device_uuid"})
         body["method"] = "client.hms.gs.getGameAuthSign"
-        body["extraBody"] = f'json={{"appId":"{str(self.channelConfig["app_id"])}"}}'
+        body["extraBody"] = f'json={{"appId":"{game_cfg.get("app_id")}"}}'
         body["accessToken"] = self.accessToken
+        try:
+            r = requests.post(url, headers=headers, data=body, verify=should_verify_ssl())
+            return r.json()
+        except Exception as e:
+            self.logger.error(f"getGameAuthSign 请求异常: {e}")
+            return None
 
-        response = requests.post(url, headers=headers, data=body, verify=should_verify_ssl())
-        return response.json()
-    
     def is_token_expired(self) -> bool:
-        """检查 accessToken 是否过期或无效"""
         if self.accessToken is None:
             return True
-        now = int(time.time())
-        return now >= self.expiredTime
+        return int(time.time()) >= self.expiredTime
