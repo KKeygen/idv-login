@@ -46,6 +46,20 @@ def _ctr_id() -> str:
     return str(int(time.time() * 1000)) + "".join(random.choices("0123456789", k=19))
 
 
+def parse_xml_text(xml_content, tag: str) -> str:
+    """从 XML 中取指定标签的文本。
+
+    用解析器而非正则，对换行/标签属性/嵌套结构更健壮。
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_content or "")
+        return (root.findtext(".//" + tag) or "").strip()
+    except Exception:
+        return ""
+
+
 def render_qr_base64(content: str) -> str:
     """将文本渲染为 QR 码 PNG，返回 base64 字符串（不含 data: 前缀）。"""
     import qrcode
@@ -193,11 +207,11 @@ class HwQrSession:
             if st != 200:
                 self.logger.error(f"loginByQrCode HTTP {st}: {content[:300]}")
                 return "", content
-            m = re.search(r"<serviceToken>([^<]+)</serviceToken>", content)
-            if not m:
+            service_token = parse_xml_text(content, "serviceToken")
+            if not service_token:
                 self.logger.error(f"loginByQrCode 未返回 serviceToken: {content[:300]}")
                 return "", content
-            return m.group(1), content
+            return service_token, content
         except Exception as e:
             self.logger.error(f"loginByQrCode 请求异常: {e}")
             return "", ""
@@ -373,6 +387,7 @@ class HuaweiLogin:
         self.expiredTime = 0
         self._at_game = ""  # accessToken 对应的短 game_id
         self.real_game_id = real_game_id
+        self.nickName = ""
         self._qr_cancelled = False
         self._active_browser: HuaweiLoginBrowser = None
         self.device = self._load_or_create_device()
@@ -479,6 +494,7 @@ class HuaweiLogin:
             return False
 
         self.serviceToken = st
+        self.nickName = self._extract_nick_name(_resp)
         self.logger.info("华为扫码登录成功，已获取 ST")
         self._update_qrcode_cache("verified")
         return True
@@ -551,7 +567,11 @@ class HuaweiLogin:
             self.logger.error("华为登录换 ST 失败")
             return
         self.serviceToken = st
+        self.nickName = self._extract_nick_name(_resp)
         self.logger.info("华为登录成功，已获取 ST")
+
+    def _extract_nick_name(self, xml_content) -> str:
+        return parse_xml_text(xml_content, "nickName")
 
     # ── 游戏 token / 账号数据 ───────────────────────────────
 

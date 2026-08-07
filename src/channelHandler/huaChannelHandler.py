@@ -96,22 +96,34 @@ class huaweiChannel(channelmgr.channel):
         """
         genv.set("GLOB_LOGIN_UUID", self.uuid)
 
+        def _apply_nick_name():
+            nick = self.huaweiLogin.nickName
+            if nick:
+                self.name = nick
+                self.user_info["name"] = nick
+
         if login_method == "qr":
             # 扫码登录：阻塞式，由 manual_import 在后台线程调用
             self.huaweiLogin.qrLogin()
             self.serviceToken = self.huaweiLogin.serviceToken
+            if self.serviceToken:
+                _apply_nick_name()
             return self.serviceToken is not None
 
         # 网页登录
         if on_complete is not None:
             def _on_done(_success):
                 self.serviceToken = self.huaweiLogin.serviceToken
+                if self.serviceToken:
+                    _apply_nick_name()
                 on_complete(self.serviceToken is not None)
             self.huaweiLogin.webLogin(on_complete=_on_done)
             return
 
         self.huaweiLogin.webLogin()
         self.serviceToken = self.huaweiLogin.serviceToken
+        if self.serviceToken:
+            _apply_nick_name()
         return self.serviceToken is not None
 
     def is_token_valid(self):
