@@ -191,7 +191,10 @@ class huaweiChannel(channelmgr.channel):
 
         str_data = json_data.copy()
         str_data.update({"username": self.uniSDKJSON["username"]})
-        str_data = "&".join([f"{k}={v}" for k, v in str_data.items()])
+        # value 需 URL 编码：gameAuthSign 是 base64（含 + / = / /），游戏端按
+        # application/x-www-form-urlencoded 解析，裸 + 会被当成空格导致 session 损坏。
+        from urllib.parse import quote
+        str_data = "&".join([f"{k}={quote(str(v), safe='')}" for k, v in str_data.items()])
 
         res["SAUTH_STR"] = base64.b64encode(str_data.encode()).decode()
         res["SAUTH_JSON"] = base64.b64encode(json.dumps(json_data).encode()).decode()
