@@ -30,7 +30,7 @@ import const
 from login_stack_mgr import LoginStackManager
 from cloudSync import CloudSyncManager
 from cloudRes import CloudRes
-from channelHandler.channelUtils import getShortGameId
+from channelHandler.channelUtils import cmp_game_id, getShortGameId
 
 
 class LocalRequestHandler:
@@ -323,19 +323,17 @@ class LocalRequestHandler:
         cache_key = {
             "myapp": "WECHAT_QRCODE_CACHE",
             "bilibili_sdk": "BILIBILI_QRCODE_CACHE",
+            "huawei": "HUAWEI_QRCODE_CACHE",
         }.get(channel, "WECHAT_QRCODE_CACHE")
 
         cache = genv.get(cache_key, {})
         if not isinstance(cache, dict) or not cache:
             return None
-        if game_id and game_id in cache:
-            return cache.get(game_id)
         if game_id:
+            if game_id in cache:
+                return cache.get(game_id)
             for key in cache:
-                common_len = sum(
-                    1 for a, b in zip(reversed(game_id), reversed(key)) if a == b
-                )
-                if common_len >= 3:
+                if cmp_game_id(game_id, key):
                     return cache[key]
         return cache.get("_default")
 
@@ -401,11 +399,14 @@ class LocalRequestHandler:
         })
 
     def _cancel_qr(self, args, body, method):
-        """取消正在进行的 B站 二维码轮询。"""
+        """取消正在进行的二维码轮询（B站 / 华为）。"""
         try:
             pending = getattr(app_state.channels_helper, "_pending_login_channel", None)
             if pending and hasattr(pending, "biliLogin"):
                 pending.biliLogin.cancel_qr()
+                return self._json_response(200, {"success": True})
+            if pending and hasattr(pending, "huaweiLogin"):
+                pending.huaweiLogin.cancel_qr()
                 return self._json_response(200, {"success": True})
         except Exception:
             self.logger.exception("取消 QR 失败")
@@ -953,7 +954,12 @@ class LocalRequestHandler:
             for dist_id, launcher_data, file_info in distribution_details:
                 active_task = NativeTaskRegistry.find_pending_download(gid, dist_id)
                 target_ver = file_info.get("version_code", "") if file_info else ""
-                can_download = CloudRes().is_downloadable(short_gid) and file_info is not None
+                # fever_display（type=3 模拟器游戏）不视为可下载
+                can_download = (
+                    catalog_item.get("platform_type", "fever") == "fever"
+                    and CloudRes().is_downloadable(short_gid)
+                    and file_info is not None
+                )
                 files = file_info.get("files", []) if file_info else []
                 matching_installations = [
                     item for item in installations
