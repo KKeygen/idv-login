@@ -56,7 +56,8 @@ class FeverBridge:
         self._session_queue = deque()
         self._active_session = None
         self._next_session_serial = 0
-        self._consumed_sessions = set()
+        self._consumed_sessions = {}
+        self._bridge_launch_intents = set()
         self._liveness_stop = threading.Event()
         self._liveness_thread = None
 
@@ -91,8 +92,51 @@ class FeverBridge:
         if not self.ipc.start():
             return False
         self._ensure_liveness_watchdog()
+        with self._lock:
+            self._bridge_launch_intents.add(short_id)
         app_state.fever_bridge_target_game_ids.add(short_id)
         return True
+
+    def note_native_launch(self, game_id: str) -> None:
+        """Record an explicit native launch without touching the game process."""
+        short_id = getShortGameId(game_id)
+        if not short_id:
+            return
+        with self._lock:
+            self._bridge_launch_intents.discard(short_id)
+            has_owner = self._has_registered_process_locked(short_id)
+        if not has_owner:
+            app_state.fever_bridge_target_game_ids.discard(short_id)
+
+    def _registered_sessions_locked(self):
+        return tuple(self._sessions.values()) + tuple(self._consumed_sessions.values())
+
+    def _has_registered_process_locked(self, short_game_id: str) -> bool:
+        return any(
+            session["short_game_id"] == short_game_id
+            for session in self._registered_sessions_locked()
+        )
+
+    def bridged_process_state(
+        self, game_id: str, process_id: str | int
+    ) -> bool | None:
+        """Return True/False once op13 ownership is known, else None."""
+        short_id = getShortGameId(game_id)
+        try:
+            pid = int(process_id)
+        except (TypeError, ValueError):
+            return None
+        if not short_id or not pid:
+            return None
+        with self._lock:
+            owners = [
+                session
+                for session in self._registered_sessions_locked()
+                if session["short_game_id"] == short_id
+            ]
+            if not owners:
+                return None
+            return any(int(session["process_id"]) == pid for session in owners)
 
     def _ensure_liveness_watchdog(self) -> None:
         with self._lock:
@@ -124,6 +168,24 @@ class FeverBridge:
                 self._sessions.pop(session["key"], None)
                 if self._active_session is session:
                     closed_active = session
+
+            closed_consumed = []
+            for key, session in list(self._consumed_sessions.items()):
+                if self._is_session_sender_alive(session):
+                    continue
+                closed_consumed.append(session)
+                self._consumed_sessions.pop(key, None)
+
+            affected_games = {
+                session["short_game_id"]
+                for session in closed + closed_consumed
+            }
+            for short_id in affected_games:
+                if (
+                    short_id not in self._bridge_launch_intents
+                    and not self._has_registered_process_locked(short_id)
+                ):
+                    app_state.fever_bridge_target_game_ids.discard(short_id)
 
             if closed_active is not None:
                 self._active_session = None
@@ -219,6 +281,7 @@ class FeverBridge:
             return False
 
         key = self._session_key(sender_hwnd, process_id, instance)
+        app_state.fever_bridge_target_game_ids.add(short_game_id)
         should_start = False
         should_flush = False
         with self._lock:
@@ -878,21 +941,22 @@ class FeverBridge:
 
     def accept_channel_qrcode_ticket(
         self, login_channel: str, ticket: str
-    ) -> bool:
-        """Consume a hosted channel QR code before MPay exchanges it."""
+    ) -> int | None:
+        """Consume a hosted channel QR code and return its target game PID."""
         login_channel = str(login_channel or "")
         ticket = str(ticket or "")
         if not login_channel or login_channel == "netease" or not ticket:
-            return False
+            return None
         with self._lock:
             if self._state != self.STATE_LOGIN_PENDING or not self._active_session:
-                return False
+                return None
+            target_process_id = int(self._active_session["process_id"])
             self._login_channel = login_channel
             self._ticket = ticket
             self._state = self.STATE_READY
             self._active_session["destroy_host_on_send"] = True
         self._flush_active_ticket()
-        return True
+        return target_process_id
 
     def _destroy_mpay_host_window(self):
         window = self._mpay_host_window
@@ -945,8 +1009,8 @@ class FeverBridge:
             self._ticket = ticket
         self._flush_active_ticket()
 
-    def _remember_consumed_locked(self, key):
-        self._consumed_sessions.add(key)
+    def _remember_consumed_locked(self, session):
+        self._consumed_sessions[session["key"]] = session
 
     def _flush_active_ticket(self) -> bool:
         with self._lock:
@@ -980,7 +1044,7 @@ class FeverBridge:
             self._ticket = ""
             self._state = self.STATE_IDLE
             self._sessions.pop(session["key"], None)
-            self._remember_consumed_locked(session["key"])
+            self._remember_consumed_locked(session)
             self._active_session = None
             destroy_host = bool(session.get("destroy_host_on_send"))
             next_session = self._promote_next_session_locked()
@@ -1033,5 +1097,6 @@ class FeverBridge:
             self._session_queue.clear()
             self._active_session = None
             self._consumed_sessions.clear()
+            self._bridge_launch_intents.clear()
         app_state.fever_bridge_target_game_ids.clear()
         app_state.run_on_main_thread(self._shutdown_mpay)

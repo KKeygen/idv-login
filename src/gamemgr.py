@@ -926,6 +926,8 @@ class Game:
                 self.logger.exception("启动平台托管登录失败")
                 self.last_start_error = "平台托管登录启动失败；请确认真实发烧平台未在运行且 mpay 资源完整"
                 return False
+        elif app_state.fever_bridge is not None:
+            app_state.fever_bridge.note_native_launch(self.game_id)
         start_args = ""
         if use_fever_bridge and installation.distribution_id != -1:
             # A Fever-hosted launch must use the distribution's launcher

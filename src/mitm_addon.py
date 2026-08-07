@@ -29,6 +29,8 @@ from mitmproxy import http
 from mpay_request_policy import (
     ROLE_BRIDGED_GAME,
     ROLE_HOSTED_FEVER_MPAY,
+    ROLE_NATIVE_GAME,
+    _request_values,
     classify_mpay_request,
 )
 
@@ -316,7 +318,7 @@ class IDVLoginAddon:
 
     @staticmethod
     def _request_process_id(flow: http.HTTPFlow) -> str:
-        return str(flow.request.query.get("process_id", "") or "")
+        return str(_request_values(flow.request).get("process_id", "") or "")
 
     def _classify_mpay_request(self, flow: http.HTTPFlow) -> str:
         bridge = app_state.fever_bridge
@@ -338,6 +340,11 @@ class IDVLoginAddon:
             )
         ):
             return ROLE_HOSTED_FEVER_MPAY
+        if role == ROLE_BRIDGED_GAME and bridge is not None and process_id:
+            game_id = _request_values(flow.request).get("game_id", "")
+            ownership = bridge.bridged_process_state(game_id, process_id)
+            if ownership is False:
+                return ROLE_NATIVE_GAME
         return role
 
     def _remember_hosted_request(self, flow: http.HTTPFlow) -> None:
@@ -621,9 +628,9 @@ class IDVLoginAddon:
         bridge = app_state.fever_bridge
         return str(
             query.get("dst_jf_game_id", "")
+            or getattr(bridge, "active_target_long_game_id", "")
             or self._hosted_targets_by_process.get(process_id, "")
             or query.get("game_id", "")
-            or getattr(bridge, "active_target_long_game_id", "")
         )
 
     def _handle_qrcode_query_response(
@@ -680,13 +687,22 @@ class IDVLoginAddon:
             if not process_id:
                 return False
             flow.intercept()
-            accepted = bridge.accept_channel_qrcode_ticket(
+            target_process_id = bridge.accept_channel_qrcode_ticket(
                 login_channel, ticket
             )
-            if not accepted:
+            if target_process_id is None:
                 flow.resume()
                 return False
             handed_off = True
+            pending_login_info = self.stack_mgr.pop_pending_login_info(
+                effective_game_id, process_id
+            )
+            if pending_login_info:
+                self.stack_mgr.push_pending_login_info(
+                    effective_game_id,
+                    str(target_process_id),
+                    pending_login_info,
+                )
             previous = self._held_hosted_query_flows.pop(process_id, None)
             if (
                 previous is not None
@@ -731,7 +747,7 @@ class IDVLoginAddon:
 
             game_id = flow.request.query.get("game_id", "") or form_data.get("game_id", "")
             game_id = effective_game_id or game_id
-            process_id = flow.request.query.get("process_id", "")
+            process_id = self._request_process_id(flow)
 
             if flow.response.status_code == 200:
                 resp_data = json.loads(flow.response.content)
@@ -836,6 +852,9 @@ class IDVLoginAddon:
         try:
             if flow.response.status_code != 200:
                 return
+            self._handle_exchange_token_response(
+                flow, allow_auto_close=False
+            )
             form_data = {}
             content_type = flow.request.headers.get("content-type", "")
             if "application/x-www-form-urlencoded" in content_type:
