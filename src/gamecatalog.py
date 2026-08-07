@@ -34,7 +34,7 @@ class DynamicGameCatalog:
         "https://loadingbaycn.webapp.163.com/app/v1/game_library/app"
         "?force=1&app_id={}"
     )
-    CACHE_SCHEMA_VERSION = 3
+    CACHE_SCHEMA_VERSION = 4
     DEFAULT_REFRESH_INTERVAL = 24 * 60 * 60
 
     _MODIFIED = "modified"
@@ -102,7 +102,8 @@ class DynamicGameCatalog:
             platform_type = str(item.get("platform_type") or "fever")
             if not short_id or not isinstance(distributions, list):
                 continue
-            if platform_type != "fever" or not distributions:
+            # fever = 可下载托管游戏；fever_display = 模拟器移动游戏（仅展示，不可下载）
+            if platform_type not in ("fever", "fever_display") or not distributions:
                 continue
             normalized_games.append(dict(item))
             games_by_short_id.setdefault(short_id, dict(item))
@@ -212,10 +213,10 @@ class DynamicGameCatalog:
                     except (TypeError, ValueError):
                         app_id = -1
                     app_type = app_data.get("app_type")
-                    # Only type 1 represents a directly managed Windows game.
-                    # Type 3 entries are emulator APKs without a Windows
-                    # startup path and must not enter the PC launcher catalog.
-                    if app_id >= 0 and app_type == 1:
+                    # Type 1 = 直接管理的 Windows 游戏；Type 3 = 模拟器移动游戏
+                    # （如阴阳师）。两者都纳入目录，便于选择/定位；Type 3 若无
+                    # Windows 下载分发则前端只提供"选择游戏路径"。
+                    if app_id >= 0 and app_type in (1, 3):
                         normalized = {
                             "app_id": app_id,
                             "app_type": app_type,
@@ -268,7 +269,11 @@ class DynamicGameCatalog:
         games_by_short_id = {}
         for app in homepage_apps:
             app_id = app.get("app_id")
-            platform_type = "fever"
+            # type=3 为模拟器移动游戏（APK，无 Windows 启动路径）：仅展示，标记 fever_display
+            if int(app.get("app_type") or 1) == 3:
+                platform_type = "fever_display"
+            else:
+                platform_type = "fever"
             detail = app_details.get(str(app_id), {})
             short_id = str(detail.get("game_id") or "").strip()
             if not short_id:

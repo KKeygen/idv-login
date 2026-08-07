@@ -954,7 +954,12 @@ class LocalRequestHandler:
             for dist_id, launcher_data, file_info in distribution_details:
                 active_task = NativeTaskRegistry.find_pending_download(gid, dist_id)
                 target_ver = file_info.get("version_code", "") if file_info else ""
-                can_download = CloudRes().is_downloadable(short_gid) and file_info is not None
+                # fever_display（type=3 模拟器游戏）不视为可下载
+                can_download = (
+                    catalog_item.get("platform_type", "fever") == "fever"
+                    and CloudRes().is_downloadable(short_gid)
+                    and file_info is not None
+                )
                 files = file_info.get("files", []) if file_info else []
                 matching_installations = [
                     item for item in installations
