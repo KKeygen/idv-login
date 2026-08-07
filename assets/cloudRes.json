@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786101061,
+  "lastModified": 1786126135,
   "version": "v6.2.2-stable",
   "hotfix": [
     {
@@ -456,29 +456,42 @@
     },
     {
       "need_hotfix_version": [
-        "v6.2.0-beta"
-      ],
-      "target_module": "mitm_addon",
-      "target_commit": "208c1836aab56e2f65b7dc735c75597a50e04d5f",
-      "note": "修复平台托管登录在游戏完成登录前提前关闭，以及自动登录完成后未按设置关闭的问题。"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.2.0-beta",
-        "v6.2.1-stable"
-      ],
-      "target_module": "gamemgr",
-      "target_commit": "76471588c55c6680719a4dec0304e603230e3eb7",
-      "note": "修复了蛋仔派对等游戏无法正常启动的问题"
-    },
-    {
-      "need_hotfix_version": [
         "v6.2.0-beta",
         "v6.2.1-stable"
       ],
       "target_module": "cloudRes",
       "target_commit": "76471588c55c6680719a4dec0304e603230e3eb7",
       "note": "修复了蛋仔派对等游戏无法正常启动的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "fever_bridge",
+      "target_commit": "44043513ab6f8945b45e1e8257dcb33180b14217",
+      "note": "修复了模拟发烧平台的游戏（例如明日之后），无法通过扫码更新渠道服信息的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "44043513ab6f8945b45e1e8257dcb33180b14217",
+      "note": "修复了模拟发烧平台的游戏（例如明日之后），无法通过扫码更新渠道服信息的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "44043513ab6f8945b45e1e8257dcb33180b14217",
+      "note": "修复了模拟发烧平台的游戏（例如明日之后），无法通过扫码更新渠道服信息的问题"
     }
   ],
   "shortcuts": [
