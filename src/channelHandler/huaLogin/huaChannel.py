@@ -16,7 +16,7 @@ import random
 import re
 import string
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import requests
 from faker import Faker
@@ -126,8 +126,12 @@ class HwQrSession:
         try:
             st, content = self.post(url, f"qrToken={qr_token}", "application/x-www-form-urlencoded; charset=UTF-8")
             if st != 200:
+                self.logger.warning(f"poll HTTP {st}: {content[:300]}")
                 return None
             return json.loads(content)
+        except json.JSONDecodeError:
+            self.logger.warning(f"poll 响应解析失败: {content[:300]}")
+            return None
         except Exception:
             return None
 
@@ -258,11 +262,7 @@ class HuaweiLoginBrowser(WebBrowser):
         self._login_url = login_url
 
     def verify(self, url: str) -> bool:
-        parsed = urlparse(url)
-        if not parsed.path.endswith("/CAS/mobile/loginSuccess.html"):
-            return False
-        qs = parse_qs(parsed.query)
-        return qs.get("isSuccess", ["0"])[0] == "1"
+        return urlparse(url).path.endswith("/CAS/mobile/loginSuccess.html")
 
     def parseReslt(self, url: str) -> bool:
         print(url)
@@ -419,7 +419,7 @@ class HuaweiLogin:
             if on_complete is not None:
                 on_complete(False)
             return False
-
+        print(qr_info)
         login_url = str(qr_info.get("content", ""))
         qr_token = str(qr_info.get("qrToken", ""))
         browser = HuaweiLoginBrowser(login_url)
@@ -446,10 +446,14 @@ class HuaweiLogin:
         return self.serviceToken is not None
 
     def _exchange_st(self, qr_session, qr_token):
-        """URL 已跳转 loginSuccess，poll 一次取扫码结果并换 ST。"""
-        r = qr_session.poll(qr_token)
+        """URL 已跳转 loginSuccess，poll（最多5次）驱动状态机取结果并换 ST。"""
+        r = None
+        for _ in range(5):
+            r = qr_session.poll(qr_token)
+            if isinstance(r, dict) and r.get("userID"):
+                break
         if not (isinstance(r, dict) and r.get("userID")):
-            self.logger.error("登录成功后轮询未取到扫码结果")
+            self.logger.error(f"登录成功后轮询未取到扫码结果: {r}")
             return
         st, _resp = qr_session.login_by_qrcode(r, self._device_uuid())
         if not st:
