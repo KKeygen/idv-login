@@ -49,6 +49,8 @@ class WebBrowser(QWidget):
             self.profile.setPersistentStoragePath(self._persistent_storage_path)
             self.profile.setCachePath(self._cache_path)
             self.profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+            # 统一使用中文页面语言，避免英文系统下登录页语言错乱
+            self.profile.setHttpAcceptLanguage("zh-CN,zh;q=0.9,en;q=0.8")
             self.logger.info(f"Profile创建成功: {name}")
         except Exception as e:
             self.logger.error(f"Profile创建失败： {e}")

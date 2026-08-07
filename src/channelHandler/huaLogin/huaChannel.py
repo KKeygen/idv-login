@@ -21,11 +21,14 @@ from urllib.parse import urlparse
 import requests
 from faker import Faker
 
+import app_state
 from envmgr import genv
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
 from channelHandler.WebLoginUtils import WebBrowser
 from channelHandler.huaLogin.consts import DEVICE, COMMON_PARAMS
+from AutoFillUtils import RecordMgr
+from PyQt6.QtWidgets import QComboBox, QInputDialog, QPushButton
 
 DEVICE_RECORD = "huawei_device.json"
 QRCODE_CACHE_KEY = "HUAWEI_QRCODE_CACHE"
@@ -253,19 +256,107 @@ def silent_token(st: str, package_name: str, client_id: str, device_id: str):
 
 
 class HuaweiLoginBrowser(WebBrowser):
-    """网页登录：打开华为登录页；URL 跳转到 loginSuccess.html 视为成功。"""
+    """网页登录：打开华为登录页；URL 跳转到 loginSuccess.html 视为成功。
+
+    支持账号填充：从历史记录选择账号填充登录表单（只填不记，不再保存账密）。
+    """
 
     def __init__(self, login_url: str):
         super().__init__("huawei", True)
         self.logger = setup_logger()
         self.setWindowTitle("华为账号登录")
         self._login_url = login_url
+        # 华为登录页为移动端页面，按现代手机比例初始化窗口（19.5:9）
+        self.resize(390, 844)
+        # 使用手机端 UA，让登录页按移动端渲染
+        self.set_user_agent(
+            "Mozilla/5.0 (Linux; Android 13; SM-G9910) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        )
+        self._init_autofill()
+
+    def _init_autofill(self):
+        """账号填充工具栏：下拉框选择账号 → 填充/删除。"""
+        self.autoFillMgr = RecordMgr()
+        self.records = self.autoFillMgr.list_records()
+
+        # 默认账号放到首位
+        defaultAccount = genv.get(f"defaultAutoFill{genv.get('GLOB_LOGIN_UUID', '')}", None)
+        if defaultAccount and defaultAccount in self.records:
+            self.records.remove(defaultAccount)
+            self.records.insert(0, defaultAccount)
+
+        self.accountComboBox = QComboBox()
+        self.toolBarLayout.addWidget(self.accountComboBox)
+        self.accountComboBox.addItems(self.records)
+        self.accountComboBox.currentIndexChanged.connect(self.onAccountChanged)
+        self.accountComboBox.textActivated.connect(self.onAccountChanged)
+
+        self.fillButton = QPushButton("填充")
+        self.toolBarLayout.addWidget(self.fillButton)
+        self.fillButton.clicked.connect(self.onAccountChanged)
+
+        self.deleteButton = QPushButton("删除")
+        self.toolBarLayout.addWidget(self.deleteButton)
+        self.deleteButton.clicked.connect(self.deleteAccount)
+
+    def deleteAccount(self):
+        account = self.accountComboBox.currentText()
+        self.autoFillMgr.remove_record(account)
+        self.accountComboBox.removeItem(self.accountComboBox.currentIndex())
+        if len(self.records) > 0:
+            self.accountComboBox.setCurrentIndex(0)
+        self.logger.info(f"删除账号{account}")
+
+    def onAccountChanged(self):
+        account = self.accountComboBox.currentText()
+        if "*" in account:
+            # 被掩码的账号需要完整账号解密
+            text, ok = QInputDialog.getText(
+                self, "二次验证", "密码已被加密，请输入完整的账号来解密", text=account
+            )
+            if ok:
+                password = self.autoFillMgr.find_password(text)
+                if password:
+                    self.insertAcctPwd(text, password)
+                else:
+                    self.logger.info("未找到密码，账号输入错误或者未保存")
+        else:
+            password = self.autoFillMgr.find_password(account)
+            if password:
+                self.insertAcctPwd(account, password)
+            else:
+                self.logger.info("未找到密码，账号输入错误或者未保存")
+
+    def insertAcctPwd(self, account, password):
+        js_code = f"""
+            function inputVal(t,val){{
+                let evt = document.createEvent('HTMLEvents');
+                evt.initEvent('input', true, true);
+                t.value=val;
+                t.dispatchEvent(evt)
+            }};
+            (function() {{
+                let inputs = document.querySelectorAll('input');
+                let accountInput = Array.prototype.find.call(inputs, input => input.getAttribute('ht') === 'input_pwdlogin_account');
+                let pwdInput = Array.prototype.find.call(inputs, input => input.getAttribute('ht') === 'input_pwdlogin_pwd');
+                if (accountInput && pwdInput) {{
+                    //activate
+                    accountInput.focus();
+                    inputVal(accountInput,"{account}");
+                    pwdInput.focus();
+                    inputVal(pwdInput,"{password}");
+                    return true;
+                }}
+                return false;
+            }})();
+        """
+        self.page.runJavaScript(js_code)
 
     def verify(self, url: str) -> bool:
         return urlparse(url).path.endswith("/CAS/mobile/loginSuccess.html")
 
     def parseReslt(self, url: str) -> bool:
-        print(url)
         self.result = url
         return True
 
@@ -419,7 +510,6 @@ class HuaweiLogin:
             if on_complete is not None:
                 on_complete(False)
             return False
-        print(qr_info)
         login_url = str(qr_info.get("content", ""))
         qr_token = str(qr_info.get("qrToken", ""))
         browser = HuaweiLoginBrowser(login_url)
@@ -452,6 +542,7 @@ class HuaweiLogin:
             r = qr_session.poll(qr_token)
             if isinstance(r, dict) and r.get("userID"):
                 break
+            time.sleep(0.5)
         if not (isinstance(r, dict) and r.get("userID")):
             self.logger.error(f"登录成功后轮询未取到扫码结果: {r}")
             return
