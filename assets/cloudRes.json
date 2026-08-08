@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786162645,
+  "lastModified": 1786213785,
   "version": "v6.2.2-stable",
   "hotfix": [
     {
@@ -1047,6 +1047,102 @@
         "wx_appid": "wx7869269b36f12fb3",
         "channel": "1112051453"
       }
+    },
+    {
+      "package_name": "com.netease.onmyoji.m4399",
+      "app_channel": "4399com",
+      "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
+      "game_id": "g37",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.moba.m4399",
+      "app_channel": "4399com",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.stzb.m4399",
+      "app_channel": "4399com",
+      "log_key": "wIBYU30j5y3iehV5iJ8r7L0_3LyYChEr",
+      "game_id": "g10",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.mrzh.m4399",
+      "app_channel": "4399com",
+      "log_key": "-BQb6RCHHhYI1ADS6pJigOehE-sITVya",
+      "game_id": "g66",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.dhxy.m4399",
+      "app_channel": "4399com",
+      "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
+      "game_id": "g112",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.sky.m4399",
+      "app_channel": "4399com",
+      "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
+      "game_id": "ma75",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.yhtj.m4399",
+      "app_channel": "4399com",
+      "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
+      "game_id": "h75",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.aceracer.m4399",
+      "app_channel": "4399com",
+      "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
+      "game_id": "h65",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
     }
   ],
   "netease_qrcode_login_game_list": [
