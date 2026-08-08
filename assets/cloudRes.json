@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786216215,
+  "lastModified": 1786217574,
   "version": "v6.2.2-stable",
   "hotfix": [
     {
@@ -1276,6 +1276,22 @@
       },
       "channel": "myapp",
       "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.netease.yysbwp.mi",
+      "app_channel": "xiaomi_app",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "xiaomi_app": "mi_2882303761517947987",
+      "channel": "xiaomi_app",
+      "name": "小米账号"
+    },
+    {
+      "package_name": "com.netease.yysbwp.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "oppo": "com.netease.yysbwp.nearme.gamecenter"
     }
   ],
   "netease_qrcode_login_game_list": [
