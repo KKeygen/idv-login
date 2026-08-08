@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786215234,
+  "lastModified": 1786216215,
   "version": "v6.2.2-stable",
   "hotfix": [
     {
@@ -1204,6 +1204,78 @@
       "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
       "game_id": "ma75",
       "oppo": "com.netease.sky.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.tencent.tmgp.stzb",
+      "app_channel": "myapp",
+      "log_key": "wIBYU30j5y3iehV5iJ8r7L0_3LyYChEr",
+      "game_id": "g10",
+      "myapp": {
+        "channel": "1104833445",
+        "wx_appid": "wxc683ec8b0a09da63"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.g67",
+      "app_channel": "myapp",
+      "log_key": "TN_lvn5bM9nwdH9NSf36EmcycST9B17V",
+      "game_id": "g67",
+      "myapp": {
+        "channel": "1112097427",
+        "wx_appid": "wx0fbefe423ec05da7"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.harrypotter",
+      "app_channel": "myapp",
+      "log_key": "gR9o0JNZge0vIwLS84fcz9iuHaZRg8Wd",
+      "game_id": "g92",
+      "myapp": {
+        "channel": "1111980517",
+        "wx_appid": "wx6e319e486f89d163"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.aceracer",
+      "app_channel": "myapp",
+      "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
+      "game_id": "h65",
+      "myapp": {
+        "channel": "1111869422",
+        "wx_appid": "wxbc4f709620735d51"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.yysbwp",
+      "app_channel": "myapp",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "myapp": {
+        "channel": "1109203221",
+        "wx_appid": "wx9534412afab38dd9"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.ef3",
+      "app_channel": "myapp",
+      "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
+      "game_id": "h75",
+      "myapp": {
+        "channel": "1109835678",
+        "wx_appid": "wx7683a69f52d22e3c"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
     }
   ],
   "netease_qrcode_login_game_list": [
