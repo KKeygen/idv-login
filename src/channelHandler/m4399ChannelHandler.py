@@ -28,12 +28,6 @@ from channelHandler.channelUtils import buildSAUTH, getShortGameId, postSignedDa
 from channelHandler.m4399Login.m4399Channel import M4399Login
 
 
-DEFAULT_GAME_KEY = "*****"
-DEFAULT_SDK_VER = "3.16.0"
-DEFAULT_BID = "com.netease.dwrg.m4399"
-DEFAULT_CANAL = "4399com"
-
-
 class m4399Channel(channelmgr.channel):
     def __init__(
         self,
@@ -93,22 +87,29 @@ class m4399Channel(channelmgr.channel):
         cloudRes = CloudRes()
         res = cloudRes.get_channelData(self.channel_name, real_game_id)
         if res is None:
-            self.logger.warning(
-                f"cloudRes 中未找到 4399com 配置 (game_id={real_game_id})，使用默认参数"
+            raise RuntimeError(
+                f"cloudRes 中未找到 {self.channel_name} 配置 (game_id={real_game_id})"
             )
-            self.channelConfig = {}
-        else:
-            self.channelConfig = res.get(self.channel_name, {})
+        self.channelConfig = res.get(self.channel_name, {}) or {}
 
-        self.game_key = self.channelConfig.get("app_key") or DEFAULT_GAME_KEY
-        self.sdk_version = self.channelConfig.get("sdk_ver") or DEFAULT_SDK_VER
-        self.bid = (res or {}).get("package_name") or DEFAULT_BID
+        game_key = self.channelConfig.get("app_key")
+        sdk_version = self.channelConfig.get("sdk_ver")
+        bid = res.get("package_name")
+        if not game_key:
+            raise RuntimeError(f"cloudRes 中 {self.channel_name} 配置缺少 app_key")
+        if not sdk_version:
+            raise RuntimeError(f"cloudRes 中 {self.channel_name} 配置缺少 sdk_ver")
+        if not bid:
+            raise RuntimeError(f"cloudRes 中 {self.channel_name} 配置缺少 package_name")
+        self.game_key = game_key
+        self.sdk_version = sdk_version
+        self.bid = bid
         self.realGameId = real_game_id
 
         self.m4399Login = M4399Login(
             game_key=self.game_key,
             bid=self.bid,
-            canal=DEFAULT_CANAL,
+            canal=self.channel_name,
             sdk_version=self.sdk_version,
             oauth_device=self.oauthDevice,
         )
