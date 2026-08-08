@@ -79,6 +79,11 @@ class FeverBridge:
         self._active_dll_key = ""
         self._mpay_image_generation = 0
         self._pinned_mpay_images = []
+        # MPay 4.10 is not safe to tear down in-process: Release_Interface()
+        # can leave UI/message callbacks referencing freed native objects.
+        # Retire complete runtimes until process exit instead.
+        self._retired_mpay_runtimes = []
+        self._retired_mpay_hwnds = set()
 
     # ------------------------------------------------------------------
     # Launch/session queue
@@ -229,15 +234,10 @@ class FeverBridge:
         return int(actual_pid.value) == expected_pid
 
     def _handle_closed_active_session(self, next_serial: int | None) -> None:
-        try:
-            self._logout()
-        except Exception:
-            self.logger.exception("清理已关闭游戏的 mpay 登录状态失败")
-        try:
-            self._release_interface()
-        except Exception:
-            self.logger.exception("卸载已关闭游戏的 mpay 运行时失败")
-            return
+        # Do not call logout()/Release_Interface() here.  MPay 4.10 may still
+        # dispatch window/timer callbacks after those calls return; keeping the
+        # whole native object graph alive avoids the observed mpay.dll UAF.
+        self._retire_interface("active-game-window-closed")
         if next_serial is not None:
             self._start_active_login(next_serial)
 
@@ -379,7 +379,18 @@ class FeverBridge:
                 raise RuntimeError(
                     f"尚未取得 {short_game_id} 的 mpay 长 game_id，无法启动平台托管登录"
                 )
-            self._logout()
+            desired_config = (
+                long_game_id.encode("utf-8"),
+                self.MPAY_APP_CHANNEL,
+            )
+            # Re-login on the same live MPay runtime is known to work.  When
+            # switching to another game/config, _ensure_interface() retires the
+            # old runtime without touching its native object graph.
+            if (
+                self._instance is not None
+                and self._native_config == desired_config
+            ):
+                self._logout()
             self._ensure_interface(long_game_id)
             login = getattr(self._mpay, "?login@CMpay_Interface@Mpay@@QEAAXHH@Z")
             login.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
@@ -395,9 +406,9 @@ class FeverBridge:
                 if self._active_session is session:
                     self._state = self.STATE_IDLE
             try:
-                self._release_interface()
+                self._retire_interface("start-failed")
             except Exception:
-                self.logger.exception("清理失败的 mpay 运行时失败")
+                self.logger.exception("隔离失败的 mpay 运行时失败")
             self.logger.exception("启动平台托管 mpay 登录失败")
 
     def _load_mpay_dll(self, target_long_game_id: str):
@@ -419,9 +430,8 @@ class FeverBridge:
             self._dll_directory = os.add_dll_directory(runtime_dir)
         try:
             image = ctypes.CDLL(dll_path)
-            # init pins every MPay image in the Windows loader.  Keep the
-            # wrapper too: once its interface is released this exact image is
-            # permanently retired and must never be Create/init-ed again.
+            # Keep every path-specific MPay image pinned until process exit.
+            # Retired runtimes retain their interface/callback/window objects too.
             self._pinned_mpay_images.append(image)
             self._mpay = image
             self._dll_path = dll_path
@@ -449,10 +459,10 @@ class FeverBridge:
             self._prepare_mpay_host_window()
             return
         if self._instance is not None or self._mpay is not None:
-            # MPay binds its account database and other process-global state to
-            # the first init game id.  Release the active game's interface;
-            # the next game then activates its own path-specific DLL image.
-            self._release_interface()
+            # MPay binds account/UI globals to the first init game id.  Do not
+            # Release_Interface() when changing games: that API has been observed
+            # to leave native UI callbacks with dangling object pointers.
+            self._retire_interface("switch-game")
 
         self._load_mpay_dll(target_long_game_id)
         if self._instance is None:
@@ -634,6 +644,8 @@ class FeverBridge:
                 pid = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                 if pid.value != current_pid or not user32.IsWindowVisible(hwnd):
+                    return True
+                if int(hwnd) in self._retired_mpay_hwnds:
                     return True
                 class_name = ctypes.create_unicode_buffer(128)
                 user32.GetClassNameW(hwnd, class_name, len(class_name))
@@ -831,62 +843,143 @@ class FeverBridge:
         logout.restype = None
         logout(self._instance)
 
-    def _release_interface(self):
-        self._generation += 1
-        instance = self._instance
-        release_error = None
+    def _collect_mpay_window_handles(self) -> list[int]:
+        """Return MPAY_* top-level HWNDs owned by this Python process."""
+        if sys.platform != "win32":
+            return []
         try:
-            if instance is not None and self._mpay is not None:
-                release = getattr(
-                    self._mpay,
-                    "?Release_Interface@CMpay_Interface@Mpay@@SAXXZ",
-                )
-                release.argtypes = []
-                release.restype = None
-                release()
-        except Exception as exc:
-            release_error = exc
-        finally:
-            # Release_Interface is synchronous.  Once it returns, no native
-            # object may retain the previous callback object, vtable, log hook,
-            # or parent-window association.  Destroy all Python/Qt references
-            # before detaching the released, loader-pinned image.
-            self._instance = None
-            self._native_config = None
-            self._callback_refs = []
-            self._callback_vtable = None
-            self._callback_object = None
-            self._log_hook_ref = None
-            self._destroy_mpay_host_window()
-            self._detach_mpay_dll()
-        if release_error is not None:
-            raise release_error
+            from ctypes import wintypes
 
-    def _detach_mpay_dll(self):
-        """Detach the released image; MPay pins it until process exit.
-
-        A released image is permanently retired.  The next Create/init uses a
-        fresh verified path even for the same game, because Release_Interface
-        does not reset all window/database globals inside the pinned module.
-        """
-        library = self._mpay
-        self._mpay = None
-        dll_path = self._dll_path
-        self._dll_path = ""
-        dll_key = self._active_dll_key
-        self._active_dll_key = ""
-        try:
-            if library is None:
-                return
-            self.logger.info(
-                "MPay interface 已释放，独立映像保持驻留: "
-                f"game_id={dll_key}, path={dll_path}, "
-                f"handle=0x{int(getattr(library, '_handle', 0) or 0):x}"
+            user32 = ctypes.windll.user32
+            current_pid = os.getpid()
+            handles = []
+            enum_proc_type = ctypes.WINFUNCTYPE(
+                wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
             )
-        finally:
-            if self._dll_directory is not None:
-                self._dll_directory.close()
-                self._dll_directory = None
+            user32.EnumWindows.argtypes = [enum_proc_type, wintypes.LPARAM]
+            user32.EnumWindows.restype = wintypes.BOOL
+            user32.GetWindowThreadProcessId.argtypes = [
+                wintypes.HWND,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
+            user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+            user32.GetClassNameW.argtypes = [
+                wintypes.HWND,
+                wintypes.LPWSTR,
+                ctypes.c_int,
+            ]
+            user32.GetClassNameW.restype = ctypes.c_int
+
+            @enum_proc_type
+            def collect(hwnd, _lparam):
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value != current_pid:
+                    return True
+                class_name = ctypes.create_unicode_buffer(128)
+                user32.GetClassNameW(hwnd, class_name, len(class_name))
+                if class_name.value.upper().startswith("MPAY_"):
+                    handles.append(int(hwnd))
+                return True
+
+            user32.EnumWindows(collect, 0)
+            return handles
+        except Exception:
+            self.logger.debug("枚举 MPay 窗口失败", exc_info=True)
+            return []
+
+    def _hide_retired_mpay_windows(self, handles) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            user32 = ctypes.windll.user32
+            SW_HIDE = 0
+            for hwnd in handles:
+                if hwnd:
+                    user32.ShowWindow(ctypes.wintypes.HWND(hwnd), SW_HIDE)
+        except Exception:
+            self.logger.debug("隐藏已退休 MPay 窗口失败", exc_info=True)
+
+    def _retire_interface(self, reason: str = "") -> None:
+        """Retire the current MPay runtime without tearing native objects down.
+
+        MPay 4.10 has been observed crashing inside its own UI callback after
+        Release_Interface() returned (access violation at mpay.dll+0xA07A0).
+        Therefore a runtime is treated as process-lifetime state: when it is no
+        longer active we hide its windows, invalidate its logical generation,
+        and pin *all* native/Python/Qt support objects until process exit.
+        """
+        if (
+            self._mpay is None
+            and self._instance is None
+            and self._mpay_host_window is None
+            and not self._callback_refs
+            and self._callback_vtable is None
+            and self._callback_object is None
+            and self._log_hook_ref is None
+        ):
+            return
+
+        retiring_generation = self._generation
+        self._generation += 1
+
+        native_hwnds = self._collect_mpay_window_handles()
+        self._retired_mpay_hwnds.update(native_hwnds)
+
+        window = self._mpay_host_window
+        if window is not None:
+            try:
+                window.hide()
+            except Exception:
+                self.logger.debug("隐藏已退休 MPay host window 失败", exc_info=True)
+        self._hide_retired_mpay_windows(native_hwnds)
+
+        runtime = {
+            "generation": retiring_generation,
+            "reason": str(reason or ""),
+            "game_id": self._active_dll_key,
+            "dll_path": self._dll_path,
+            "mpay": self._mpay,
+            "instance": self._instance,
+            "native_config": self._native_config,
+            "callback_refs": self._callback_refs,
+            "callback_vtable": self._callback_vtable,
+            "callback_object": self._callback_object,
+            "log_hook_ref": self._log_hook_ref,
+            "host_window": self._mpay_host_window,
+            "dll_directory": self._dll_directory,
+            "native_hwnds": tuple(native_hwnds),
+        }
+        self._retired_mpay_runtimes.append(runtime)
+
+        library = self._mpay
+        self.logger.info(
+            "MPay 运行时已退休并保持完整驻留: "
+            f"game_id={self._active_dll_key or '?'}, "
+            f"generation={retiring_generation}, reason={reason or '?'}, "
+            f"path={self._dll_path or '?'}, "
+            f"handle=0x{int(getattr(library, '_handle', 0) or 0):x}, "
+            f"retired_count={len(self._retired_mpay_runtimes)}"
+        )
+
+        # Detach only the bridge's *current* slots.  The exact objects above are
+        # still strongly referenced by _retired_mpay_runtimes and must not be
+        # released/destroyed before the Python process exits.
+        self._mpay = None
+        self._instance = None
+        self._native_config = None
+        self._callback_refs = []
+        self._callback_vtable = None
+        self._callback_object = None
+        self._log_hook_ref = None
+        self._mpay_host_window = None
+        self._dll_directory = None
+        self._dll_path = ""
+        self._active_dll_key = ""
+
+    def _release_interface(self):
+        """Compatibility shim: never invoke MPay Release_Interface in-process."""
+        self._retire_interface("legacy-release-call")
 
     # ------------------------------------------------------------------
     # Login callbacks and one-shot delivery
@@ -1062,23 +1155,21 @@ class FeverBridge:
 
     def _finish_channel_code_handoff(self, next_serial: int | None) -> None:
         try:
-            self._release_interface()
+            self._retire_interface("channel-code-handoff")
         except Exception:
-            self.logger.exception("卸载已完成渠道服登录的 MPay 运行时失败")
+            self.logger.exception("隔离已完成渠道服登录的 MPay 运行时失败")
             return
         if next_serial is not None:
             self._start_active_login(next_serial)
 
     def _shutdown_mpay(self):
+        # Process exit is the only reliable teardown boundary for MPay 4.10.
+        # Keep every native object/callback/window alive and let Windows reclaim
+        # them together with the process.
         try:
-            self._logout()
+            self._retire_interface("bridge-stop")
         except Exception:
-            self.logger.exception("退出 mpay 账号失败")
-        try:
-            self._release_interface()
-        except Exception:
-            self.logger.exception("释放 mpay 接口失败")
-        self._destroy_mpay_host_window()
+            self.logger.exception("隔离当前 mpay 运行时失败")
 
     def stop(self):
         self._liveness_stop.set()
