@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786213785,
+  "lastModified": 1786215234,
   "version": "v6.2.2-stable",
   "hotfix": [
     {
@@ -1143,6 +1143,67 @@
         "sdk_ver": "3.16.0"
       },
       "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.dhxy.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
+      "game_id": "g112",
+      "oppo": "com.netease.dhxy.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.onmyoji.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
+      "game_id": "g37",
+      "oppo": "com.netease.onmyoji.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.onmyoji.bili",
+      "app_channel": "bilibili_sdk",
+      "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
+      "game_id": "g37",
+      "bilibili_sdk": {
+        "bili_game_id": "166",
+        "app_key": "8dd76735d22d4191b4eefdc3152f79ac",
+        "sdk_ver": ""
+      },
+      "name": "哔哩哔哩"
+    },
+    {
+      "package_name": "com.netease.mrzh.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "-BQb6RCHHhYI1ADS6pJigOehE-sITVya",
+      "game_id": "g66",
+      "oppo": "com.netease.mrzh.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.moba.mi",
+      "app_channel": "xiaomi_app",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "xiaomi_app": "mi_2882303761517629369",
+      "channel": "xiaomi_app",
+      "name": "小米账号"
+    },
+    {
+      "package_name": "com.tencent.tmgp.kaopu.jzpaj",
+      "app_channel": "myapp",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "myapp": {
+        "channel": "1106561332",
+        "wx_appid": "wxa7e372b1c9bb6cbb"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.netease.sky.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
+      "game_id": "ma75",
+      "oppo": "com.netease.sky.nearme.gamecenter"
     }
   ],
   "netease_qrcode_login_game_list": [
