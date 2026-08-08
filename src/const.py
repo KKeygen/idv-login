@@ -11,6 +11,7 @@ manual_login_channels = [
     {"name": "哔哩哔哩账号", "channel": "bilibili_sdk"},
     {"name": "荣耀账号", "channel": "honor_sdk"},
     {"name": "九游账号", "channel": "uc_platform"},
+    {"name": "4399账号", "channel": "4399com"},
 ]
 
 

@@ -1010,6 +1010,18 @@
       "name": "九游账号"
     },
     {
+      "package_name": "com.netease.dwrg.m4399",
+      "app_channel": "4399com",
+      "log_key": "SvShWXDcmogbZJoU3YWe3Su3Ci-mCRcw",
+      "game_id": "h55",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
       "package_name": "com.netease.party.huawei",
       "app_channel": "huawei",
       "log_key": "AFhte0-UFSsBUxO3yaM747mxyQHGiG06",
