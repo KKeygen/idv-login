@@ -21,7 +21,7 @@ from logutil import setup_logger
 
 class OppoBrowser(WebBrowser):
     def __init__(self, consts: OppoNativeConsts = DEFAULT_CONSTS):
-        super().__init__("oppo", True)
+        super().__init__("oppo", True, frameless=True)
         self.logger = setup_logger()
         self._captured: Optional[Dict[str, Any]] = None
         self._observed_popup_view: Optional[QWebEngineView] = None

@@ -19,18 +19,47 @@ from ssl_utils import should_verify_ssl
 
 class MiBrowser(WebBrowser):
     def __init__(self):
-        super().__init__("xiaomi_app",False)
+        super().__init__("xiaomi_app", False, frameless=True)
         self.isQQ=False
-        
-        # 添加手动登录按钮
-        self.manual_login_button = QPushButton("登录界面白屏？")
-        self.manual_login_button.clicked.connect(self.manual_login)
-        self.toolBarLayout.addWidget(self.manual_login_button)
-        
-        # 添加QQ登录按钮
-        self.qq_login_button = QPushButton("QQ登录")
+
+        # 无边框窗口使用悬浮按钮，不占用网页布局。
+        self.qq_login_button = QPushButton("QQ 登录", self)
+        self.qq_login_button.setObjectName("xiaomi_qq_login_button")
+        self.qq_login_button.setFixedSize(72, 28)
+        self.qq_login_button.setToolTip("使用 QQ 登录小米渠道")
+        self.qq_login_button.setStyleSheet(
+            "QPushButton#xiaomi_qq_login_button {"
+            "  background-color: rgba(18, 111, 214, 220);"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 14px;"
+            "  font-size: 12px;"
+            "  font-weight: 500;"
+            "}"
+            "QPushButton#xiaomi_qq_login_button:hover {"
+            "  background-color: rgba(32, 129, 235, 240);"
+            "}"
+            "QPushButton#xiaomi_qq_login_button:pressed {"
+            "  background-color: rgba(12, 85, 170, 245);"
+            "}"
+        )
         self.qq_login_button.clicked.connect(self.qq_login)
-        self.toolBarLayout.addWidget(self.qq_login_button)
+        self.qq_login_button.raise_()
+        self._reposition_qq_login_button()
+
+    def _reposition_qq_login_button(self):
+        button = getattr(self, "qq_login_button", None)
+        close_button = getattr(self, "_frameless_close_button", None)
+        if button is None or close_button is None:
+            return
+        button.move(
+            close_button.x() - button.width() - 8,
+            close_button.y(),
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_qq_login_button()
 
     def verify(self, url: str) -> bool:
         if self.isQQ:

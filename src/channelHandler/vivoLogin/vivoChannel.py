@@ -14,7 +14,7 @@ from channelHandler.WebLoginUtils import WebBrowser
 
 class VivoBrowser(WebBrowser):
     def __init__(self, gamePackage):
-        super().__init__("nearme_vivo", True)
+        super().__init__("nearme_vivo", True, frameless=True)
         self.logger = setup_logger()
         self.gamePackage = gamePackage
 

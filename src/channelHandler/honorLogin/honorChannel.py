@@ -43,7 +43,7 @@ class HonorBrowser(WebBrowser):
                 self.parent.notify(info.requestUrl())
 
     def __init__(self):
-        super().__init__("honor", True)
+        super().__init__("honor", True, frameless=True)
         self.logger = setup_logger()
         self.scheme_handler = self.HonorSchemeHandler(self)
         self.profile.removeAllUrlSchemeHandlers()

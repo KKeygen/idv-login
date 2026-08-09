@@ -406,7 +406,7 @@ class M4399Browser(WebBrowser):
         self.callback_expired_at: Optional[int] = None
         self.callback_expires_in: Optional[int] = None
 
-        super().__init__("m4399", True)
+        super().__init__("m4399", True, frameless=True)
         self.logger = setup_logger()
         self.resize(430, 680)
 

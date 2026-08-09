@@ -28,7 +28,7 @@ class QQBrowser(WebBrowser):
                 self.parent._on_auth_redirect(info.requestUrl())
 
     def __init__(self, qq_appid):
-        super().__init__("myapp_qq", False)
+        super().__init__("myapp_qq", False, frameless=True)
         self.qq_appid = qq_appid
         self._scheme_handler = self.AuthSchemeHandler(self)
         self.profile.removeAllUrlSchemeHandlers()

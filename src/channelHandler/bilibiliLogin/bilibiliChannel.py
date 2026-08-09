@@ -15,7 +15,6 @@ from urllib.parse import urlencode
 
 import requests
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QPushButton
 
 from channelHandler.WebLoginUtils import WebBrowser
 from logutil import setup_logger
@@ -280,76 +279,16 @@ class BilibiliBrowser(WebBrowser):
         game_id: str = DEFAULT_GAME_ID,
         app_key: str = DEFAULT_APP_KEY,
     ):
-        super().__init__("bilibili", True)
+        super().__init__("bilibili", True, frameless=True)
         self.logger = setup_logger()
         self._captured: Optional[Dict[str, Any]] = None
         self._login_url = _build_login_url(game_id, app_key)
 
-        # 无边框窗口：去掉标题栏和系统边框，370×439 即为可视区域
-        from PyQt6.QtCore import Qt
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.clear_cookie_button.hide()
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        # 无边框、关闭按钮与拖拽行为由 WebBrowser 统一提供。
         self.resize(370, 439)
-
-        # 右上角关闭按钮（悬浮于 WebView 之上）
-        close_btn = QPushButton("✕", self)
-        close_btn.setFixedSize(28, 28)
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setStyleSheet(
-            "QPushButton {"
-            "  background-color: rgba(0, 0, 0, 90);"
-            "  color: white;"
-            "  border: none;"
-            "  border-radius: 14px;"
-            "  font-size: 14px;"
-            "}"
-            "QPushButton:hover {"
-            "  background-color: rgba(220, 53, 69, 220);"
-            "}"
-            "QPushButton:pressed {"
-            "  background-color: rgba(180, 40, 50, 240);"
-            "}"
-        )
-        close_btn.clicked.connect(self.close)
-        close_btn.raise_()
-        self._close_btn = close_btn
-        self._reposition_close_btn()
-
-        # 拖拽支持
-        self._drag_pos = None
 
         # 注入 XHR 拦截脚本（在文档创建前）
         self.add_init_script(_build_intercept_js(), name="bili_xhr_intercept")
-
-    # ── 无边框窗口拖拽 ────────────────────────────────────────
-
-    def _reposition_close_btn(self):
-        if hasattr(self, '_close_btn'):
-            self._close_btn.move(self.width() - self._close_btn.width() - 4, 4)
-
-    def resizeEvent(self, event):
-        self._reposition_close_btn()
-        super().resizeEvent(event)
-
-    def mousePressEvent(self, event):
-        from PyQt6.QtCore import Qt
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        from PyQt6.QtCore import Qt
-        if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
-        super().mouseReleaseEvent(event)
 
     # ── 回调 ──────────────────────────────────────────────────
 

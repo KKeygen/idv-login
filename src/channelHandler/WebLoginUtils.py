@@ -32,10 +32,13 @@ class WebBrowser(QWidget):
         def on_url_changed(self, url):
             self.setUrl(url)
 
-    def __init__(self,name="WebLoginDefault",keepCookie=True):
+    def __init__(self, name="WebLoginDefault", keepCookie=True, frameless=False):
         self.app = QApplication.instance()
         self.logger=setup_logger()
         super().__init__()
+        self.frameless = bool(frameless)
+        self._drag_pos = None
+        self._frameless_close_button: typing.Optional[QPushButton] = None
         self.view = self.WebEngineView()
         tmpName=genv.get("GLOB_LOGIN_UUID","")
         name=tmpName if tmpName!="" else name
@@ -71,27 +74,97 @@ class WebBrowser(QWidget):
         self.page.loadFinished.connect(self.on_load_finished)
         self.page.urlChanged.connect(self.handle_url_change)
 
-        # 创建清除Cookie按钮
-        self.clear_cookie_button = QPushButton("强制退登")
-        self.clear_cookie_button.clicked.connect(self.clear_cookies)
-
         # 设置布局
         self.toolBarLayout=QHBoxLayout()
-        self.toolBarLayout.addWidget(self.clear_cookie_button)
+        if self.frameless:
+            # 无边框窗口不创建工具栏按钮，只保留基类统一提供的关闭按钮。
+            self.clear_cookie_button = None
+        else:
+            self.clear_cookie_button = QPushButton("强制退登")
+            self.clear_cookie_button.clicked.connect(self.clear_cookies)
+            self.toolBarLayout.addWidget(self.clear_cookie_button)
 
         self.layout = QVBoxLayout()
         self.layout.addWidget(self.view)
-        self.layout.addLayout(self.toolBarLayout)
+        if not self.frameless:
+            self.layout.addLayout(self.toolBarLayout)
         self.setLayout(self.layout)
 
         self._toast_label: typing.Optional[QLabel] = None
         self._toast_timer: typing.Optional[QTimer] = None
         self._browser_running = False
 
-        #窗口置顶
-        self.setWindowFlags(QtCore.Qt.WindowType.WindowStaysOnTopHint)
+        # 窗口样式：无边框窗口的关闭与拖拽行为全部由基类统一提供。
+        window_flags = QtCore.Qt.WindowType.WindowStaysOnTopHint
+        if self.frameless:
+            window_flags |= QtCore.Qt.WindowType.FramelessWindowHint
+            self.layout.setContentsMargins(0, 0, 0, 0)
+        self.setWindowFlags(window_flags)
         #设置窗口大小
-        self.resize(1000, 1000)
+        self.resize(1000, 750)
+
+        if self.frameless:
+            self._create_frameless_close_button()
+
+    def _create_frameless_close_button(self):
+        """创建无边框窗口唯一的自定义按钮。"""
+        close_button = QPushButton("✕", self)
+        close_button.setFixedSize(28, 28)
+        close_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        close_button.setStyleSheet(
+            "QPushButton {"
+            "  background-color: rgba(0, 0, 0, 90);"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 14px;"
+            "  font-size: 14px;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: rgba(220, 53, 69, 220);"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: rgba(180, 40, 50, 240);"
+            "}"
+        )
+        close_button.clicked.connect(self.close)
+        close_button.raise_()
+        self._frameless_close_button = close_button
+        self._reposition_frameless_close_button()
+
+    def _reposition_frameless_close_button(self):
+        close_button = self._frameless_close_button
+        if close_button is not None:
+            close_button.move(self.width() - close_button.width() - 4, 4)
+
+    def resizeEvent(self, event):
+        if self.frameless:
+            self._reposition_frameless_close_button()
+        super().resizeEvent(event)
+
+    def mousePressEvent(self, event):
+        if (
+            self.frameless
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
+            self._drag_pos = (
+                event.globalPosition().toPoint()
+                - self.frameGeometry().topLeft()
+            )
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (
+            self.frameless
+            and self._drag_pos is not None
+            and event.buttons() & QtCore.Qt.MouseButton.LeftButton
+        ):
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.frameless:
+            self._drag_pos = None
+        super().mouseReleaseEvent(event)
 
     def _hide_toast(self):
         if self._toast_label is not None:
@@ -335,5 +408,3 @@ class WebBrowser(QWidget):
         app_inst = QApplication.instance()
         if app_inst and not app_inst.property("_main_loop_running"):
             QTimer.singleShot(0, app_inst.quit)
-
-    
