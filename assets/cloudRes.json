@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786162645,
+  "lastModified": 1786248372,
   "version": "v6.2.2-stable",
   "hotfix": [
     {
@@ -102,14 +102,6 @@
       "target_module": "hostmgr",
       "target_commit": "dbf0fc6516a4e5143dc848a993555ee31770acb3",
       "note": "修复 hosts 文件只读导致初始化失败的问题，自动修复权限"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.0-beta"
-      ],
-      "target_module": "channelHandler.vivoChannelHandler",
-      "target_commit": "02ace04c0809837a32de5a142f15bade1ca8849f",
-      "note": "修复vivo多账号时自动选择第一个账号的问题"
     },
     {
       "need_hotfix_version": [
@@ -492,6 +484,23 @@
       "target_module": "mitm_addon",
       "target_commit": "44043513ab6f8945b45e1e8257dcb33180b14217",
       "note": "修复了模拟发烧平台的游戏（例如明日之后），无法通过扫码更新渠道服信息的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable",
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable",
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "channelHandler.vivoChannelHandler",
+      "target_commit": "a5cc7e1ceed65474add6362cf0cf33e273835579",
+      "note": "修复VIVO账号在同一游戏生命周期内切换账号时复用旧登录凭证的问题；重新下发v6.0.0-beta以避免旧热更新跳过记录影响本次修复"
     }
   ],
   "shortcuts": [
@@ -1047,6 +1056,251 @@
         "wx_appid": "wx7869269b36f12fb3",
         "channel": "1112051453"
       }
+    },
+    {
+      "package_name": "com.netease.onmyoji.m4399",
+      "app_channel": "4399com",
+      "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
+      "game_id": "g37",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.moba.m4399",
+      "app_channel": "4399com",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.stzb.m4399",
+      "app_channel": "4399com",
+      "log_key": "wIBYU30j5y3iehV5iJ8r7L0_3LyYChEr",
+      "game_id": "g10",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.mrzh.m4399",
+      "app_channel": "4399com",
+      "log_key": "-BQb6RCHHhYI1ADS6pJigOehE-sITVya",
+      "game_id": "g66",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.dhxy.m4399",
+      "app_channel": "4399com",
+      "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
+      "game_id": "g112",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.sky.m4399",
+      "app_channel": "4399com",
+      "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
+      "game_id": "ma75",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.yhtj.m4399",
+      "app_channel": "4399com",
+      "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
+      "game_id": "h75",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.aceracer.m4399",
+      "app_channel": "4399com",
+      "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
+      "game_id": "h65",
+      "4399com": {
+        "app_key": "114816",
+        "channel_id": "4399com",
+        "sdk_ver": "3.16.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.dhxy.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
+      "game_id": "g112",
+      "oppo": "com.netease.dhxy.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.onmyoji.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
+      "game_id": "g37",
+      "oppo": "com.netease.onmyoji.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.onmyoji.bili",
+      "app_channel": "bilibili_sdk",
+      "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
+      "game_id": "g37",
+      "bilibili_sdk": {
+        "bili_game_id": "166",
+        "app_key": "8dd76735d22d4191b4eefdc3152f79ac",
+        "sdk_ver": "5.9.6"
+      },
+      "name": "哔哩哔哩"
+    },
+    {
+      "package_name": "com.netease.mrzh.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "-BQb6RCHHhYI1ADS6pJigOehE-sITVya",
+      "game_id": "g66",
+      "oppo": "com.netease.mrzh.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.moba.mi",
+      "app_channel": "xiaomi_app",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "xiaomi_app": "mi_2882303761517629369",
+      "channel": "xiaomi_app",
+      "name": "小米账号"
+    },
+    {
+      "package_name": "com.tencent.tmgp.kaopu.jzpaj",
+      "app_channel": "myapp",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "myapp": {
+        "channel": "1106561332",
+        "wx_appid": "wxa7e372b1c9bb6cbb"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.netease.sky.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
+      "game_id": "ma75",
+      "oppo": "com.netease.sky.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.tencent.tmgp.stzb",
+      "app_channel": "myapp",
+      "log_key": "wIBYU30j5y3iehV5iJ8r7L0_3LyYChEr",
+      "game_id": "g10",
+      "myapp": {
+        "channel": "1104833445",
+        "wx_appid": "wxc683ec8b0a09da63"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.g67",
+      "app_channel": "myapp",
+      "log_key": "TN_lvn5bM9nwdH9NSf36EmcycST9B17V",
+      "game_id": "g67",
+      "myapp": {
+        "channel": "1112097427",
+        "wx_appid": "wx0fbefe423ec05da7"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.harrypotter",
+      "app_channel": "myapp",
+      "log_key": "gR9o0JNZge0vIwLS84fcz9iuHaZRg8Wd",
+      "game_id": "g92",
+      "myapp": {
+        "channel": "1111980517",
+        "wx_appid": "wx6e319e486f89d163"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.aceracer",
+      "app_channel": "myapp",
+      "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
+      "game_id": "h65",
+      "myapp": {
+        "channel": "1111869422",
+        "wx_appid": "wxbc4f709620735d51"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.yysbwp",
+      "app_channel": "myapp",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "myapp": {
+        "channel": "1109203221",
+        "wx_appid": "wx9534412afab38dd9"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.tencent.tmgp.ef3",
+      "app_channel": "myapp",
+      "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
+      "game_id": "h75",
+      "myapp": {
+        "channel": "1109835678",
+        "wx_appid": "wx7683a69f52d22e3c"
+      },
+      "channel": "myapp",
+      "name": "应用宝（微信）"
+    },
+    {
+      "package_name": "com.netease.yysbwp.mi",
+      "app_channel": "xiaomi_app",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "xiaomi_app": "mi_2882303761517947987",
+      "channel": "xiaomi_app",
+      "name": "小米账号"
+    },
+    {
+      "package_name": "com.netease.yysbwp.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "oppo": "com.netease.yysbwp.nearme.gamecenter"
     }
   ],
   "netease_qrcode_login_game_list": [

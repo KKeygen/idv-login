@@ -163,6 +163,18 @@ class vivoChannel(channelmgr.channel):
         self.activeAccount:vivoSubAccount = None
         
 
+    def _refresh_open_token(self) -> bool:
+        if self.activeAccount is None:
+            self.logger.error("Vivo登录失败：未找到选中的小号")
+            return False
+        open_token = self.vivoLogin.loginSubAccount(self.activeAccount.subOpenId)
+        if not open_token:
+            self.activeAccount.openToken = ""
+            self.logger.error("Vivo登录失败：未获取到新的登录凭证")
+            return False
+        self.activeAccount.openToken = open_token
+        return True
+
 
     def request_user_login(self, on_complete=None):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
@@ -172,10 +184,12 @@ class vivoChannel(channelmgr.channel):
             for i in range(len(self.session.subAccounts)):
                 if self.session.subAccounts[i].subOpenId == self.chosenAccount:
                     self.activeAccount = self.session.subAccounts[i]
-                    self.activeAccount.openToken = self.vivoLogin.loginSubAccount(self.activeAccount.subOpenId)
+                    break
+            if not self._refresh_open_token():
+                return False
             if self.name == self.uuid:
                 self.name = f"{self.session.nickName}-{self.activeAccount.nickName}"
-            return self.session is not None
+            return True
 
         def _process_login_data(resp):
             """处理登录数据，多账号时弹出 Qt 对话框选择。"""
@@ -230,7 +244,11 @@ class vivoChannel(channelmgr.channel):
         return _process_login_data(resp)
 
     def is_token_valid(self):
-        return self.session!=None
+        return bool(
+            self.session is not None
+            and self.activeAccount is not None
+            and self.activeAccount.openToken
+        )
 
     @classmethod
     def from_dict(cls, data: dict):
@@ -276,6 +294,7 @@ class vivoChannel(channelmgr.channel):
 
     def get_uniSdk_data(self, game_id: str = "", on_complete=None):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
+        should_refresh_open_token = self.is_token_valid()
         if game_id == "":
             game_id = self.game_id
         self.logger.info(f"Get unisdk data for {self.name}")
@@ -334,6 +353,12 @@ class vivoChannel(channelmgr.channel):
                 self.request_user_login()
                 if not self.is_token_valid():
                     return None
+
+        if should_refresh_open_token:
+            if not self._refresh_open_token():
+                if on_complete is not None:
+                    on_complete(None)
+                return None
 
         result = _build_unisdk_data()
         if on_complete is not None:
