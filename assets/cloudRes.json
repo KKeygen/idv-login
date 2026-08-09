@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786217574,
+  "lastModified": 1786248372,
   "version": "v6.2.2-stable",
   "hotfix": [
     {
@@ -102,14 +102,6 @@
       "target_module": "hostmgr",
       "target_commit": "dbf0fc6516a4e5143dc848a993555ee31770acb3",
       "note": "修复 hosts 文件只读导致初始化失败的问题，自动修复权限"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.0-beta"
-      ],
-      "target_module": "channelHandler.vivoChannelHandler",
-      "target_commit": "02ace04c0809837a32de5a142f15bade1ca8849f",
-      "note": "修复vivo多账号时自动选择第一个账号的问题"
     },
     {
       "need_hotfix_version": [
@@ -492,6 +484,23 @@
       "target_module": "mitm_addon",
       "target_commit": "44043513ab6f8945b45e1e8257dcb33180b14217",
       "note": "修复了模拟发烧平台的游戏（例如明日之后），无法通过扫码更新渠道服信息的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable",
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable",
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "channelHandler.vivoChannelHandler",
+      "target_commit": "a5cc7e1ceed65474add6362cf0cf33e273835579",
+      "note": "修复VIVO账号在同一游戏生命周期内切换账号时复用旧登录凭证的问题；重新下发v6.0.0-beta以避免旧热更新跳过记录影响本次修复"
     }
   ],
   "shortcuts": [
