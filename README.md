@@ -85,7 +85,7 @@ pyinstaller -F src/main.py -n idv-login-v10beta.exe -i assets/icon.ico --version
 | 渠道 | 描述 |
 |------|------|
 | ~~九游~~ | 已经解决 |
-| 4399 | Token过期很快，难度高 |
+| ~~4399~~ | 已经解决 |
 
 一个渠道服登录实现的类模板在[这里](src/channelHandler/miChannelHandler.py)。
 
