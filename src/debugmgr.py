@@ -343,32 +343,6 @@ class DebugMgr:
         return proxy_info
     
     @staticmethod
-    def get_memory_info():
-        """获取内存信息"""
-        memory_info = {}
-        
-        try:
-            if psutil:
-                try:
-                    # 获取内存信息
-                    memory = psutil.virtual_memory()
-                    memory_info = {
-                        '总内存': f"{memory.total / (1024**3):.2f} GB",
-                        '可用内存': f"{memory.available / (1024**3):.2f} GB",
-                        '已用内存': f"{memory.used / (1024**3):.2f} GB",
-                        '内存使用率': f"{memory.percent}%",
-                        '缓存': f"{memory.cached / (1024**3):.2f} GB" if hasattr(memory, 'cached') else '不可用'
-                    }
-                except Exception as e:
-                    memory_info['内存信息错误'] = str(e)
-            else:
-                memory_info['错误'] = 'psutil模块未安装'
-        except Exception as e:
-            memory_info['系统信息获取错误'] = str(e)
-        
-        return memory_info
-    
-    @staticmethod
     def get_firewall_rules():
         """获取Windows防火墙规则"""
         if not DebugMgr.is_windows():
@@ -507,7 +481,6 @@ class DebugMgr:
         except Exception as e:
             print(f"收集调试信息时出错: {str(e)}")
             return False
-
 
 
 

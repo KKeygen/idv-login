@@ -602,13 +602,6 @@ class ChannelManager:
         
         self.logger.info("孤立 weblogin profile/cache 清理完成")
 
-    def build_query_res(self, uuid: str):
-        for channel in self.channels:
-            if channel.uuid == uuid:
-                data = channel.login_info
-                return data
-        return None
-
     def query_channel(self, uuid: str):
         for channel in self.channels:
             if channel.uuid == uuid:

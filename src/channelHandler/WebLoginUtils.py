@@ -271,35 +271,6 @@ class WebBrowser(QWidget):
         script.setRunsOnSubFrames(runs_on_sub_frames)
         self.profile.scripts().insert(script)
 
-    def replace_page(self, new_page: QWebEnginePage):
-        """替换页面对象并保持 signal 连接一致。"""
-        if new_page is None:
-            return
-
-        try:
-            self.page.loadFinished.disconnect(self.on_load_finished)
-        except Exception:
-            pass
-        try:
-            self.page.urlChanged.disconnect(self.handle_url_change)
-        except Exception:
-            pass
-
-        try:
-            old_page = self.page
-            self.view.setPage(new_page)
-            self.page = self.view.page()
-            try:
-                old_page.deleteLater()
-            except Exception:
-                pass
-        except Exception:
-            self.view.setPage(new_page)
-            self.page = self.view.page()
-
-        self.page.loadFinished.connect(self.on_load_finished)
-        self.page.urlChanged.connect(self.handle_url_change)
-
     def set_url(self, url):
         self.view.load(QUrl(url))
 

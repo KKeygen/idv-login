@@ -35,10 +35,6 @@ def b64_urlsafe_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii")
 
 
-def b64_urlsafe_decode(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s.encode("ascii"))
-
-
 def b64_std_encode(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 

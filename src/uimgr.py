@@ -878,7 +878,3 @@ class UIManager:
                 user32.AttachThreadInput(fg_tid, cur_tid, False)
         except Exception:
             pass
-
-    def close(self):
-        if self._window:
-            self._window.close()
