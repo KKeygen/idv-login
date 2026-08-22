@@ -106,18 +106,6 @@ import threading
 threading.excepthook = _threading_excepthook
 
 
-def get_computer_name():
-    try:
-        # 获取计算机名
-        computer_name = socket.gethostname()
-        # 确保计算机名编码为 UTF-8
-        computer_name_utf8 = computer_name.encode('utf-8').decode('utf-8')
-        return computer_name_utf8
-    except Exception as e:
-        logger.exception(f"获取计算机名时发生异常: {e}")
-        return None
-
-
 # ------------------------------------------------------------------
 # 用户级代理环境变量管理 (Windows)
 # 全局标志，防止handle_exit被多次调用

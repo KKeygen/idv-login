@@ -977,10 +977,6 @@ class FeverBridge:
         self._dll_path = ""
         self._active_dll_key = ""
 
-    def _release_interface(self):
-        """Compatibility shim: never invoke MPay Release_Interface in-process."""
-        self._retire_interface("legacy-release-call")
-
     # ------------------------------------------------------------------
     # Login callbacks and one-shot delivery
     # ------------------------------------------------------------------
@@ -1050,18 +1046,6 @@ class FeverBridge:
             self._active_session["destroy_host_on_send"] = True
         self._flush_active_ticket()
         return target_process_id
-
-    def _destroy_mpay_host_window(self):
-        window = self._mpay_host_window
-        self._mpay_host_window = None
-        if window is None:
-            return
-        window.close()
-        window.destroy(True, True)
-        window.deleteLater()
-        from PyQt6.QtWidgets import QApplication
-
-        QApplication.processEvents()
 
     def _request_user_ticket(self):
         with self._lock:

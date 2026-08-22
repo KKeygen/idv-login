@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import time
 import json
-import random
-import string
 import base64
 import re
 import uuid
@@ -702,7 +700,3 @@ class oppoChannel(channelmgr.channel):
             json.dumps(self.loginResp)
 
         json.dumps(self.oppo_open_account)
-
-
-def _rand_code() -> str:
-    return "".join(random.choices(string.digits, k=6))

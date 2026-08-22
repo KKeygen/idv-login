@@ -260,21 +260,6 @@ class CloudSyncManager:
             if self.evaluate_master_key_strength(key)["valid"]:
                 return key
 
-    def save_master_key_txt(self, master_key: str, output_path: str = "") -> str:
-        self.ensure_master_key_valid(master_key)
-        work_dir = genv.get("FP_WORKDIR", os.getcwd())
-        if not output_path:
-            ts = time.strftime("%Y%m%d-%H%M%S", time.localtime())
-            output_path = os.path.join(work_dir, f"idv-login-master-key-{ts}.txt")
-        content = (
-            "IDV Login 云同步主密钥\n"
-            "请妥善保管，泄露将导致云端密文可被解密。\n\n"
-            f"master_key={master_key}\n"
-        )
-        from secure_write import write_text_restricted
-        write_text_restricted(output_path, content)
-        return output_path
-
     def _derive_aes_key(self, master_key: str) -> bytes:
         self.ensure_master_key_valid(master_key)
         return hash_secret_raw(

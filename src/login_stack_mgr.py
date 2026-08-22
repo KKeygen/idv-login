@@ -30,10 +30,6 @@ class LoginStackManager:
             cls._instance = cls()
         return cls._instance
 
-    def reset(self):
-        self._cached_qrcode_data_stack = {}
-        self._pending_login_info_stack = {}
-
     @classmethod
     def find_stack_by_common_suffix(cls, stack_dict, game_id):
         stack = stack_dict.get(game_id, [])

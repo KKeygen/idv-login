@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import requests
 
@@ -76,37 +76,6 @@ class OppoSecureSession:
             return r.json()
         except Exception:
             return {"success": False, "http": r.status_code, "raw": r.text}
-
-    def _send_encrypted_json(self, path: str, payload_obj: Dict[str, Any]) -> Tuple[int, Dict[str, str], str]:
-        url = self.base_url.rstrip("/") + "/" + path.lstrip("/")
-
-        # 每次请求生成随机 AES key + IV
-        security_key = SecurityKey.generate()
-        security_key.session_ticket = self.session_ticket
-
-        # 1) 组装加密 header（含 X-Security/X-Safety/X-Protocol/X-Key/X-I-V）
-        sec_headers = build_security_headers(security_key, self.device_security_header_plain, xor_key_name="key")
-
-        # 2) 加密 body
-        body_json = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":"))
-        enc_body = security_key.encrypt(body_json)
-
-        headers = self._build_common_headers()
-        headers.update(sec_headers)
-        headers["Content-Type"] = "application/encrypted-json; charset=UTF-8"
-
-        r = self.http.post(url, data=enc_body, headers=headers, verify=should_verify_ssl())
-
-        # 更新 sessionTicket
-        new_ticket = r.headers.get("X-Session-Ticket")
-        if isinstance(new_ticket, str) and new_ticket:
-            self.session_ticket = new_ticket
-
-        return r.status_code, dict(r.headers), r.text
-
-    def _decrypt_response_if_needed(self, status_code: int, headers: Dict[str, str], body_text: str, security_key: SecurityKey) -> Dict[str, Any]:
-        # 当前实现中 _send_encrypted_json 没把 key 暴露；保留这个入口给未来重构。
-        raise NotImplementedError
 
     def post_json(self, path: str, payload_obj: Dict[str, Any], *, allow_plain_fallback: bool = True) -> Dict[str, Any]:
         """发送加密 JSON 请求，并在成功时解密返回 JSON。

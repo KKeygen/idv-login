@@ -1081,17 +1081,6 @@ class Game:
             subprocess.Popen(cmd, env=env, shell=False)
         return True
 
-    def _get_shortcut_dir(self) -> Optional[str]:
-        if sys.platform != "win32":
-            return None
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.join(os.path.expanduser("~"), "Desktop")
-        if os.path.exists(base_dir):
-            return base_dir
-        return os.path.dirname(os.path.abspath(self.path)) if self.path else None
-
     def _build_unique_shortcut_path(self, shortcut_dir: str, base_name: str) -> str:
         safe_name = str(base_name or "").strip() or self.game_id
         candidate = os.path.join(shortcut_dir, f"{safe_name}.lnk")
@@ -1103,44 +1092,6 @@ class Game:
             if not os.path.exists(candidate):
                 return candidate
             suffix += 1
-
-    def _verify_created_shortcut(self, shortcut_path: str, expected_target: str, expected_args: str, expected_working_dir: str) -> bool:
-        if not os.path.exists(shortcut_path):
-            self.logger.error(f"快捷方式创建后不存在: {shortcut_path}")
-            return False
-        try:
-            import win32com.client
-            shell = win32com.client.Dispatch("WScript.Shell")
-
-            game_path = shortcut_path
-            if game_path.lower().endswith(".lnk"):
-                shortcut = shell.CreateShortcut(game_path)
-                game_path = (shortcut.Targetpath or "").strip()
-                shortcut_args = (shortcut.Arguments or "").strip()
-                shortcut_working_dir = (shortcut.WorkingDirectory or "").strip()
-            else:
-                shortcut_args = ""
-                shortcut_working_dir = ""
-
-            expected_target_norm = os.path.normcase(os.path.normpath(expected_target or ""))
-            actual_target_norm = os.path.normcase(os.path.normpath(game_path or ""))
-            expected_working_norm = os.path.normcase(os.path.normpath(expected_working_dir or ""))
-            actual_working_norm = os.path.normcase(os.path.normpath(shortcut_working_dir or ""))
-
-            if actual_target_norm != expected_target_norm:
-                self.logger.error(f"快捷方式目标不匹配: expected={expected_target}, actual={game_path}")
-                return False
-            expected_args_normalized = (expected_args or "").strip()
-            if (shortcut_args or "") != expected_args_normalized:
-                self.logger.error(f"快捷方式参数不匹配: expected={expected_args_normalized}, actual={shortcut_args}")
-                return False
-            if actual_working_norm != expected_working_norm:
-                self.logger.error(f"快捷方式工作目录不匹配: expected={expected_working_dir}, actual={shortcut_working_dir}")
-                return False
-            return True
-        except Exception as e:
-            self.logger.error(f"验证快捷方式失败: {e}")
-            return False
 
     def _find_existing_tool_launch_shortcut(self, shortcut_dir: str, expected_target: str, expected_args: str) -> str:
         try:
@@ -1678,21 +1629,6 @@ class Game:
         except Exception as e:
             self.logger.exception(f"启动下载子进程失败: {e}")
             return False
-    def need_update(self, distribution_id: int, installation_id: str = "") -> bool:
-        """检查游戏是否需要更新到指定分发ID的版本"""
-        installation = self.get_installation(installation_id)
-        if not installation or not installation.path or not os.path.exists(installation.path):
-            return False
-        if not CloudRes().is_downloadable(getShortGameId(self.game_id)):
-            return False
-        file_distribution_info = self.get_file_distribution_info(distribution_id)
-        if not file_distribution_info:
-            self.logger.error(f"未找到分发ID {distribution_id} 的文件分发信息")
-            return False
-        files = file_distribution_info.get("files", [])
-        _check_result, to_update = self.version_check(files, installation.installation_id)
-        return not check_result
-
     def version_check(
         self,
         files: List[dict],
@@ -1770,12 +1706,6 @@ class Game:
             "target_version": target_version,
         }
 
-    def is_downloadable_fever(self) -> bool:
-        """检查游戏是否有Fever版本可供下载"""
-        cloud_res = CloudRes()
-        short_game_id = getShortGameId(self.game_id)
-        return cloud_res.is_downloadable(short_game_id)
-    
     def get_distribution_options(self) -> List[dict]:
         """获取游戏的分发选项"""
         cloud_res = CloudRes()
@@ -1785,28 +1715,6 @@ class Game:
     def get_default_distribution(self) -> int:
         """获取游戏的默认分发ID"""
         return self.default_distribution
-    def set_default_distribution(self, distribution_id: int=-1) -> None:
-        """设置游戏的默认分发ID"""
-        if distribution_id==-1:
-            distributions = self.get_distributions()
-            if distributions:
-                self.default_distribution = distributions[0]
-            else:
-                self.default_distribution = -1
-        else:
-            self.default_distribution = distribution_id
-    
-    def get_version(self) -> str:
-        """获取游戏版本号"""
-        return self.version
-    
-    def can_convert_to_normal(self) -> bool:
-        """检查游戏是否可以转换为普通版本"""
-        cloud_res = CloudRes()
-        short_game_id = getShortGameId(self.game_id)
-        return cloud_res.is_convert_to_normal(short_game_id)
-    
-
 class GameManager:
     GAMES_CACHE_KEY = "game_settings"
     INSTALLATIONS_CACHE_KEY = "game_installation_settings_v1"
@@ -2068,19 +1976,6 @@ class GameManager:
         self._save_games()
         return True
 
-    def set_installation_path(
-        self, game_id: str, installation_id: str, path: str
-    ) -> bool:
-        game = self.get_existing_game(game_id)
-        installation = game.get_installation(installation_id) if game else None
-        if installation is None:
-            return False
-        installation.path = GameInstallation._normalize_path(path)
-        installation.updated_at = int(time.time())
-        game.last_used_time = installation.updated_at
-        self._save_games()
-        return True
-
     def set_game_auto_start(
         self,
         game_id: str,
@@ -2146,26 +2041,6 @@ class GameManager:
             }
         return {"enabled": False, "path": "", "installation_id": ""}
 
-    def start_game(self, game_id: str, installation_id: str = "") -> bool:
-        """启动游戏"""
-        game = self.get_game(game_id)
-        installation = game.get_installation(installation_id) if game else None
-        if not installation or not installation.path or not os.path.exists(installation.path):
-            self.logger.error(
-                f"游戏路径无效或不存在: {installation.path if installation else '未设置'}"
-            )
-            return False
-        try:
-            if not game.start(installation.installation_id):
-                return False
-            game.last_used_time = int(time.time())
-            self._save_games()
-            self.logger.info(f"游戏 {game_id} 启动成功")
-            return True
-        except Exception as e:
-            self.logger.exception(f"启动游戏失败: {str(e)}")
-            return False
-
     def rename_game(self, game_id: str, new_name: str) -> bool:
         """重命名游戏"""
         if not game_id or not new_name:
@@ -2174,25 +2049,6 @@ class GameManager:
         game = self.get_game(game_id)
         if game:
             game.name = new_name
-            game.last_used_time = int(time.time())
-            self._save_games()
-            return True
-        return False
-
-    def set_game_default_distribution(self, game_id: str, distribution_id: int) -> bool:
-        if not game_id:
-            return False
-        game = self.get_game(game_id)
-        if game:
-            installation = game.get_installation_for_distribution(distribution_id)
-            if installation:
-                game.set_default_installation(installation.installation_id)
-            else:
-                default = game.get_installation()
-                if default is None:
-                    return False
-                default.distribution_id = Game._coerce_distribution_id(distribution_id)
-                default.updated_at = int(time.time())
             game.last_used_time = int(time.time())
             self._save_games()
             return True
@@ -2344,35 +2200,6 @@ class GameManager:
                 distribution_id,
             ))
         return 6
-
-    def get_game_default_launcher_data(self, game_id: str) -> int:
-        """获取游戏的默认启动器分发ID"""
-        game = self.get_game(game_id)
-        if game and game.default_distribution != -1:
-            return game.get_launcher_data_for_distribution(game.default_distribution)
-        return None
-    
-    def get_game_version(self, game_id: str) -> str:
-        """获取游戏版本号"""
-        game = self.get_game(game_id)
-        if game:
-            return game.get_version()
-        return ""
-    
-    def get_game_distribution_options(self, game_id: str) -> List[dict]:
-        """获取游戏的分发选项"""
-        game = self.get_game(game_id)
-        if game:
-            return game.get_distribution_options()
-        return []
-    
-    def get_game_launcher_data_for_distribution(self, game_id: str, distribution_id: int) -> Optional[dict]:
-        """获取指定分发ID的启动器数据"""
-        game = self.get_game(game_id)
-        if game:
-            return game.get_launcher_data_for_distribution(distribution_id)
-        return None
-    
 
     def list_fever_games(self) -> List[dict]:
         if sys.platform != "win32":

@@ -95,12 +95,6 @@ def add_custom_dns(domain: str, port: int, ip: str):
     logger.debug(f"添加自定义 DNS: {domain}:{port} -> {ip}")
 
 
-def remove_custom_dns(domain: str, port: int):
-    """移除自定义 DNS 解析。"""
-    key = (domain, port)
-    _dns_cache.pop(key, None)
-
-
 def clear_custom_dns():
     """清除所有自定义 DNS 解析。"""
     _dns_cache.clear()
@@ -547,12 +541,6 @@ class LocalDnsServer:
 
         return None
 
-    @property
-    def is_running(self) -> bool:
-        """服务器是否正在运行。"""
-        return self._running
-
-
 # ==================================================================
 # DNS 策略管理 - 兼容模式专用 (NRPT/Hosts)
 # TODO: 拆分到 dns_policy.py
@@ -560,112 +548,6 @@ class LocalDnsServer:
 
 # 用于标识本工具创建的 NRPT 规则的显示名称前缀
 _NRPT_RULE_PREFIX = "IDVLogin_"
-
-
-def is_nrpt_available() -> bool:
-    """检测 Windows NRPT 命令是否可用。
-
-    NRPT 功能需要 Windows 7+ 且具有管理员权限。
-    """
-    if sys.platform != "win32":
-        return False
-
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-Command Add-DnsClientNrptRule -ErrorAction SilentlyContinue"],
-            capture_output=True,
-            timeout=10,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-        return result.returncode == 0 and b"Add-DnsClientNrptRule" in result.stdout
-    except Exception as e:
-        logger.debug(f"检测 NRPT 可用性失败: {e}")
-        return False
-
-
-def add_nrpt_rule(domain: str, dns_server: str = "127.0.0.1") -> bool:
-    """为指定域名添加 NRPT 规则，将 DNS 解析指向本地 DNS 服务器。
-
-    Args:
-        domain: 要劫持的域名，如 "service.mkey.163.com"
-        dns_server: DNS 服务器地址，默认 "127.0.0.1"
-
-    Returns:
-        是否成功添加规则
-    """
-    if sys.platform != "win32":
-        logger.warning("NRPT 仅支持 Windows 平台")
-        return False
-
-    rule_name = f"{_NRPT_RULE_PREFIX}{domain.replace('.', '_')}"
-
-    # 先尝试删除同名规则（如果存在）
-    remove_nrpt_rule(domain)
-
-    # 添加 NRPT 规则
-    # -Namespace: 匹配的域名后缀（以 . 开头表示后缀匹配，不带 . 表示精确匹配）
-    # -NameServers: 指定该域名使用的 DNS 服务器
-    # -DisplayName: 规则显示名称，用于标识
-    ps_cmd = (
-        f'Add-DnsClientNrptRule -Namespace ".{domain}" '
-        f'-NameServers "{dns_server}" '
-        f'-DisplayName "{rule_name}" '
-        f'-ErrorAction Stop'
-    )
-
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
-            capture_output=True,
-            timeout=15,
-            text=True,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-        if result.returncode == 0:
-            logger.debug(f"已添加 NRPT 规则: {domain} -> {dns_server}")
-            return True
-        else:
-            logger.error(f"添加 NRPT 规则失败: {result.stderr}")
-            return False
-    except Exception as e:
-        logger.error(f"添加 NRPT 规则异常: {e}")
-        return False
-
-
-def remove_nrpt_rule(domain: str) -> bool:
-    """移除指定域名的 NRPT 规则。
-
-    Args:
-        domain: 域名
-
-    Returns:
-        是否成功移除（规则不存在也返回 True）
-    """
-    if sys.platform != "win32":
-        return True
-
-    rule_name = f"{_NRPT_RULE_PREFIX}{domain.replace('.', '_')}"
-
-    # 查找并删除匹配的规则
-    ps_cmd = (
-        f'Get-DnsClientNrptRule | '
-        f'Where-Object {{ $_.DisplayName -eq "{rule_name}" }} | '
-        f'Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue'
-    )
-
-    try:
-        subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
-            capture_output=True,
-            timeout=15,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-        logger.debug(f"已移除 NRPT 规则: {domain}")
-        return True
-    except Exception as e:
-        logger.warning(f"移除 NRPT 规则失败: {e}")
-        return False
 
 
 def remove_all_nrpt_rules() -> bool:
@@ -875,12 +757,6 @@ class DnsPolicyManager:
     def is_using_nrpt(self) -> bool:
         """是否正在使用 NRPT 方式。"""
         return self._use_nrpt
-
-    @property
-    def is_active(self) -> bool:
-        """DNS 策略是否已激活。"""
-        return self._active
-
 
 class MitmProxyManager:
     """Manages mitmproxy running in normal (regular) proxy mode.

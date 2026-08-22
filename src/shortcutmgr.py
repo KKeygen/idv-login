@@ -8,17 +8,6 @@ class ShortcutEntry:
         self.url = url
         self.name = name
         self.policy = policy  # 快捷方式创建策略: once-仅创建一次, always-每次都创建
-    
-    def from_dict(self,data):
-        self.url=data.get('url')
-        self.name=data.get('name')
-        self.policy=data.get('policy')
-    def to_dict(self):
-        return {
-            'url':self.url,
-            'name':self.name,
-            'policy':self.policy
-        }
 class ShortcutMgr:
     def __init__(self) -> None:
         pass
@@ -66,10 +55,6 @@ class ShortcutMgr:
             return []
         return cloudResMgr_instance.get_shortcuts()
     
-    def is_shortcut_exists(self,url,name):
-        savePath=os.path.join(self._get_shortcut_dir(),f"{name}.url")
-        return os.path.exists(savePath)
-
     def handle_shortcuts(self):
         shortcuts=self.get_shortcuts()
         for shortcut in shortcuts:

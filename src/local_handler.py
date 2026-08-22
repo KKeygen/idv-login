@@ -45,7 +45,6 @@ class LocalRequestHandler:
 
     _cloud_sync_mgr = None
     _cloud_sync_lock = threading.Lock()
-    _auto_push_generation = {"value": 0}
     _pending_imports = {}  # {task_id: {"status": "pending"|"done", "success": bool}}
     _reset_lock = threading.Lock()
     _reset_started = False
@@ -286,37 +285,6 @@ class LocalRequestHandler:
             ),
         }
 
-    def _schedule_auto_push(self, reason: str):
-        settings = self._get_cloud_sync_settings()
-        if not settings.get("auto_sync", False) or not settings.get("consent_ack", False):
-            return
-        master_key = str(settings.get("saved_master_key", "") or "")
-        if not master_key:
-            return
-        strength = self.cloud_sync_mgr.evaluate_master_key_strength(master_key)
-        if not strength.get("valid", False):
-            return
-        scope = {
-            "type": str(settings.get("scope_type", "all") or "all"),
-            "game_id": str(settings.get("scope_game_id", "") or ""),
-            "uuids": settings.get("scope_uuids", []) if isinstance(settings.get("scope_uuids", []), list) else [],
-        }
-        expire_time = int(settings.get("expire_time", 259200) or 259200)
-
-        self._auto_push_generation["value"] += 1
-        gen = self._auto_push_generation["value"]
-
-        def _push():
-            self.logger.info(f"检测到账号记录更新，准备在5秒后自动上传云同步（原因: {reason}）")
-            time.sleep(5)
-            if gen != self._auto_push_generation["value"]:
-                return
-            try:
-                self.cloud_sync_mgr.push(master_key, scope, expire_time)
-            except Exception:
-                self.logger.exception("自动上传云同步失败")
-
-        threading.Thread(target=_push, daemon=True).start()
 
     def _pick_qrcode_data(self, channel, game_id):
         """从指定渠道的二维码缓存中获取数据。"""

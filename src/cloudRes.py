@@ -223,10 +223,6 @@ class CloudRes:
     def get_dynamic_game_catalog_status(self):
         return self.dynamic_game_catalog.get_status()
 
-    def get_cloud_game_config(self, game_id):
-        """按短游戏代号返回公开云端游戏配置。"""
-        return self.dynamic_game_catalog.get_cloud_config(game_id)
-
     def resolve_cloud_game_id(self, game_id):
         """将 h55 类短代号转为 aec...-g-h55 形式。"""
         return self.dynamic_game_catalog.resolve_cloud_game_id(game_id)
@@ -236,13 +232,6 @@ class CloudRes:
 
     def get_netease_qrcode_login_game_list(self):
         return self.local_data.get('netease_qrcode_login_game_list', [])
-
-    def is_game_in_qrcode_login_list(self,game_id):
-        game_list = self.get_netease_qrcode_login_game_list()
-        for item in game_list:
-            if cmp_game_id(item.get('game_id'), game_id):
-                return True
-        return False
 
     def get_qrcode_app_channel(self,game_id):
         config = self.get_qrcode_login_config(game_id)
@@ -262,9 +251,6 @@ class CloudRes:
 
     def get_downloadUrl(self):
         return self.local_data.get('downloadUrl', '')
-    
-    def get_guideUrl(self):
-        return self.local_data.get('guideUrl', '')
     
     def get_detail(self):
         return self.local_data.get('detail', '')
@@ -300,12 +286,6 @@ class CloudRes:
             return ""
         return features.get('start_argument', "")
 
-    def get_version_code_checkpoint(self,shortGameId):
-        features = self.get_feature_by_game_id(shortGameId)
-        if not features:
-            return ""
-        return features.get('version_code_checkpoint', "")
-    
     def get_download_distributions(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
         if not features:

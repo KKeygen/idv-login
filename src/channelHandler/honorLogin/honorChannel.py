@@ -22,7 +22,7 @@ from channelHandler.honorLogin.consts import (
     HONOR_CHANNEL_ID,
     HONOR_AMS_PACKAGE,
 )
-from channelHandler.honorLogin.utils import get_authorization_code, exchange_code_for_token
+from channelHandler.honorLogin.utils import get_authorization_code
 from channelHandler.WebLoginUtils import WebBrowser
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestJob, QWebEngineUrlSchemeHandler
 

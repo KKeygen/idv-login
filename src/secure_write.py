@@ -109,13 +109,6 @@ def write_json_restricted(filepath: str, obj):
         except RuntimeError:
             pass
 
-
-def write_text_restricted(filepath: str, text: str, encoding: str = "utf-8"):
-    """Write text atomically with restricted permissions."""
-    data = text.encode(encoding)
-    write_file_restricted(filepath, data)
-
-
 def _win_restrict_acl(filepath: str):
     """Restrict ACL to Administrators + SYSTEM on Windows."""
     import subprocess
