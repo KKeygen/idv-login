@@ -424,7 +424,6 @@ class Game:
         default_distribution: int = -1,
         installation_state=None,
         installations=None,
-        default_installation_id: str = "",
         force_fever_bridge_distributions=None,
     ) -> None:
         self.game_id = game_id
@@ -438,9 +437,6 @@ class Game:
         self.installations: Dict[str, GameInstallation] = {}
         if isinstance(installation_state, dict):
             installations = installation_state.get("installations", {})
-            default_installation_id = installation_state.get(
-                "default_installation_id", ""
-            )
             force_fever_bridge_distributions = installation_state.get(
                 "force_fever_bridge_distributions", []
             )
@@ -477,20 +473,6 @@ class Game:
             )
             self.installations[legacy.installation_id] = legacy
 
-        self.default_installation_id = str(default_installation_id or "")
-        if self.default_installation_id not in self.installations:
-            self.default_installation_id = ""
-        if not self.default_installation_id and self.installations:
-            matching = next(
-                (
-                    item for item in self.installations.values()
-                    if item.distribution_id == self._coerce_distribution_id(default_distribution)
-                ),
-                None,
-            )
-            self.default_installation_id = (
-                matching.installation_id if matching else next(iter(self.installations))
-            )
         self._enforce_distribution_uniqueness()
         if isinstance(installation_state, dict):
             self.legacy_projection_merged = self._merge_legacy_projection(
@@ -511,8 +493,13 @@ class Game:
             return -1
 
     def get_installation(self, installation_id: str = "") -> Optional[GameInstallation]:
-        target_id = str(installation_id or self.default_installation_id or "")
-        return self.installations.get(target_id)
+        if installation_id:
+            return self.installations.get(str(installation_id))
+        for distribution_id in self.get_distributions():
+            matching = self.get_installation_for_distribution(distribution_id)
+            if matching is not None:
+                return matching
+        return next(iter(self.installations.values()), None)
 
     def _merge_legacy_projection(
         self,
@@ -521,11 +508,12 @@ class Game:
         distribution_id: int,
         previous_projection=None,
     ) -> bool:
-        """Merge changes made by a downgraded client into the v1 state.
+        """Merge changes made by a downgraded client into installation state.
 
-        The legacy fields are a writable projection of the default installation.
+        The legacy fields are a writable projection of the cloud-preferred
+        installation, or the first local installation when no cloud mapping exists.
         If an old release changes them, the next new release adopts those changes
-        instead of silently restoring stale v1 data.
+        instead of silently restoring stale installation data.
         """
         legacy_path = GameInstallation._normalize_path(path)
         legacy_dist = self._coerce_distribution_id(distribution_id)
@@ -542,7 +530,7 @@ class Game:
         )
         if not (path_changed or version_changed or distribution_changed):
             return False
-        default = self.get_installation()
+        target = self.get_installation()
         changed = False
         if path_changed and legacy_path:
             matching = next(
@@ -554,9 +542,8 @@ class Game:
                 None,
             )
             if matching is not None:
-                changed = self.default_installation_id != matching.installation_id
-                self.default_installation_id = matching.installation_id
-                default = matching
+                target = matching
+                changed = True
             else:
                 invalid_ids = [
                     item.installation_id
@@ -565,29 +552,24 @@ class Game:
                 ]
                 for installation_id in invalid_ids:
                     self.remove_installation(installation_id)
-                default = self.add_installation(
-                    legacy_path, source="manual", set_default=True
-                )
+                target = self.add_installation(legacy_path, source="manual")
                 changed = True
-        elif path_changed and not legacy_path and default is not None:
-            self.remove_installation(default.installation_id)
-            default = self.get_installation()
+        elif path_changed and not legacy_path and target is not None:
+            self.remove_installation(target.installation_id)
+            target = self.get_installation()
             changed = True
-        if default is None:
+        if target is None:
             return changed
-        if version_changed and default.installed_version != str(version or ""):
-            default.installed_version = str(version or "")
+        if version_changed and target.installed_version != str(version or ""):
+            target.installed_version = str(version or "")
             changed = True
-        if distribution_changed and default.distribution_id != legacy_dist:
-            self._claim_distribution(default, legacy_dist)
+        if distribution_changed and target.distribution_id != legacy_dist:
+            self._claim_distribution(target, legacy_dist)
             changed = True
         return changed
 
     def get_installation_for_distribution(self, distribution_id: int) -> Optional[GameInstallation]:
         dist_id = self._coerce_distribution_id(distribution_id)
-        default = self.get_installation()
-        if default and default.distribution_id == dist_id:
-            return default
         return next(
             (item for item in self.installations.values() if item.distribution_id == dist_id),
             None,
@@ -601,8 +583,6 @@ class Game:
         dist_id = self._coerce_distribution_id(distribution_id)
         if dist_id != -1:
             return self.get_installation_for_distribution(dist_id)
-        if self.active_installation_id in self.installations:
-            return self.installations[self.active_installation_id]
         return self.get_installation()
 
     def get_installation_setting(
@@ -653,13 +633,7 @@ class Game:
         for records in by_distribution.values():
             if len(records) < 2:
                 continue
-            keeper = next(
-                (
-                    item for item in records
-                    if item.installation_id == self.default_installation_id
-                ),
-                None,
-            ) or max(
+            keeper = max(
                 records,
                 key=lambda item: (item.updated_at, item.created_at),
             )
@@ -667,8 +641,6 @@ class Game:
                 if item is keeper:
                     continue
                 self.installations.pop(item.installation_id, None)
-                if self.default_installation_id == item.installation_id:
-                    self.default_installation_id = keeper.installation_id
 
     def _claim_distribution(
         self, installation: GameInstallation, distribution_id: int
@@ -680,8 +652,6 @@ class Game:
                 if item is installation or item.distribution_id != dist_id:
                     continue
                 self.installations.pop(item.installation_id, None)
-                if self.default_installation_id == item.installation_id:
-                    self.default_installation_id = installation.installation_id
         installation.distribution_id = dist_id
 
     def add_installation(
@@ -694,7 +664,6 @@ class Game:
         startup_path: str = "",
         startup_args: str = "",
         installation_id: str = "",
-        set_default: bool = True,
     ) -> GameInstallation:
         normalized_path = GameInstallation._normalize_path(path)
         dist_id = self._coerce_distribution_id(distribution_id)
@@ -740,8 +709,6 @@ class Game:
             if startup_args:
                 existing.startup_args = str(startup_args)
             existing.updated_at = now
-        if set_default or not self.default_installation_id:
-            self.default_installation_id = existing.installation_id
         self.last_used_time = now
         return existing
 
@@ -750,16 +717,6 @@ class Game:
         if target_id not in self.installations:
             return False
         del self.installations[target_id]
-        if self.default_installation_id == target_id:
-            self.default_installation_id = next(iter(self.installations), "")
-        return True
-
-    def set_default_installation(self, installation_id: str) -> bool:
-        target_id = str(installation_id or "")
-        if target_id not in self.installations:
-            return False
-        self.default_installation_id = target_id
-        self.last_used_time = int(time.time())
         return True
 
     @property
@@ -820,7 +777,6 @@ class Game:
             # Compatibility with development builds that briefly wrote these
             # fields at the game-record root.
             installations=data.get("installations"),
-            default_installation_id=data.get("default_installation_id", ""),
         )
 
     def to_dict(self) -> dict:
@@ -839,7 +795,6 @@ class Game:
     def to_installation_state(self) -> dict:
         return {
             "schema_version": 1,
-            "default_installation_id": self.default_installation_id,
             "legacy_projection": {
                 "path": self.path,
                 "version": self.version,
@@ -861,7 +816,6 @@ class Game:
             "last_used_time": self.last_used_time,
             "should_auto_start": self.should_auto_start,
             "path": self.path,
-            "default_installation_id": self.default_installation_id,
             "installations": [
                 installation.get_non_sensitive_data()
                 for installation in self.installations.values()
@@ -1713,8 +1667,13 @@ class Game:
         return cloud_res.get_download_distributions(short_game_id)
     
     def get_default_distribution(self) -> int:
-        """获取游戏的默认分发ID"""
-        return self.default_distribution
+        """优先使用云配置中的首个分发，否则使用首条本地安装。"""
+        distributions = self.get_distributions()
+        if distributions:
+            return distributions[0]
+        installation = self.get_installation()
+        return installation.distribution_id if installation else -1
+
 class GameManager:
     GAMES_CACHE_KEY = "game_settings"
     INSTALLATIONS_CACHE_KEY = "game_installation_settings_v1"
@@ -1743,9 +1702,6 @@ class GameManager:
                     if installation_state is None and game_data.get("installations"):
                         installation_state = {
                             "schema_version": 1,
-                            "default_installation_id": game_data.get(
-                                "default_installation_id", ""
-                            ),
                             "installations": game_data.get("installations", {}),
                         }
                     if installation_state is None and game_data.get("path"):
@@ -1840,7 +1796,6 @@ class GameManager:
         startup_path: str = "",
         startup_args: str = "",
         installation_id: str = "",
-        set_default: bool = True,
     ) -> Optional[GameInstallation]:
         if not game_id or not path:
             return None
@@ -1856,7 +1811,6 @@ class GameManager:
             startup_path=startup_path,
             startup_args=startup_args,
             installation_id=installation_id,
-            set_default=set_default,
         )
         self._save_games()
         return installation
@@ -1925,7 +1879,6 @@ class GameManager:
                 startup_path=marker.get("startup_path", os.path.basename(normalized)),
                 startup_args=marker.get("startup_args", ""),
                 installation_id=marker.get("installation_id", ""),
-                set_default=True,
             )
         else:
             matching = next(
@@ -1937,7 +1890,6 @@ class GameManager:
                 None,
             )
             if matching:
-                game.set_default_installation(matching.installation_id)
                 installation = matching
             elif normalized:
                 invalid_ids = [
@@ -1951,7 +1903,6 @@ class GameManager:
                     normalized,
                     source="manual",
                     startup_path=os.path.basename(normalized),
-                    set_default=True,
                 )
             else:
                 default = game.get_installation()
@@ -2053,15 +2004,6 @@ class GameManager:
             self._save_games()
             return True
         return False
-
-    def set_game_default_installation(
-        self, game_id: str, installation_id: str
-    ) -> bool:
-        game = self.get_existing_game(game_id)
-        if not game or not game.set_default_installation(installation_id):
-            return False
-        self._save_games()
-        return True
 
     def remove_game_installation(self, game_id: str, installation_id: str) -> bool:
         game = self.get_existing_game(game_id)
@@ -2473,17 +2415,12 @@ class GameManager:
                     continue
                 if distribution_record is not None:
                     continue
-                set_default = not game.installations
-            else:
-                set_default = True
-
             imported_game_id = self.import_fever_game(
                 final_game_id,
                 distribution_id=record.get("distribution_id", -1),
                 path=target_path,
                 create_shortcut=False,
                 notify=False,
-                set_default=set_default,
                 refresh_registry=False,
             )
             if imported_game_id and imported_game_id not in imported:
@@ -2501,7 +2438,6 @@ class GameManager:
         *,
         create_shortcut: bool = True,
         notify: bool = True,
-        set_default: bool = True,
         refresh_registry: bool = True,
     ) -> Optional[str]:
         if not game_id:
@@ -2556,7 +2492,6 @@ class GameManager:
                 target.get("startup_path") or os.path.basename(executable_path)
             ),
             startup_args=target.get("startup_args", ""),
-            set_default=set_default,
         )
         # Fever's registry already provides the authoritative distribution,
         # version, content id, startup path, and startup arguments.  Do not

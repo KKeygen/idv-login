@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 # Keep these model tests independent from the optional Qt/runtime stack.
 app_state = types.ModuleType("app_state")
 app_state.toast = lambda *args, **kwargs: None
+app_state.fever_bridge = None
 sys.modules["app_state"] = app_state
 
 envmgr = types.ModuleType("envmgr")
@@ -42,6 +43,9 @@ cloud_res.CloudRes = type(
     {
         "is_convert_to_normal": lambda self, game_id: False,
         "get_start_argument": lambda self, game_id: "",
+        "get_download_distributions": lambda self, game_id: [],
+        "has_manual_game_feature": lambda self, game_id: False,
+        "is_fever_managed_game": lambda self, game_id, distribution_id=-1: False,
     },
 )
 sys.modules["cloudRes"] = cloud_res
@@ -85,8 +89,8 @@ class GameInstallationModelTests(unittest.TestCase):
         self.assertEqual(installation.installed_version, "v3_old")
 
         reloaded = Game.from_dict(game.to_dict(), game.to_installation_state())
-        self.assertEqual(reloaded.default_installation_id, game.default_installation_id)
         self.assertEqual(len(reloaded.installations), 1)
+        self.assertFalse(hasattr(reloaded, "default_installation_id"))
 
         saved = game.to_dict()
         self.assertEqual(saved["path"], "D:/Games/dwrg.exe")
@@ -95,13 +99,14 @@ class GameInstallationModelTests(unittest.TestCase):
         self.assertNotIn("installations", saved)
         self.assertNotIn("default_installation_id", saved)
         self.assertNotIn("installation_state_v1", saved)
-        self.assertEqual(game.to_installation_state()["schema_version"], 1)
+        state = game.to_installation_state()
+        self.assertEqual(state["schema_version"], 1)
+        self.assertNotIn("default_installation_id", state)
 
     def test_downgraded_client_changes_are_merged_back_into_v1_state(self):
         game = Game("h55")
         first = game.add_installation("D:/Games/first.exe", 73, "v3_new")
         second = game.add_installation("D:/Games/second.exe", 134, "v3_fever")
-        game.set_default_installation(first.installation_id)
         saved = game.to_dict()
         installation_state = game.to_installation_state()
 
@@ -111,17 +116,16 @@ class GameInstallationModelTests(unittest.TestCase):
         saved["default_distribution"] = 134
         reloaded = Game.from_dict(saved, installation_state)
 
-        self.assertEqual(reloaded.default_installation_id, second.installation_id)
-        self.assertEqual(reloaded.path, second.path)
-        self.assertEqual(reloaded.version, "v3_downgraded")
-        self.assertEqual(reloaded.default_distribution, 134)
+        self.assertEqual(reloaded.get_installation().installation_id, first.installation_id)
+        reloaded_second = reloaded.get_installation(second.installation_id)
+        self.assertEqual(reloaded_second.installed_version, "v3_downgraded")
+        self.assertEqual(reloaded_second.distribution_id, 134)
         self.assertEqual(len(reloaded.installations), 2)
 
     def test_downgraded_path_only_change_keeps_known_installation_metadata(self):
         game = Game("h55")
         first = game.add_installation("D:/Games/first.exe", 73, "v3_first")
         second = game.add_installation("D:/Games/second.exe", 134, "v3_second")
-        game.set_default_installation(first.installation_id)
         saved = game.to_dict()
         installation_state = game.to_installation_state()
 
@@ -130,9 +134,10 @@ class GameInstallationModelTests(unittest.TestCase):
         saved["path"] = second.path
         reloaded = Game.from_dict(saved, installation_state)
 
-        self.assertEqual(reloaded.default_installation_id, second.installation_id)
-        self.assertEqual(reloaded.version, "v3_second")
-        self.assertEqual(reloaded.default_distribution, 134)
+        self.assertEqual(reloaded.get_installation().installation_id, first.installation_id)
+        reloaded_second = reloaded.get_installation(second.installation_id)
+        self.assertEqual(reloaded_second.installed_version, "v3_second")
+        self.assertEqual(reloaded_second.distribution_id, 134)
 
     def test_development_flat_installation_state_is_still_readable(self):
         current = Game("h55")
@@ -140,10 +145,11 @@ class GameInstallationModelTests(unittest.TestCase):
         flat = current.to_dict()
         state = current.to_installation_state()
         flat["installations"] = state["installations"]
-        flat["default_installation_id"] = state["default_installation_id"]
+        flat["default_installation_id"] = installation.installation_id
 
         reloaded = Game.from_dict(flat)
-        self.assertEqual(reloaded.default_installation_id, installation.installation_id)
+        self.assertFalse(hasattr(reloaded, "default_installation_id"))
+        self.assertEqual(reloaded.get_installation().installation_id, installation.installation_id)
         self.assertEqual(reloaded.version, "v3_beta")
 
     def test_sidecar_survives_old_client_rewrite_and_restores_all_installations(self):
@@ -152,7 +158,6 @@ class GameInstallationModelTests(unittest.TestCase):
         game = manager.get_game("h55")
         first = game.add_installation("D:/Games/first.exe", 73, "v3_first")
         second = game.add_installation("D:/Games/second.exe", 134, "v3_second")
-        game.set_default_installation(first.installation_id)
         manager._save_games = GameManager._save_games.__get__(manager, GameManager)
         manager._save_games()
 
@@ -165,8 +170,11 @@ class GameInstallationModelTests(unittest.TestCase):
         reloaded = GameManager()
         restored = reloaded.get_existing_game("h55")
         self.assertEqual(len(restored.installations), 2)
-        self.assertEqual(restored.default_installation_id, second.installation_id)
-        self.assertEqual(restored.version, "v3_old_client")
+        self.assertEqual(restored.get_installation().installation_id, first.installation_id)
+        self.assertEqual(
+            restored.get_installation(second.installation_id).installed_version,
+            "v3_old_client",
+        )
         self.assertEqual(
             len(_genv_store[GameManager.INSTALLATIONS_CACHE_KEY]["h55"]["installations"]),
             2,
@@ -186,7 +194,26 @@ class GameInstallationModelTests(unittest.TestCase):
         self.assertEqual(first.installed_version, "v3_new")
         self.assertEqual(second.path, "D:/Fever/dwrg.exe")
         self.assertEqual(second.installed_version, "v3_fever")
-        self.assertEqual(game.default_installation_id, second.installation_id)
+        self.assertEqual(game.get_installation().installation_id, first.installation_id)
+        self.assertIs(game.resolve_installation(distribution_id=134), second)
+
+    def test_unscoped_installation_prefers_cloud_distribution_order(self):
+        game = Game("h55")
+        fever = game.add_installation("D:/Fever/dwrg.exe", 134)
+        standalone = game.add_installation("D:/Games/dwrg.exe", 73)
+        game.get_distributions = lambda: [73, 134]
+
+        self.assertIs(game.get_installation(), standalone)
+        self.assertEqual(game.get_default_distribution(), 73)
+        self.assertIs(game.resolve_installation(distribution_id=134), fever)
+
+    def test_unscoped_installation_without_cloud_config_uses_first_record(self):
+        game = Game("plain-game")
+        first = game.add_installation("D:/Games/first.exe", -1)
+        game.add_installation("D:/Games/second.exe", -1)
+        game.get_distributions = lambda: []
+
+        self.assertIs(game.get_installation(), first)
 
     def test_known_distribution_reuses_unknown_installation_at_same_path(self):
         game = Game("h55")
@@ -288,14 +315,18 @@ class GameInstallationModelTests(unittest.TestCase):
 
             self.assertTrue(manager.set_game_path("h55", second_path))
             self.assertEqual(len(game.installations), 2)
-            selected = game.get_installation()
+            selected = next(
+                item for item in game.installations.values()
+                if item.path == second_path
+            )
             self.assertEqual(selected.path, second_path)
             self.assertEqual(selected.source, "manual")
             self.assertEqual(first.distribution_id, 73)
+            self.assertIs(game.get_installation(), first)
 
             self.assertTrue(manager.set_game_path("h55", first_path))
             self.assertEqual(len(game.installations), 2)
-            self.assertEqual(game.default_installation_id, first.installation_id)
+            self.assertIs(game.get_installation(), first)
 
     def test_setting_path_for_game_without_any_record_creates_manual_installation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -376,10 +407,51 @@ class GameInstallationModelTests(unittest.TestCase):
 
         self.assertEqual(imported, "h55")
         self.assertEqual(len(game.installations), 2)
-        fever = game.get_installation()
+        fever = game.get_installation_for_distribution(134)
         self.assertEqual(fever.distribution_id, 134)
         self.assertEqual(fever.source, "fever")
         self.assertEqual(existing.path, "D:/Standalone/dwrg.exe")
+
+    def test_legacy_default_installation_id_is_discarded(self):
+        game = Game("h55")
+        first = game.add_installation("D:/Games/first.exe", 73)
+        second = game.add_installation("D:/Games/second.exe", 134)
+        state = game.to_installation_state()
+        state["schema_version"] = 1
+        state["default_installation_id"] = second.installation_id
+
+        restored = Game.from_dict(game.to_dict(), state)
+
+        self.assertFalse(hasattr(restored, "default_installation_id"))
+        self.assertEqual(restored.get_installation().installation_id, first.installation_id)
+        self.assertEqual(
+            restored.resolve_installation(distribution_id=134).installation_id,
+            second.installation_id,
+        )
+        self.assertNotIn("default_installation_id", restored.to_installation_state())
+
+    def test_manager_ignores_default_installation_id_without_rewriting_config(self):
+        _genv_store.clear()
+        game = Game("h55")
+        first = game.add_installation("D:/Games/first.exe", 73)
+        second = game.add_installation("D:/Games/second.exe", 134)
+        legacy_state = game.to_installation_state()
+        legacy_state["schema_version"] = 1
+        legacy_state["default_installation_id"] = second.installation_id
+        _genv_store[GameManager.GAMES_CACHE_KEY] = {"h55": game.to_dict()}
+        _genv_store[GameManager.INSTALLATIONS_CACHE_KEY] = {"h55": legacy_state}
+
+        with mock.patch.object(GameManager, "_save_games") as save_games:
+            manager = GameManager()
+
+        restored = manager.get_existing_game("h55")
+        self.assertEqual(restored.get_installation().installation_id, first.installation_id)
+        save_games.assert_not_called()
+        self.assertEqual(
+            _genv_store[GameManager.INSTALLATIONS_CACHE_KEY]["h55"]["default_installation_id"],
+            second.installation_id,
+        )
+        self.assertNotIn("default_installation_id", manager.list_games()[0])
 
 
 if __name__ == "__main__":

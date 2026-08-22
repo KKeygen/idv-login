@@ -133,7 +133,6 @@ class LocalRequestHandler:
             "/_idv-login/launcher-update": self._launcher_update,
             "/_idv-login/launcher-update-info": self._launcher_update_info,
             "/_idv-login/launcher-import-fever": self._launcher_import_fever,
-            "/_idv-login/launcher-set-default": self._launcher_set_default,
             "/_idv-login/launcher-remove-installation": self._launcher_remove_installation,
             "/_idv-login/fever-games": self._list_fever_games,
             "/_idv-login/defaultChannel": self._get_default_channel,
@@ -1018,7 +1017,15 @@ class LocalRequestHandler:
                     "success": False, "error": "保存游戏路径失败"
                 })
             game = self.game_helper.get_existing_game(gid)
-            installation = game.get_installation() if game else None
+            normalized_path = os.path.normcase(os.path.normpath(executable_path))
+            installation = next(
+                (
+                    item for item in game.installations.values()
+                    if os.path.normcase(os.path.normpath(item.path or ""))
+                    == normalized_path
+                ),
+                None,
+            ) if game else None
             if installation:
                 if not installation.startup_path:
                     installation.startup_path = os.path.basename(executable_path)
@@ -1134,7 +1141,6 @@ class LocalRequestHandler:
                             content_id=content_id,
                             startup_path=startup_path,
                             startup_args=startup_args,
-                            set_default=True,
                         )
                         if installation is None:
                             raise RuntimeError("创建游戏安装记录失败")
@@ -1254,7 +1260,6 @@ class LocalRequestHandler:
                             content_id=content_id,
                             startup_path=startup_path,
                             startup_args=startup_args,
-                            set_default=True,
                         )
                         if installation is None:
                             raise RuntimeError("创建游戏安装记录失败")
@@ -1320,7 +1325,6 @@ class LocalRequestHandler:
                 content_id=content_id,
                 startup_path=startup_path,
                 startup_args=startup_args,
-                set_default=True,
             )
             if installation is None:
                 return self._json_response(500, {"success": False, "error": "创建游戏安装记录失败"})
@@ -1498,10 +1502,22 @@ class LocalRequestHandler:
             if not imported:
                 return self._json_response(404, {"success": False, "error": "未找到可导入的Fever游戏记录"})
             game = self.game_helper.get_existing_game(imported)
+            installation = None
+            if game and distribution_id != -1:
+                installation = game.get_installation_for_distribution(distribution_id)
+            if game and installation is None and args.get("path"):
+                imported_path = os.path.normcase(os.path.normpath(args["path"]))
+                installation = next((
+                    item for item in game.installations.values()
+                    if os.path.normcase(os.path.normpath(item.path or ""))
+                    == imported_path
+                ), None)
+            if game and installation is None:
+                installation = game.get_installation()
             return self._json_response(200, {
                 "success": True,
                 "game_id": imported,
-                "installation_id": game.default_installation_id if game else "",
+                "installation_id": installation.installation_id if installation else "",
             })
         except Exception as e:
             self.logger.exception("导入Fever游戏失败")
@@ -1524,22 +1540,6 @@ class LocalRequestHandler:
                     "matched_game_id": matched,
                 })
             return self._json_response(200, {"success": True, "games": result})
-        except Exception as e:
-            return self._json_response(500, {"success": False, "error": str(e)})
-
-    def _launcher_set_default(self, args, body, method):
-        try:
-            gid = args["game_id"]
-            installation_id = args["installation_id"]
-            if not self.game_helper.set_game_default_installation(gid, installation_id):
-                return self._json_response(404, {
-                    "success": False, "error": "安装记录不存在"
-                })
-            return self._json_response(200, {
-                "success": True,
-                "game_id": gid,
-                "installation_id": installation_id,
-            })
         except Exception as e:
             return self._json_response(500, {"success": False, "error": str(e)})
 
@@ -1851,7 +1851,6 @@ class LocalRequestHandler:
                 if task.get("kind") == "launcher-install":
                     installation.source = "download"
                 installation.updated_at = int(time.time())
-                game.default_installation_id = installation.installation_id
                 self.game_helper._save_games()
             elif (
                 task.get("kind") == "launcher-install"

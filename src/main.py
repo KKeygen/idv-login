@@ -872,7 +872,6 @@ def handle_download_task(task_file_path):
                     installation.updated_at = int(time.time())
                     if not installation.write_marker(game_id):
                         logger_local.warning("下载完成，但写入安装标记文件失败")
-                    game.default_installation_id = installation.installation_id
                     game.should_auto_start = True
                     game_mgr._save_games()
                     print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")

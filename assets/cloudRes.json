@@ -1,5 +1,5 @@
 {
-  "lastModified": 1786519024,
+  "lastModified": 1787364752,
   "version": "v6.2.3-stable",
   "hotfix": [
     {
@@ -1024,7 +1024,7 @@
       "log_key": "SvShWXDcmogbZJoU3YWe3Su3Ci-mCRcw",
       "game_id": "h55",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "113914",
         "channel_id": "4399com",
         "sdk_ver": "3.16.0"
       },
@@ -1063,9 +1063,9 @@
       "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
       "game_id": "g37",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "118034",
         "channel_id": "4399com",
-        "sdk_ver": "3.16.0"
+        "sdk_ver": "3.12.2"
       },
       "name": "4399账号"
     },
@@ -1075,9 +1075,9 @@
       "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
       "game_id": "g78",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "117580",
         "channel_id": "4399com",
-        "sdk_ver": "3.16.0"
+        "sdk_ver": "3.12.2"
       },
       "name": "4399账号"
     },
@@ -1087,9 +1087,9 @@
       "log_key": "wIBYU30j5y3iehV5iJ8r7L0_3LyYChEr",
       "game_id": "g10",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "104998",
         "channel_id": "4399com",
-        "sdk_ver": "3.16.0"
+        "sdk_ver": "3.12.2"
       },
       "name": "4399账号"
     },
@@ -1099,21 +1099,21 @@
       "log_key": "-BQb6RCHHhYI1ADS6pJigOehE-sITVya",
       "game_id": "g66",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "114100",
         "channel_id": "4399com",
-        "sdk_ver": "3.16.0"
+        "sdk_ver": "3.14.4"
       },
       "name": "4399账号"
     },
     {
-      "package_name": "com.netease.dhxy.m4399",
+      "package_name": "com.netease.dfjs.m4399",
       "app_channel": "4399com",
       "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
       "game_id": "g112",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "191980",
         "channel_id": "4399com",
-        "sdk_ver": "3.16.0"
+        "sdk_ver": "3.12.2"
       },
       "name": "4399账号"
     },
@@ -1123,7 +1123,7 @@
       "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
       "game_id": "ma75",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "117287",
         "channel_id": "4399com",
         "sdk_ver": "3.16.0"
       },
@@ -1135,7 +1135,7 @@
       "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
       "game_id": "h75",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "179395",
         "channel_id": "4399com",
         "sdk_ver": "3.16.0"
       },
@@ -1147,18 +1147,18 @@
       "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
       "game_id": "h65",
       "4399com": {
-        "app_key": "114816",
+        "app_key": "152665",
         "channel_id": "4399com",
-        "sdk_ver": "3.16.0"
+        "sdk_ver": "3.14.4"
       },
       "name": "4399账号"
     },
     {
-      "package_name": "com.netease.dhxy.nearme.gamecenter",
+      "package_name": "com.netease.dfjs.nearme.gamecenter",
       "app_channel": "oppo",
       "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
       "game_id": "g112",
-      "oppo": "com.netease.dhxy.nearme.gamecenter"
+      "oppo": "com.netease.dfjs.nearme.gamecenter"
     },
     {
       "package_name": "com.netease.onmyoji.nearme.gamecenter",
@@ -1301,6 +1301,396 @@
       "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
       "game_id": "h72",
       "oppo": "com.netease.yysbwp.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.lglr.m4399",
+      "app_channel": "4399com",
+      "log_key": "dkJTnwe5sFVhmK2UquZsd7kp1IXPZRY9",
+      "game_id": "g86",
+      "4399com": {
+        "app_key": "161429",
+        "channel_id": "4399com",
+        "sdk_ver": "3.18.0"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.wyclx.m4399",
+      "app_channel": "4399com",
+      "log_key": "yi8_cXKEm4Pe2XYL3E4GjjD9MVtYRuGy",
+      "game_id": "h42",
+      "4399com": {
+        "app_key": "117069",
+        "channel_id": "4399com",
+        "sdk_ver": "3.12.2"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.party.m4399",
+      "app_channel": "4399com",
+      "log_key": "AFhte0-UFSsBUxO3yaM747mxyQHGiG06",
+      "game_id": "u5",
+      "4399com": {
+        "app_key": "185771",
+        "channel_id": "4399com",
+        "sdk_ver": "3.14.4"
+      },
+      "name": "4399账号"
+    },
+    {
+      "package_name": "com.netease.stzb.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "wIBYU30j5y3iehV5iJ8r7L0_3LyYChEr",
+      "game_id": "g10",
+      "oppo": "com.netease.stzb.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.dfjs.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
+      "game_id": "g112",
+      "nearme_vivo": "com.netease.dfjs.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.moba.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "oppo": "com.netease.moba.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.moba.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "nearme_vivo": "com.netease.moba.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.lglr.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "dkJTnwe5sFVhmK2UquZsd7kp1IXPZRY9",
+      "game_id": "g86",
+      "oppo": "com.netease.lglr.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.lglr.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "dkJTnwe5sFVhmK2UquZsd7kp1IXPZRY9",
+      "game_id": "g86",
+      "nearme_vivo": "com.netease.lglr.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.aceracer.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
+      "game_id": "h65",
+      "oppo": "com.netease.aceracer.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.aceracer.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
+      "game_id": "h65",
+      "nearme_vivo": "com.netease.aceracer.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.yhtj.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
+      "game_id": "h75",
+      "oppo": "com.netease.yhtj.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.yhtj.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
+      "game_id": "h75",
+      "nearme_vivo": "com.netease.yhtj.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.party.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "AFhte0-UFSsBUxO3yaM747mxyQHGiG06",
+      "game_id": "u5",
+      "oppo": "com.netease.party.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.party.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "AFhte0-UFSsBUxO3yaM747mxyQHGiG06",
+      "game_id": "u5",
+      "nearme_vivo": "com.netease.party.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.sjzw.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "RXOiWSsY04XDR_GWLwupcv9nDxKHbtVC",
+      "game_id": "g126",
+      "oppo": "com.netease.sjzw.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.sjzw.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "RXOiWSsY04XDR_GWLwupcv9nDxKHbtVC",
+      "game_id": "g126",
+      "nearme_vivo": "com.netease.sjzw.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.qrzd.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "tgzI_qde-CVPfPrngG4dyNSDNwRIvtnD",
+      "game_id": "g58",
+      "oppo": "com.netease.qrzd.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.qrzd.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "tgzI_qde-CVPfPrngG4dyNSDNwRIvtnD",
+      "game_id": "g58",
+      "nearme_vivo": "com.netease.qrzd.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.g67.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "TN_lvn5bM9nwdH9NSf36EmcycST9B17V",
+      "game_id": "g67",
+      "oppo": "com.netease.g67.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.g67.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "TN_lvn5bM9nwdH9NSf36EmcycST9B17V",
+      "game_id": "g67",
+      "nearme_vivo": "com.netease.g67.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.harrypotter.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "gR9o0JNZge0vIwLS84fcz9iuHaZRg8Wd",
+      "game_id": "g92",
+      "oppo": "com.netease.harrypotter.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.harrypotter.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "gR9o0JNZge0vIwLS84fcz9iuHaZRg8Wd",
+      "game_id": "g92",
+      "nearme_vivo": "com.netease.harrypotter.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.skzdhlr.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "6xcNhsAnVGMwPZgT-qThMTklV2t2QZK_",
+      "game_id": "g99",
+      "oppo": "com.netease.skzdhlr.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.skzdhlr.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "6xcNhsAnVGMwPZgT-qThMTklV2t2QZK_",
+      "game_id": "g99",
+      "nearme_vivo": "com.netease.skzdhlr.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.yyslscn.vivo",
+      "app_channel": "nearme_vivo",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "nearme_vivo": "com.netease.yyslscn.vivo",
+      "channel": "nearme_vivo",
+      "name": "vivo账号"
+    },
+    {
+      "package_name": "com.netease.l22.nearme.gamecenter",
+      "app_channel": "oppo",
+      "log_key": "KvVVGe4drWm7w84HByCJivqleET76h2u",
+      "game_id": "l22",
+      "oppo": "com.netease.l22.nearme.gamecenter"
+    },
+    {
+      "package_name": "com.netease.qrzd.huawei",
+      "app_channel": "huawei",
+      "log_key": "tgzI_qde-CVPfPrngG4dyNSDNwRIvtnD",
+      "game_id": "g58",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "9105163812218187472",
+        "client_id": "194551915881694336",
+        "client_secret": "8C731A2CCD18F859405C4DEF008D60EAAB5695FD94F12E62DE2D634BD8B282A5",
+        "project_id": "",
+        "app_id": "100019579",
+        "api_key": "CV79RFdGRHPhNLvp8VA775leFkve877hRGYQPn2pG8jSxxC+9P877yKaphWeSLUqbtYYBF1zdVXawaaFpO02t/X1YYVI",
+        "package_name": "com.netease.qrzd.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.g67.huawei",
+      "app_channel": "huawei",
+      "log_key": "TN_lvn5bM9nwdH9NSf36EmcycST9B17V",
+      "game_id": "g67",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "9105385871707744996",
+        "client_id": "311432418705802304",
+        "client_secret": "B325E27914384EC0BA335EC01DBDD52D689C4AE3375E0EE76A13ED5F4DA00B20",
+        "project_id": "",
+        "app_id": "100481139",
+        "api_key": "CV6pI0kTmsCFzN+MrGIPoBY+jWR+fwqYaQnfyOEPsbxilcgUL4AKENkZXwRCmQSx0bb2tPDG4DUf+tV+YXlZMqMKoM4J",
+        "package_name": "com.netease.g67.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.moba.huawei",
+      "app_channel": "huawei",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "9105163812218187463",
+        "client_id": "224427367655801920",
+        "client_secret": "69E97E321A1134FCBACB5D760416168C44DCB705FBCCF9BCECA2DCAADC903F3F",
+        "project_id": "",
+        "app_id": "100116503",
+        "api_key": "CV7ONMCLS84bkY1SzCJSAg4X7RpQYwcqlWjBG6LNEk7zAfI3fvn5fvChHOHuPtI/xCcKtvc45coge09RMdrZBqjJ3erb",
+        "package_name": "com.netease.moba.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.harrypotter.huawei",
+      "app_channel": "huawei",
+      "log_key": "gR9o0JNZge0vIwLS84fcz9iuHaZRg8Wd",
+      "game_id": "g92",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "9105385871708143747",
+        "client_id": "206310876389573632",
+        "client_secret": "D576CA46411CA86A222EAC26E2033CD235C39324C9263AE56420DD368FA66AD6",
+        "project_id": "",
+        "app_id": "101210021",
+        "api_key": "CV6Kwpf4nUtEYxs5P4oE8wIvQQJxuejQERw8v9Dof8swaKsIdRF9M1DO1mwq25Lh8DWLRi5ZdZE45/xXwaO8NBx+B7O6",
+        "package_name": "com.netease.harrypotter.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.skzdhlr.huawei",
+      "app_channel": "huawei",
+      "log_key": "6xcNhsAnVGMwPZgT-qThMTklV2t2QZK_",
+      "game_id": "g99",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "9105385871707960561",
+        "client_id": "347476702730911744",
+        "client_secret": "AFAE0C94CBEF761B7B81ABF19AA94430E9B962712A704AA0C3F2BF82F23A7A5C",
+        "project_id": "",
+        "app_id": "101037003",
+        "api_key": "CV7J2HN8c3EJTUqXwsN0mgCJs6mtgRW8Qn2aXwhMZYjZV0tzuvv3Xwt7VpK7u6msa/95g4MsQoECtergvHnxXmurXqx+",
+        "package_name": "com.netease.skzdhlr.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.aceracer.huawei",
+      "app_channel": "huawei",
+      "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
+      "game_id": "h65",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "736430079244435066",
+        "client_id": "357035697346970688",
+        "client_secret": "8467C0C2C693DCF53027E0F3438521A9A8EA1DF572F239AA6FACA3BB0CE7C5AA",
+        "project_id": "",
+        "app_id": "102169831",
+        "api_key": "CV7bRw7OzRIymXSfgQAEkqvk/7+YUQw7oJi0fZoBqVe1hd7oW25XVC2DWiEMReGmU0mEk45EigUXiQBdnZ28NGmxlcoV",
+        "package_name": "com.netease.aceracer.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.yyslscn.huawei",
+      "app_channel": "huawei",
+      "log_key": "F3ylEK9qT1xNHZvf_A9k_kA4F1kKVwis",
+      "game_id": "h72",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "388421841222207227",
+        "client_id": "1436959812809161024",
+        "client_secret": "7EC9BD1B9CA8BC9C71FA3B20CD55D14AA979DF7AE93E4B198F0EB4D77D6C8E8C",
+        "project_id": "388421841222207227",
+        "app_id": "111182777",
+        "api_key": "DQEDAGe1YEoQKyvCDngL+5bqe6k6t/upuykwHPFPFjiMG8sJ6NfxO2EJuaQw96WHFo6BYgchVdYLdv/HzdhUCOGJsbuiXDUUQymk6w==",
+        "package_name": "com.netease.yyslscn.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.yhtj.huawei",
+      "app_channel": "huawei",
+      "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
+      "game_id": "h75",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "736430079245978867",
+        "client_id": "705683783973618688",
+        "client_secret": "8C8A79EF5A9CE39B4C534CE91338EF25090D6293EA1E33BD684692164897642C",
+        "project_id": "736430079245978867",
+        "app_id": "104684575",
+        "api_key": "CwEAAAAAi+Ll1Ezfj7NC1yVAusau/myFmoSc1wPieXaOyC7nTZVhhtEbVwrbuySQhmlaZPMV8lvwzWj0T4WHV9XWkVXC3d3xQ8k=",
+        "package_name": "com.netease.yhtj.huawei"
+      },
+      "channel": "huawei"
+    },
+    {
+      "package_name": "com.netease.l22.huawei",
+      "app_channel": "huawei",
+      "log_key": "KvVVGe4drWm7w84HByCJivqleET76h2u",
+      "game_id": "l22",
+      "huawei": {
+        "appType": "",
+        "cp_id": "900086000000106632",
+        "product_id": "388421841221508143",
+        "client_id": "1171564178121444608",
+        "client_secret": "26AE5E521A3EE38CFA5D3F2D8FC4A43CB9F08331E162060EACB70E9266CD2659",
+        "project_id": "388421841221508143",
+        "app_id": "107373487",
+        "api_key": "DAEDABKmkXlF8X0lBkyzW8x3krg+Jxh/XbcnOYgjeDdpCWg8MLQ7RDcTE9l+v0LbB3NPex2qbNYNB3Dv/O7cqVbfo16nebK3Khh88Q==",
+        "package_name": "com.netease.l22.huawei"
+      },
+      "channel": "huawei"
     }
   ],
   "netease_qrcode_login_game_list": [
