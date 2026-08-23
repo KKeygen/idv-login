@@ -1,5 +1,5 @@
 {
-  "lastModified": 1787494131,
+  "lastModified": 1787498859,
   "version": "v6.2.3-stable",
   "hotfix": [
     {
@@ -1031,7 +1031,7 @@
       "log_key": "SvShWXDcmogbZJoU3YWe3Su3Ci-mCRcw",
       "game_id": "h55",
       "4399com": {
-        "app_key": "113914",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.16.0"
       },
@@ -1073,7 +1073,7 @@
       "log_key": "67NZ2Sw4p_QHNoSi1XTm7fJSb0-fpQVf",
       "game_id": "g37",
       "4399com": {
-        "app_key": "118034",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.12.2"
       },
@@ -1086,7 +1086,7 @@
       "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
       "game_id": "g78",
       "4399com": {
-        "app_key": "117580",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.12.2"
       },
@@ -1099,7 +1099,7 @@
       "log_key": "wIBYU30j5y3iehV5iJ8r7L0_3LyYChEr",
       "game_id": "g10",
       "4399com": {
-        "app_key": "104998",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.12.2"
       },
@@ -1112,7 +1112,7 @@
       "log_key": "-BQb6RCHHhYI1ADS6pJigOehE-sITVya",
       "game_id": "g66",
       "4399com": {
-        "app_key": "114100",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.14.4"
       },
@@ -1125,7 +1125,7 @@
       "log_key": "3NSFYgJKe252LCoV-fYyM-Q6IT23oMq_",
       "game_id": "g112",
       "4399com": {
-        "app_key": "191980",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.12.2"
       },
@@ -1138,7 +1138,7 @@
       "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
       "game_id": "ma75",
       "4399com": {
-        "app_key": "117287",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.16.0"
       },
@@ -1151,7 +1151,7 @@
       "log_key": "UjkplhYPj3yH0a9nn3OF56sTmG48hEZR",
       "game_id": "h75",
       "4399com": {
-        "app_key": "179395",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.16.0"
       },
@@ -1164,7 +1164,7 @@
       "log_key": "iE_MXAOF3HA0tPZGMeGFMiShe3smSyV1",
       "game_id": "h65",
       "4399com": {
-        "app_key": "152665",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.14.4"
       },
@@ -1332,7 +1332,7 @@
       "log_key": "dkJTnwe5sFVhmK2UquZsd7kp1IXPZRY9",
       "game_id": "g86",
       "4399com": {
-        "app_key": "161429",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.18.0"
       },
@@ -1345,7 +1345,7 @@
       "log_key": "yi8_cXKEm4Pe2XYL3E4GjjD9MVtYRuGy",
       "game_id": "h42",
       "4399com": {
-        "app_key": "117069",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.12.2"
       },
@@ -1358,7 +1358,7 @@
       "log_key": "AFhte0-UFSsBUxO3yaM747mxyQHGiG06",
       "game_id": "u5",
       "4399com": {
-        "app_key": "185771",
+        "app_key": "114816",
         "channel_id": "4399com",
         "sdk_ver": "3.14.4"
       },
