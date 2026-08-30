@@ -1,5 +1,5 @@
 {
-  "lastModified": 1787498859,
+  "lastModified": 1788106531,
   "version": "v6.2.3-stable",
   "hotfix": [
     {
@@ -477,16 +477,6 @@
     },
     {
       "need_hotfix_version": [
-        "v6.2.0-beta",
-        "v6.2.1-stable",
-        "v6.2.2-stable"
-      ],
-      "target_module": "mitm_addon",
-      "target_commit": "44043513ab6f8945b45e1e8257dcb33180b14217",
-      "note": "修复了模拟发烧平台的游戏（例如明日之后），无法通过扫码更新渠道服信息的问题"
-    },
-    {
-      "need_hotfix_version": [
         "v6.0.0-beta",
         "v6.0.1-stable",
         "v6.0.2-stable",
@@ -501,6 +491,17 @@
       "target_module": "channelHandler.vivoChannelHandler",
       "target_commit": "a5cc7e1ceed65474add6362cf0cf33e273835579",
       "note": "修复VIVO账号在同一游戏生命周期内切换账号时复用旧登录凭证的问题；重新下发v6.0.0-beta以避免旧热更新跳过记录影响本次修复"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable",
+        "v6.2.3-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "36bf9f985b95de8d5b42d30aead4dc90a7b59b87",
+      "note": "修复关闭自动登录后，旧版完整游戏 ID 配置仍会被读取、导致仍自动登录的问题"
     }
   ],
   "shortcuts": [
