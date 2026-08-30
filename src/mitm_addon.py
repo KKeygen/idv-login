@@ -571,8 +571,6 @@ class IDVLoginAddon:
 
             # Auto-login
             auto_uuid = self.genv.get(f"auto-{effective_game_id}", "")
-            if not auto_uuid and effective_raw_game_id != effective_game_id:
-                auto_uuid = self.genv.get(f"auto-{effective_raw_game_id}", "")
             if auto_uuid:
                 delay = self.game_helper.get_login_delay(effective_game_id)
                 self.logger.info(f"即将自动登录，{delay}秒后开始扫码")
