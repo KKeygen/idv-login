@@ -1,5 +1,5 @@
 {
-  "lastModified": 1789120796,
+  "lastModified": 1789134958,
   "version": "v6.2.3-stable",
   "hotfix": [
     {
@@ -502,6 +502,23 @@
       "target_module": "mitm_addon",
       "target_commit": "36bf9f985b95de8d5b42d30aead4dc90a7b59b87",
       "note": "修复关闭自动登录后，旧版完整游戏 ID 配置仍会被读取、导致仍自动登录的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.1-stable",
+        "v6.0.2-stable",
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable",
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable",
+        "v6.2.3-stable"
+      ],
+      "target_module": "channelHandler.oppoChannelHandler",
+      "target_commit": "241fb2468b80d919af71e0211b7ed98cf924bb23",
+      "note": "修复了阴阳师登录OPPO渠道服的时候，提示需要在手机上重新登录的问题"
     }
   ],
   "shortcuts": [
