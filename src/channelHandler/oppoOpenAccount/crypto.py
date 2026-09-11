@@ -69,6 +69,8 @@ def rsa_encrypt_b64(plaintext: str, pubkey: RSA.RsaKey = _RSA_PUB) -> str:
     return b64_std_encode(ct)
 
 
+# TODO: 死代码。OPPO 已改为纯明文请求（见 oppoOpenAccount/client.py::post_plain_json），
+# 本函数当前无任何调用方。暂保留，确认无需恢复 222 降级验签链路后再删除。
 def verify_rsa_signature_of_text(text: str, signature_b64: str, pubkey: RSA.RsaKey = _RSA_PUB) -> bool:
     """尽量兼容 RsaCoder.doCheck：尝试多种 hash 算法验证。"""
 
@@ -84,6 +86,8 @@ def verify_rsa_signature_of_text(text: str, signature_b64: str, pubkey: RSA.RsaK
     return False
 
 
+# TODO: 死代码。加密请求链路已移除（见 oppoOpenAccount/client.py），
+# SecurityKey 当前无任何调用方。暂保留，确认无需恢复加密后再删除。
 @dataclass
 class SecurityKey:
     aes_key_b64_urlsafe: str
@@ -118,6 +122,8 @@ class SecurityKey:
         return aes_ctr_decrypt_from_b64(ciphertext_b64_std, self.aes_key_b64_urlsafe, self.iv)
 
 
+# TODO: 死代码。加密请求链路已移除（见 oppoOpenAccount/client.py），
+# 本函数当前无任何调用方。暂保留，确认无需恢复加密后再删除。
 def build_security_headers(
     security_key: SecurityKey,
     device_security_header_plain: str,

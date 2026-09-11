@@ -6,14 +6,8 @@ import requests
 
 from channelHandler.oppoLogin.consts import DEFAULT_CONSTS, OppoNativeConsts
 from channelHandler.oppoLogin.consts import build_vip_header_json
-from channelHandler.oppoOpenAccount.crypto import (
-    OPPO_PROTOCOL_VERSION,
-    SecurityKey,
-    build_security_headers,
-    verify_rsa_signature_of_text,
-)
+from channelHandler.oppoOpenAccount.crypto import OPPO_PROTOCOL_VERSION
 from channelHandler.oppoOpenAccount.envinfo import (
-    build_device_security_header_plain,
     build_env_info_pkg,
     build_env_param_minimal,
 )
@@ -30,14 +24,11 @@ class OppoSecureSession:
     base_url: str = DEFAULT_BASE_URL
     consts: OppoNativeConsts = DEFAULT_CONSTS
     session_ticket: str = ""
-    device_security_header_plain: str = ""  # DeviceSecurityHeader 明文（此阶段按 mockNative.js 全空实现）
 
     def __post_init__(self):
         self.logger = setup_logger()
         self.http = requests.Session()
         self.http.trust_env = False
-        if not self.device_security_header_plain:
-            self.device_security_header_plain = build_device_security_header_plain()
 
     def _build_common_headers(self) -> Dict[str, str]:
         h = build_vip_header_json(self.consts)
@@ -72,79 +63,26 @@ class OppoSecureSession:
         body_json = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":"))
         headers = self._build_plain_headers()
         r = self.http.post(url, data=body_json, headers=headers, verify=should_verify_ssl())
+
+        new_ticket = r.headers.get("X-Session-Ticket")
+        if isinstance(new_ticket, str) and new_ticket:
+            self.session_ticket = new_ticket
+
         try:
             return r.json()
         except Exception:
             return {"success": False, "http": r.status_code, "raw": r.text}
 
     def post_json(self, path: str, payload_obj: Dict[str, Any], *, allow_plain_fallback: bool = True) -> Dict[str, Any]:
-        """发送加密 JSON 请求，并在成功时解密返回 JSON。
+        """发送请求。
 
-        参考实现：当响应返回 222 且签名校验通过时，会认为需要“降级”，最终回退到明文请求。
-        这里在首次遇到 222 时直接尝试一次明文重试（避免多次无意义的加密重试）。
+        OPPO 服务端接受明文 JSON，因此不再做 AES 加密请求体、222 降级重试与
+        响应验签，统一委托给 :meth:`post_plain_json`。
+
+        ``allow_plain_fallback`` 仅为兼容既有调用方保留，已无实际作用。
         """
 
-        url = self.base_url.rstrip("/") + "/" + path.lstrip("/")
-
-        # 每次请求生成随机 AES key + IV
-        security_key = SecurityKey.generate()
-        security_key.session_ticket = self.session_ticket
-
-        sec_headers = build_security_headers(security_key, self.device_security_header_plain, xor_key_name="key")
-
-        body_json = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":"))
-        enc_body = security_key.encrypt(body_json)
-
-        headers = self._build_common_headers()
-        headers.update(sec_headers)
-        headers["Content-Type"] = "application/encrypted-json; charset=UTF-8"
-
-        r = self.http.post(url, data=enc_body, headers=headers, verify=should_verify_ssl())
-        text = r.text
-
-        new_ticket = r.headers.get("X-Session-Ticket")
-        if isinstance(new_ticket, str) and new_ticket:
-            self.session_ticket = new_ticket
-
-        # 正常成功：直接 AES 解密 body
-        if r.status_code != 222 and r.ok:
-            try:
-                dec = security_key.decrypt(text)
-                return json.loads(dec)
-            except Exception as e:
-                raise RuntimeError(f"解密/解析失败: {e}; raw={text[:200]}")
-
-        # 降级/验签：status=222（decrypt fail）
-        if r.status_code == 222:
-            sig = r.headers.get("X-Signature", "")
-            if not sig:
-                raise RuntimeError("服务端返回 222 但缺少 X-Signature")
-
-            md5_v1 = _md5_hex(security_key.header_signature_v1)
-            md5_v2 = _md5_hex(security_key.header_signature_v2)
-            if not (
-                verify_rsa_signature_of_text(md5_v1, sig)
-                or verify_rsa_signature_of_text(md5_v2, sig)
-            ):
-                raise RuntimeError("222 响应签名校验失败")
-
-            if allow_plain_fallback:
-                self.logger.info("收到 222(downgrade)，按参考行为改用明文请求重试一次")
-                return self.post_plain_json(path, payload_obj)
-
-            return {"success": False, "code": 222, "message": "response decrypt downgrade", "raw": text}
-
-        # 其他 HTTP 错误：尽量返回 JSON，否则返回 raw
-        try:
-            return r.json()
-        except Exception:
-            return {"success": False, "http": r.status_code, "raw": text}
-
-
-def _md5_hex(s: str) -> str:
-    import hashlib
-
-    return hashlib.md5((s or "").encode("utf-8")).hexdigest()
+        return self.post_plain_json(path, payload_obj)
 
 
 class OppoOpenAccountClient:

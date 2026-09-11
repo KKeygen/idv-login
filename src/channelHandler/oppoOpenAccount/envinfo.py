@@ -20,6 +20,9 @@ DEVICE_SECURITY_HEADER_OBJ: Dict[str, Any] = {
 }
 
 
+# TODO: 死代码。该明文头仅用于构造加密请求的 X-Security，而 OPPO 已改为纯明文请求
+# （见 oppoOpenAccount/client.py::post_plain_json），故当前无任何调用方。
+# 暂保留，确认无需恢复加密后再删除。
 def build_device_security_header_plain() -> str:
     """对应 DeviceSecurityHeader.getDeviceSecurityHeader 的明文（此阶段按 mockNative.js 全空实现）。"""
 
