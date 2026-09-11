@@ -368,7 +368,7 @@ class oppoChannel(channelmgr.channel):
 
         return ""
 
-    def _build_extra_unisdk_data(self) -> str:
+    def _build_extra_unisdk_data(self, short_game_id: str = "") -> str:
         fd = app_state.fake_device
         udid = fd["udid"]
         res = {
@@ -388,6 +388,15 @@ class oppoChannel(channelmgr.channel):
         str_data = json_data.copy()
         if isinstance(self.uniSDKJSON, dict) and "username" in self.uniSDKJSON:
             str_data.update({"username": self.uniSDKJSON["username"]})
+
+        # 阴阳师(g37)：SAUTH_STR 中的 sessionid 即本次登录 token（gamesdk ticket），
+        # 可能是 base64（含 + / =）。游戏端按 application/x-www-form-urlencoded 解析，
+        # 裸 + 会被当成空格导致 session 损坏，故仅对该 token 字段做 URL 编码。
+        # SAUTH_JSON 保持明文（与华为渠道一致），只影响 SAUTH_STR。
+        if short_game_id == "g37" and "sessionid" in str_data:
+            from urllib.parse import quote
+            str_data["sessionid"] = quote(str(str_data["sessionid"]), safe="")
+
         str_data = "&".join([f"{k}={v}" for k, v in str_data.items()])
 
         res["SAUTH_STR"] = base64.b64encode(str_data.encode()).decode()
@@ -658,7 +667,7 @@ class oppoChannel(channelmgr.channel):
             "jf_game_id": short_game_id,
             "pay_channel": self.channel_name,
             "extra_data": "",
-            "extra_unisdk_data": self._build_extra_unisdk_data(),
+            "extra_unisdk_data": self._build_extra_unisdk_data(short_game_id),
             "gv": "157",
             "gvn": "1.5.80",
             "cv": "a1.5.0",
