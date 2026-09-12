@@ -225,65 +225,75 @@
             }
 
             // --- 2. 基于包名智能判定部分仅需包名的渠道 (如 vivo, oppo) ---
-            let app_channel = null;
-            let channelData = null;
-            let requiresCustomConfig = false;
+            // --- 2. 渠道判定：包名特征优先，其次按 {channel}_data 文件名回退 ---
+            // 与 tools/unpack.py 的 detect_channel() 保持一致
+            const dataFiles = entries
+                .filter(e => /^assets\/[^\/]+_data$/.test(e.filename))
+                .map(e => e.filename.split('/')[1].slice(0, -5));
 
-            // 根据包名后缀或特征自动推断
-            if (packageName.includes('.vivo') || packageName.includes('nearme.gamecenter') || packageName.includes('nearme_vivo') || packageName.includes('.nearme.')) {
-                if (packageName.includes('.vivo') || packageName.includes('nearme_vivo')) app_channel = 'nearme_vivo';
-                else if (packageName.includes('nearme.gamecenter') || packageName.includes('.nearme.')) app_channel = 'oppo';
-                
-                log(`根据 APK 包名特征判定为【${app_channel}】渠道包。`);
-                channelData = packageName; // 对于 vivo/oppo，只需返回它的专属渠道包名
-            } else if (packageName.includes('.honor') || packageName.includes('hihonor')) {
-                app_channel = 'honor_sdk';
-                requiresCustomConfig = true;
-                log(`根据 APK 包名特征判定为【荣耀 honor_sdk】渠道包。`);
-            } else if (packageName.includes('.aligames')) {
-                app_channel = 'uc_platform';
-                requiresCustomConfig = true;
-                log(`根据 APK 包名特征判定为【UC/9Game uc_platform】渠道包。`);
-            } else {
-                requiresCustomConfig = true; // 其它如小米/应用宝等需要继续分析 assets 内的参数
+            // 取 AndroidManifest 里 meta-data 的值
+            function getMeta(name) {
+                if (!manifestJson || !manifestJson.application ||
+                    !Array.isArray(manifestJson.application.metaData)) return '';
+                const m = manifestJson.application.metaData.find(x =>
+                    x.name === name || x['android:name'] === name ||
+                    Object.values(x).includes(name));
+                if (!m) return '';
+                const val = m.value !== undefined ? m.value
+                          : (m['android:value'] !== undefined ? m['android:value'] : '');
+                return val === null || val === undefined ? '' : String(val);
             }
 
-            // --- 3. 对于重度渠道寻找 assets 内核加密数据 ---
-            let dataEntry = null;
-            if (requiresCustomConfig) {
-                const targetFiles = ['assets/xiaomi_app_data', 'assets/huawei_data', 'assets/myapp_data', 'assets/honor_sdk_data', 'assets/uc_platform_data'];
-                
-                for (let obj of entries) {
-                    if (targetFiles.includes(obj.filename)) {
-                        app_channel = obj.filename.split('/')[1].replace('_data', '');
-                        dataEntry = obj;
-                        log(`找到相关资源数据文件: [${obj.filename}]，确认渠道为 [${app_channel}]`);
-                        break;
-                    }
+            // 渠道判定策略：
+            //   1. vivo/oppo 没有 _data，只能按包名判定
+            //   2. 其余渠道优先按 {channel}_data 文件名判定（网易生成的，最权威）
+            //   3. 都没有时退回包名特征
+            function detectChannel(pkg) {
+                // 1. vivo / oppo
+                if (pkg.includes('nearme_vivo') || pkg.endsWith('.vivo')) return ['nearme_vivo', null];
+                if (pkg.includes('nearme.gamecenter') || pkg.includes('.nearme.')) return ['oppo', null];
+
+                // 2. 按 {channel}_data 文件判定
+                for (const known of ['360_assistant', '4399com', 'honor_sdk', 'uc_platform',
+                                     'huawei', 'myapp', 'xiaomi_app']) {
+                    if (dataFiles.includes(known)) return [known, known];
                 }
+
+                // 3. 退回包名特征
+                if (pkg.includes('qihoo')) return ['360_assistant', '360_assistant'];
+                if (pkg.includes('m4399')) return ['4399com', '4399com'];
+                if (pkg.includes('hihonor') || pkg.includes('.honor')) return ['honor_sdk', 'honor_sdk'];
+                if (pkg.includes('aligames') || pkg.endsWith('.uc')) return ['uc_platform', 'uc_platform'];
+                if (pkg.includes('huawei')) return ['huawei', 'huawei'];
+                if (pkg.includes('com.tencent')) return ['myapp', 'myapp'];
+                if (pkg.includes('xiaomi') || pkg.endsWith('.mi')) return ['xiaomi_app', 'xiaomi_app'];
+                return [null, null];
             }
+
+            const detectResult = detectChannel(packageName);
+            let app_channel = detectResult[0];
+            const dataFileChannel = detectResult[1];
+            let channelData = null;
 
             if (!app_channel) {
                 log("❌ 无法研判出渠道类型。如果这是一个未列出的渠道，请提醒开发者增加特征支持。");
                 await zipReader.close();
                 return;
             }
+            log(`判定渠道: [${app_channel}]（数据文件: ${dataFileChannel || '无'}）`);
+
+            // --- 3. 读取渠道加密数据 ---
+            // vivo/oppo 只需渠道包名，没有 _data 文件
+            let dataEntry = null;
+            if (dataFileChannel) {
+                dataEntry = entries.find(e => e.filename === `assets/${dataFileChannel}_data`);
+            }
 
             // --- 4. 统一破解并提取日志秘钥和游戏分配主 ID ---
-            // 绝大部官方联合发行的渠道包里都会有 {app_channel}_data，如果没有则降临询问
             let log_key = "未知";
             let game_id = "未知";
             let myData = null;
-            
-            if (!dataEntry) {
-                // 优先查找与渠道名匹配的专属数据文件（如 nearme_vivo_data）
-                dataEntry = entries.find(e => e.filename === `assets/${app_channel}_data`);
-            }
-            if (!dataEntry) {
-                // 仍未找到则回退到通用 _data（排除 common/extend 等非渠道文件）
-                dataEntry = entries.find(e => e.filename.match(/assets\/.*_data$/) && e.filename.includes(app_channel));
-            }
-            
+
             if (dataEntry) {
                 log(`正在解开 [${dataEntry.filename}] 获取内核通信秘钥...`);
                 const fileText = await dataEntry.getData(new zip.TextWriter());
@@ -305,9 +315,12 @@
 
                 log_key = validateData(myData, "JF_LOG_KEY");
                 const dataChannel = validateData(myData, "APP_CHANNEL");
-                if (dataChannel) {
+                // 360 的 APP_CHANNEL 是协议名（allysdk.xxx），不能覆盖渠道标识
+                if (dataChannel && app_channel !== '360_assistant') {
                     app_channel = dataChannel;
                     log(`数据文件覆盖渠道标识: [${app_channel}]`);
+                } else if (dataChannel) {
+                    log(`数据文件协议渠道标识: [${dataChannel}]（渠道名保留 ${app_channel}）`);
                 }
                 game_id = validateData(myData, "JF_GAMEID");
                 log(`内核参数解密成功 -> GAME_ID: [${game_id}], LOG_KEY: [已获取]`);
@@ -316,7 +329,12 @@
             }
 
             // --- 5. 渠道独立逻辑处理（小米、应用宝、华为等额外参数）---
-            if (app_channel === 'xiaomi_app') {
+            if (app_channel === 'nearme_vivo' || app_channel === 'oppo') {
+                // 这两个渠道只需渠道包名
+                channelData = packageName;
+                log(`${app_channel} 使用渠道包名: ${channelData}`);
+            }
+            else if (app_channel === 'xiaomi_app') {
                 log(`寻找小米专供配置 miGameAppId...`);
                 if (manifestJson && manifestJson.application && Array.isArray(manifestJson.application.metaData)) {
                     const miMeta = manifestJson.application.metaData.find(m => 
@@ -360,7 +378,8 @@
                     log(`腾讯应用宝专属参数 ysdkconf 加载完毕。`);
                 }
             }
-            else if (app_channel === 'honor_sdk') {
+
+            else if (app_channel === 'honor_sdk') {
                 channelData = {};
                 // 从 AndroidManifest 提取 appid 和 cpid
                 if (manifestJson && manifestJson.application && Array.isArray(manifestJson.application.metaData)) {
@@ -442,6 +461,94 @@
                     }
                 }
                 log(`UC/9Game 专属参数提取完毕。`);
+            }
+
+            else if (app_channel === '4399com') {
+                channelData = {};
+                // 从 4399com_data 解密后提取 APP_KEY，即 4399 通行证侧的 gamekey（用于 oauth.html 换取登录 URL）
+                if (myData) {
+                    channelData.app_key = validateData(myData, "APP_KEY");
+                    log(`提取 4399 gamekey/APP_KEY (解密后): ${channelData.app_key}`);
+                }
+                channelData.channel_id = "4399com";
+                channelData.package_name = packageName;
+                // SDK 版本优先取 ReadMe_UniSDK.txt：正则限定纯数字，
+                // 避免 channel_infos_data 里的 "V3.16.0(3)" 之类后缀混入
+                const readmeEntry = entries.find(e => e.filename === 'ReadMe_UniSDK.txt');
+                if (readmeEntry) {
+                    const readmeText = await readmeEntry.getData(new zip.TextWriter());
+                    const match = readmeText.match(/4399com_\d+\s+([\d.]+)/);
+                    if (match) {
+                        channelData.sdk_ver = match[1];
+                        log(`提取 4399 SDK 版本 (ReadMe): ${channelData.sdk_ver}`);
+                    }
+                }
+                // Fallback: channel_infos_data
+                if (!channelData.sdk_ver) {
+                    const ciEntry = entries.find(e => e.filename === 'assets/channel_infos_data');
+                    if (ciEntry) {
+                        const ciText = await ciEntry.getData(new zip.TextWriter());
+                        try {
+                            const ciData = JSON.parse(ciText);
+                            const mainChannel = ciData.main_channel || {};
+                            const chanKey = Object.keys(mainChannel).find(k => k.startsWith('4399com'));
+                            if (chanKey && mainChannel[chanKey].version) {
+                                channelData.sdk_ver = String(mainChannel[chanKey].version).replace(/^V/i, '');
+                                log(`提取 4399 SDK 版本 (channel_infos): ${channelData.sdk_ver}`);
+                            }
+                        } catch(e) { log(`⚠️ channel_infos_data 解析失败`); }
+                    }
+                }
+                log(`4399 专属参数提取完毕。`);
+            }
+
+            else if (app_channel === '360_assistant') {
+                channelData = {};
+                // APPID/APP_KEY/APP_SECRET 均为轮转加密值，必须解密
+                if (myData) {
+                    channelData.app_id = validateData(myData, "APPID");
+                    channelData.app_key = validateData(myData, "APP_KEY");
+                    // APP_CHANNEL 是发给网易 uni_sauth 的协议名（allysdk.xxx）
+                    channelData.protocol_app_channel = validateData(myData, "APP_CHANNEL");
+                    log(`提取 360 APPID (解密后): ${channelData.app_id}`);
+                }
+                // manifest 是权威值，不一致时以 manifest 为准
+                const metaId = getMeta('QHOPENSDK_APPID');
+                const metaKey = getMeta('QHOPENSDK_APPKEY');
+                if (metaId && metaId !== channelData.app_id) {
+                    log(`⚠️ 360 app_id 解密值 ${channelData.app_id} 与 manifest ${metaId} 不一致，采用 manifest`);
+                    channelData.app_id = metaId;
+                }
+                if (metaKey && metaKey !== channelData.app_key) {
+                    log(`⚠️ 360 app_key 与 manifest 不一致，采用 manifest`);
+                    channelData.app_key = metaKey;
+                }
+                // SDK 版本：下划线必须保留，网易白名单按字面匹配
+                // （"2.4.0.816" 会返回 401 subcode 13）
+                const ci360 = entries.find(e => e.filename === 'assets/channel_infos_data');
+                if (ci360) {
+                    const ciText = await ci360.getData(new zip.TextWriter());
+                    try {
+                        const ciData = JSON.parse(ciText);
+                        const mainChannel = ciData.main_channel || {};
+                        for (const k of Object.keys(mainChannel)) {
+                            const v = mainChannel[k];
+                            if (v && v.channel_id === '360_assistant' && v.version) {
+                                channelData.sdk_ver = String(v.version).replace(/^V/i, '');
+                                break;
+                            }
+                        }
+                    } catch(e) { log(`⚠️ channel_infos_data 解析失败`); }
+                }
+                if (!channelData.sdk_ver) {
+                    const rme = entries.find(e => e.filename === 'ReadMe_UniSDK.txt');
+                    if (rme) {
+                        const readmeText = await rme.getData(new zip.TextWriter());
+                        const match = readmeText.match(/360_assistant_\d+\s+(\S+)/);
+                        if (match) channelData.sdk_ver = match[1];
+                    }
+                }
+                log(`360 专属参数提取完毕 (sdk_ver: ${channelData.sdk_ver || '未知'})。`);
             }
 
             // --- 6. 完成装箱：打平属性与组合封包结构 ---
