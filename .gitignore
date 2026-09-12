@@ -18,5 +18,4 @@ tools/oppo_*
 .github/copilot-instructions.md
 analysis/
 .claude/
-docs/
 _sdk_ref/*
