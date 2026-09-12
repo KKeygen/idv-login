@@ -19,3 +19,4 @@ tools/oppo_*
 analysis/
 .claude/
 docs/
+_sdk_ref/*

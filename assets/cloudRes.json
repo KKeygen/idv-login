@@ -1,5 +1,5 @@
 {
-  "lastModified": 1789134958,
+  "lastModified": 1789187789,
   "version": "v6.2.3-stable",
   "hotfix": [
     {
@@ -1930,6 +1930,20 @@
       },
       "channel": "honor_sdk",
       "name": "荣耀账号"
+    },
+    {
+      "package_name": "com.netease.dwrg.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "SvShWXDcmogbZJoU3YWe3Su3Ci-mCRcw",
+      "game_id": "h55",
+      "360_assistant": {
+        "app_id": "203840726",
+        "app_key": "838559dca512625db0deadb1a974d5e6",
+        "protocol_app_channel": "allysdk.360_assistant",
+        "sdk_ver": "2.4.0_816"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
     }
   ],
   "netease_qrcode_login_game_list": [

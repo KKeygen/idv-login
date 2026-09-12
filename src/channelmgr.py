@@ -162,6 +162,10 @@ class ChannelManager:
                                 from channelHandler.m4399ChannelHandler import m4399Channel
                                 tmpChannel: m4399Channel = m4399Channel.from_dict(item)
                                 self.channels.append(tmpChannel)
+                            elif channel_name == "360_assistant" and item["uuid"].startswith("360-"):
+                                from channelHandler.qihooChannelHandler import qihooChannel
+                                tmpChannel: qihooChannel = qihooChannel.from_dict(item)
+                                self.channels.append(tmpChannel)
                             else:
                                 self.channels.append(channel.from_dict(item))
                 except:
@@ -315,6 +319,10 @@ class ChannelManager:
                 from channelHandler.m4399ChannelHandler import m4399Channel
                 tmp_channel: m4399Channel = m4399Channel(tmpData, game_id=game_id)
                 tmp_channel.uuid = f"4399-{tmp_channel.uuid}"
+            elif channle_name == "360_assistant":
+                from channelHandler.qihooChannelHandler import qihooChannel
+                tmp_channel: qihooChannel = qihooChannel(tmpData, game_id=game_id)
+                tmp_channel.uuid = f"360-{tmp_channel.uuid}"
             else:
                 self.logger.error(f"不支持的渠道: {channle_name}")
                 if on_complete:
