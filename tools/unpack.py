@@ -33,6 +33,11 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 CLOUDRES_API = "https://api.github.com/repos/KKeygen/idv-login/contents/assets/cloudRes.json"
 
+# 网易游戏配置接口，提供 client_log_key（即 cloudRes 的 log_key）。
+# 部分游戏的 APK 内 JF_LOG_KEY 为空，需要从这里补。
+GAME_CONFIG_URL = ("https://gamepay.163.com/common_api/internal/game_config"
+                   "?appChannel=netease.allysdk3rd")
+
 # 支持自动提交到 cloudRes 的渠道
 AUTO_UPDATE_CHANNELS = [
     "xiaomi_app", "huawei", "myapp", "honor_sdk", "uc_platform",
@@ -118,6 +123,12 @@ def parse_channel_infos(zf, channel_name):
 
     形如 {"main_channel": {"360_assistant_5": {"channel_id": "360_assistant",
                                                "version": "V2.4.0_816"}}}
+
+    注意：部分游戏的值带括号后缀（如 "V2.3.4_794(1)"），这是 APK 内部的
+    构建号。网易白名单按**去掉括号后**的版本匹配，实测：
+        2.3.4_794(1) -> 401 subcode 13 (whitelist not exists)
+        2.3.4_794    -> 通过白名单
+    因此这里统一剥离 "(...)"。
     """
     text = read_text(zf, "assets/channel_infos_data")
     if not text:
@@ -130,15 +141,24 @@ def parse_channel_infos(zf, channel_name):
     main = data.get("main_channel")
     # 老格式：channel_infos_data 直接是 {"channel":..., "version": "V..."}
     if not isinstance(main, dict):
-        version = data.get("version")
-        return str(version).lstrip("V") if version else ""
+        return normalize_sdk_ver(data.get("version"))
 
     for value in main.values():
         if isinstance(value, dict) and value.get("channel_id") == channel_name:
-            version = value.get("version")
-            if version:
-                return str(version).lstrip("V")
+            return normalize_sdk_ver(value.get("version"))
     return ""
+
+
+def normalize_sdk_ver(version):
+    """把 APK 里的版本号规范成网易白名单期望的形式。
+
+    · 去掉前导 V
+    · 去掉括号后缀，如 "2.3.4_794(1)" -> "2.3.4_794"
+    """
+    if not version:
+        return ""
+    text = str(version).lstrip("V")
+    return text.split("(")[0].strip()
 
 
 def parse_readme_version(zf, channel_name):
@@ -149,7 +169,7 @@ def parse_readme_version(zf, channel_name):
     for line in text.splitlines():
         m = re.match(r"%s_\d+\s+(\S+)" % re.escape(channel_name), line.strip())
         if m:
-            return m.group(1)
+            return normalize_sdk_ver(m.group(1))
     return ""
 
 
@@ -271,6 +291,43 @@ def detect_channel(package_name, names):
 # ──────────────────────────────────────────────────────────────
 # 各渠道参数提取
 # ──────────────────────────────────────────────────────────────
+def normalize_game_id(game_id):
+    """把 game_id 规范化成网易接口接受的形式（小写）。
+
+    APK 里的 JF_GAMEID 偶尔是大写（倩女幽魂为 "L10"），但网易接口只认小写：
+        gameid=L10 -> 400 subcode 2 "bad gameid"
+        gameid=l10 -> 通过
+    且 APK 内的 UNISDK_JF_GAS3_URL 也写作 .../l10/sdk/。
+    现有 cloudRes 条目的 game_id 均为小写，故这里统一转换。
+    """
+    return str(game_id or "").strip().lower()
+
+
+def fetch_cloud_log_key(game_id):
+    """从网易游戏配置接口取 client_log_key。
+
+    部分游戏的 APK 内 JF_LOG_KEY 为空（如 360 的倩女幽魂、大话西游），
+    此时需要从云端补，否则该条目无法用于签名。
+    """
+    if not game_id:
+        return ""
+    try:
+        resp = requests.get(GAME_CONFIG_URL, headers={"X-Game": "base"}, timeout=30)
+        games = resp.json()["data"]["gameConfigList"]
+    except Exception:
+        logging.exception("查询 client_log_key 失败")
+        return ""
+
+    target = game_id.lower()
+    for game in games:
+        if str(game.get("gameid") or "").lower() == target:
+            key = str(game.get("client_log_key") or "").strip()
+            if key:
+                logging.info("从云端取到 log_key（game_id=%s）" % game_id)
+            return key
+    return ""
+
+
 def build_channel_data(zf, manifest, res_table, app_channel, my_data, package_name):
     """按渠道提取专属参数。"""
     logging.info("开始提取 [%s] 专属参数" % app_channel)
@@ -532,13 +589,23 @@ def get_netease_game_info(source, token=None):
         game_id = ""
         if my_data:
             log_key = validate(my_data, "JF_LOG_KEY")
-            game_id = validate(my_data, "JF_GAMEID")
+            game_id = normalize_game_id(validate(my_data, "JF_GAMEID"))
             # 文件内的 APP_CHANNEL 可能与文件名不同（360 为 allysdk.360_assistant）
             inner_channel = validate(my_data, "APP_CHANNEL")
             if inner_channel and app_channel != "360_assistant":
                 logging.info("数据文件覆盖渠道标识: %s" % inner_channel)
                 app_channel = inner_channel
             logging.info("JF_GAMEID=%s  JF_LOG_KEY=%s" % (game_id, log_key))
+            if not log_key:
+                # 部分游戏（如 360 的倩女幽魂）APK 内不含 log_key，
+                # 从网易 game_config 接口的 client_log_key 补齐。
+                log_key = fetch_cloud_log_key(game_id)
+                if log_key:
+                    logging.info("已补齐 log_key: %s" % log_key)
+                else:
+                    logging.warning(
+                        "APK 与云端均未取到 log_key，该条目无法用于签名请求"
+                    )
         else:
             logging.info("该渠道无需 _data 文件，game_id/log_key 留空由云端补全")
 
