@@ -95,7 +95,7 @@ Windows 7的桌面长这样：
 | **版本** | 官服 | **渠道服** | **下载地址** | SHA256校验和 |
 | --- | --- | --- | --- | --- |
 | <!-- 这是一张图片，ocr 内容为： -->
-![](https://img.shields.io/github/v/release/Alexander-Porter/idv-login) | √ | <font style="color:#000000;">b站、九游、应用宝、4399、小米（含QQ登录）、华为、VIVO、OPPO</font> | [Windows 10/11版本链接](https://github.com/KKeygen/idv-login/releases/latest/) | 请参阅下载页面的SHA256标志 |
+![](https://img.shields.io/github/v/release/Alexander-Porter/idv-login) | √ | <font style="color:#000000;">b站、九游、应用宝、4399、小米（含QQ登录）、华为、VIVO、OPPO、荣耀、360</font> | [Windows 10/11版本链接](https://github.com/KKeygen/idv-login/releases/latest/) | 请参阅下载页面的SHA256标志 |
 | **5.8.2.2** | √ | <font style="color:#000000;">b站、应用宝（qq、微信）、4399、小米（含QQ登录）、华为、VIVO</font> | [Windows 7版本链接](https://github.com/Alexander-Porter/idv-login/releases/download/v5.8.2.2-stable/idv-login-v5.8.2.2-stable-Py3.8.4.exe)<br/><br/>[Windows 10/11版本链接](https://github.com/Alexander-Porter/idv-login/releases/download/v5.8.2.2-stable/idv-login-v5.8.2.2-stable-Py3.8.4.exe)<br/> | sha256:8725efea29ec42a2eae4dc2fb7b9640ddefe2a23791c5ff566d950f58c27e4b3 |
 | ~~**4.5（One-Key）已弃用**~~ | ~~√~~ | ~~×~~ | [~~Windows 10/11 版本链接~~](https://gitee.com/opguess/idv-login/releases/download/auto-release-V4.5/one-key.exe) | ~~8264e90df747e7202e3e42fb9685c1bc277e48a01f6a5d06c6b81596b23d44a7~~ |
 
@@ -140,10 +140,15 @@ Windows 7的桌面长这样：
 # 适用游戏和渠道
 | **游戏名称** | 官服 | **扫码登录保存的渠道** | 手动登录的渠道 |
 | :---: | :---: | :---: | :---: |
-| **第五人格** | 新号/老号均可用 | **<font style="color:#000000;">b站、oppo、应用宝（qq）、4399</font>** | <font style="color:#000000;">华为、小米（含QQ）、VIVO、应用宝（微信）、OPPO、b站、荣耀、九游</font> |
-| **明日之后** | 新号/老号均可用 | **<font style="color:#000000;">b站、oppo、应用宝（qq）、4399</font>** | <font style="color:#000000;">华为、小米（含QQ）、VIVO、应用宝（微信）、b站</font> |
-| **阴阳师** | 新号/老号均可，但新号不能上老区 | **<font style="color:#000000;">b站、oppo、应用宝（qq）、4399</font>** | <font style="color:#000000;">华为、小米（含QQ）、VIVO、应用宝（微信）</font> |
-| **其他网易游戏** | 新号/老号均可<br/>有分区服的，新号不能上老区 | **<font style="color:#000000;">b站、oppo、应用宝（qq）、4399</font>** | 根据[纯前端 APK 渠道参数解析器 (包含 Vivo/Oppo 等)](https://j.keygen.eu.org/extract_apk_all_channels.html)的指引提交需求 |
+| **第五人格** | 新号/老号均可用 | **<font style="color:#000000;">b站、oppo、应用宝（qq）</font>** | <font style="color:#000000;">华为、小米（含QQ）、VIVO、应用宝（微信）、OPPO、b站、荣耀、九游、4399、360</font> |
+| **明日之后** | 新号/老号均可用 | **<font style="color:#000000;">oppo、应用宝（qq）</font>** | <font style="color:#000000;">华为、小米（含QQ）、VIVO、应用宝（微信）、OPPO、荣耀、4399、360</font> |
+| **阴阳师** | 新号/老号均可，但新号不能上老区 | **<font style="color:#000000;">b站、oppo、应用宝（qq）</font>** | <font style="color:#000000;">华为、小米（含QQ）、VIVO、应用宝（微信）、OPPO、b站、荣耀、4399</font> |
+| **其他网易游戏** | 新号/老号均可<br/>有分区服的，新号不能上老区 | **<font style="color:#000000;">oppo、应用宝（qq）</font>** | 根据[纯前端 APK 渠道参数解析器 (包含 Vivo/Oppo 等)](https://j.keygen.eu.org/extract_apk_all_channels.html)的指引提交需求 |
+
+> **扫码登录**支持 b站、OPPO、应用宝（QQ、微信）：用手机上的游戏或对应 App 扫一次码即可保存。
+> 所有渠道（华为、小米、VIVO、荣耀、九游、4399、360、b站、OPPO、应用宝）均可在渠道服账号管理界面**手动登录**并长期保存。
+>
+> 各渠道的最低版本要求：九游 v6.1.0、荣耀 v6.2.0、4399 v6.2.3、360 v6.3.0。
 
 
 # 官服使用教程
@@ -196,8 +201,10 @@ Windows 7的桌面长这样：
 
 **<font style="color:#585A5A;">如果您需要原生记录扫码结果（目前不确定适用的渠道范围和保存时间），请参考渠道服使用教程（原生保存版）。</font>**
 
-## <font style="color:#000000;">Bilibili、4399、233乐园等渠道（</font><font style="color:#DF2A3F;">除了</font><font style="color:#000000;">华为、小米、Vivo、应用宝、荣耀、Bilibili、九游）</font>
-此处的教程为扫码登录教程，原理是用手机上的游戏扫码一次，记录扫码结果，下次登录不再扫码。如果想**用账号密码或者手机验证码等登录**<font style="color:#000000;">华为、小米、Vivo、应用宝、荣耀、</font>**<font style="color:#DF2A3F;">OPPO、Bilibili</font>**<font style="color:#000000;">渠道服账号，请直接看</font>[华、米、V、O、应用宝、九游、荣耀 seven deadly sins 新版登录教程](https://www.yuque.com/keygen/kg2r5k/fey3i1pi6k9fgz86)<font style="color:#000000;">。</font>
+## <font style="color:#000000;">扫码登录（b站、OPPO、应用宝）</font>
+此处的教程为**扫码登录**教程，原理是用手机上的游戏（或对应 App）扫码一次，记录扫码结果，下次登录不再扫码。
+
+如果想**用账号密码、手机验证码等方式手动登录**（华为、小米、VIVO、应用宝、荣耀、九游、4399、360、OPPO、b站），请直接看[渠道服手动登录教程](https://www.yuque.com/keygen/kg2r5k/fey3i1pi6k9fgz86)<font style="color:#000000;">。</font>
 
 <font style="color:#000000;">教程开始：</font>
 
@@ -225,8 +232,8 @@ Windows 7的桌面长这样：
 
 **<font style="color:red;">成功登录后再关掉登录程序</font>**噢！不要提前关闭！（不关也可以）
 
-## 华为/小米（含QQ登录）/VIVO/OPPO/应用宝/九游/Bilibili渠道服
-[华、米、V、O、应用宝、九游、荣耀 seven deadly sins 新版登录教程](https://www.yuque.com/keygen/kg2r5k/fey3i1pi6k9fgz86)
+## 华为/小米（含QQ登录）/VIVO/OPPO/应用宝/九游/Bilibili/荣耀/4399/360 渠道服
+[渠道服手动登录教程](https://www.yuque.com/keygen/kg2r5k/fey3i1pi6k9fgz86)
 
 ### 渠道服账号数据云同步功能
 [渠道服账号云同步说明及教程](https://www.yuque.com/keygen/kg2r5k/pvb2mdma2zpq442g#IpChx)
