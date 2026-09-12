@@ -7,7 +7,7 @@
 
 
 项目仓库：[click](https://github.com/KKeygen/idv-login)
-教程：[click](https://www.yuque.com/keygen/kg2r5k/izpgpf4g3ecqsbf3)
+教程：[click](https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e)
 
 ## 1. 使用方式
 
