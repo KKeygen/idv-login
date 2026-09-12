@@ -276,9 +276,10 @@ class WebBrowser(QWidget):
 
     @pyqtSlot(bool)
     def on_load_finished(self, success):
+        # 登录页多为 SPA，跳转/中断会触发 success=False，属正常现象，仅记入文件日志
         if not success:
             url = self.page.url().toString() if self.page else "?"
-            self.logger.warning(f"[WebBrowser] 页面加载失败: {url}")
+            self.logger.debug(f"[WebBrowser] 页面加载失败: {url}")
 
 
     def handle_url_change(self, url):

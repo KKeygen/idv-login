@@ -65,9 +65,6 @@ class ucChannel(channelmgr.channel):
             self.uc_version_code = uc_cfg.get("version_code", UC_H55_VERSION_CODE)
             self.uc_version_name = uc_cfg.get("version_name", UC_H55_VERSION_NAME)
         else:
-            self.logger.warning(
-                f"cloudRes 中未找到 uc_platform 配置 (game_id={short_gid})，使用默认值"
-            )
             self.uc_sdk_ver = UC_SDK_VERSION
             self.uc_game_id = UC_GAME_ID
             self.uc_version_code = UC_H55_VERSION_CODE
@@ -168,10 +165,10 @@ class ucChannel(channelmgr.channel):
             new_data = self.ucLogin.do_refresh(old_sid, self.refreshToken)
             if new_data and isinstance(new_data, dict) and new_data.get("sid"):
                 self._store_session(new_data)
-                self.logger.info("UC session 自动续期成功")
+                self.logger.debug("UC session 自动续期成功")
                 return True
         except Exception:
-            self.logger.exception("UC refreshToken 续期异常")
+            self.logger.exception("UC 会话续期异常")
         return False
 
     # ── 登录 ──────────────────────────────────────────────────
@@ -226,7 +223,7 @@ class ucChannel(channelmgr.channel):
                             result = self._build_unisdk_result(short_game_id)
                             on_complete(result)
                         except Exception as e:
-                            self.logger.error(f"UC UniSDK error: {e}")
+                            self.logger.error(f"UC 生成登录数据失败: {e}")
                             on_complete(None)
                     else:
                         on_complete(None)
@@ -253,7 +250,7 @@ class ucChannel(channelmgr.channel):
             return False
         # 检查 sid 是否已过期
         if self.sid_expire_time > 0 and int(time.time()) >= self.sid_expire_time:
-            self.logger.info("UC sid 已过期，需要续期")
+            self.logger.debug("UC sid 已过期，需要续期")
             return False
         return True
 

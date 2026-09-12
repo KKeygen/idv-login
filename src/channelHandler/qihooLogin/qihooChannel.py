@@ -56,8 +56,6 @@ class QihooBrowser(WebBrowser):
         super().__init__("360_assistant", True, frameless=True)
         self.logger = setup_logger()
         self.setWindowTitle("360账号登录")
-        # 服务端为移动端页面，按现代手机比例初始化窗口（19.5:9）
-        self.resize(390, 844)
         self.set_user_agent(C.MOBILE_USER_AGENT)
         self.qt_cookie: str = ""
 
@@ -67,18 +65,17 @@ class QihooBrowser(WebBrowser):
         if not text:
             return False
         if text.startswith(C.SUCCESS_URL_PREFIX) or "i.360.cn/index/wap" in text:
-            self.logger.info(f"{TAG} 命中登录成功页: {text[:120]}")
             return self.parseReslt(text)
         return False
 
     def parseReslt(self, url: str) -> bool:
         cookie = self._pick_qt_cookie()
         if not cookie:
-            self.logger.warning(f"{TAG} 360 登录已跳转，但未取到 Q/T cookie，等待下一次跳转")
+            self.logger.debug(f"{TAG} 登录已跳转，未取到 Q/T cookie，等待下一次跳转")
             return False
         self.qt_cookie = cookie
         self.result = {"code": 0, "data": {"qt_cookie": cookie, "redirect_url": url}}
-        self.logger.info(f"{TAG} 360 网页登录成功，已取得 Q/T cookie")
+        self.logger.debug(f"{TAG} 网页登录成功，已取得 Q/T cookie")
         return True
 
     # ── cookie 收集 ─────────────────────────────────────────
@@ -136,7 +133,7 @@ class QihooLogin:
             resp = requests.get(url, timeout=timeout, headers=headers,
                                 verify=should_verify_ssl())
         except Exception as exc:
-            self.logger.warning(f"{TAG} 请求异常 method={method}: {exc}")
+            self.logger.debug(f"{TAG} 请求异常 method={method}: {exc}")
             return {"ok": False, "errno": None, "errmsg": str(exc), "data": {}}
 
         body = resp.text or ""
@@ -158,7 +155,7 @@ class QihooLogin:
                     continue
 
         if payload is None:
-            self.logger.warning(f"{TAG} 响应无法解析 method={method}: {body[:200]!r}")
+            self.logger.debug(f"{TAG} 响应无法解析 method={method}: {body[:200]!r}")
             return {"ok": False, "errno": None, "errmsg": "响应无法解析", "data": {}}
 
         errno = payload.get(C.KEY_ERRNO)
@@ -181,7 +178,7 @@ class QihooLogin:
 
         if errno_int != C.ERRNO_OK:
             self.logger.warning(
-                f"{TAG} {method} 失败: errno={errno_int} "
+                f"{TAG} 登录接口返回错误: errno={errno_int} "
                 f"msg={payload.get(C.KEY_ERRMSG, '')}"
             )
 
@@ -197,7 +194,7 @@ class QihooLogin:
         """携带 Q/T cookie 调用 getUserInfo，换取 access_token（免密码）。"""
         cookie = str(qt_cookie or "").strip()
         if not has_qt(cookie):
-            self.logger.warning(f"{TAG} 缺少 Q/T cookie，放弃登录")
+            self.logger.debug(f"{TAG} 缺少 Q/T cookie，放弃登录")
             return {"ok": False, "errno": None, "errmsg": "缺少 Q/T cookie", "data": {}}
 
         params = {
@@ -210,7 +207,7 @@ class QihooLogin:
         if result["ok"]:
             self.qt_cookie = cookie
             self.user_info = result["data"]
-            self.logger.info(f"{TAG} 登录成功: qid={result['data'].get('qid')}")
+            self.logger.debug(f"{TAG} 已换取 access_token: qid={result['data'].get('qid')}")
         return result
 
     # ── 从 user_info 提取给网易的凭据 ───────────────────────
@@ -235,19 +232,17 @@ class QihooLogin:
         on_complete 非空时走异步（浏览器显示后立即返回，登录完成回调）。
         """
         if qt_cookie and has_qt(qt_cookie):
-            self.logger.info(f"{TAG} 使用本地 cookie 验证登录")
             result = self.login_by_qt(qt_cookie)
             if result["ok"]:
                 if on_complete is not None:
                     on_complete(result)
                     return None
                 return result
-            self.logger.warning(
-                f"{TAG} 本地 cookie 已失效 (errno={result.get('errno')})，"
-                "拉起浏览器重新登录"
+            self.logger.warning(f"{TAG} 登录状态已失效，重新打开登录窗口")
+            self.logger.debug(
+                f"{TAG} cookie 复验失败 errno={result.get('errno')}"
             )
 
-        self.logger.info(f"{TAG} 拉起 360 浏览器登录窗口: {C.LOGIN_URL}")
         browser = QihooBrowser()
         browser.set_url(C.LOGIN_URL)
         resp = browser.run()
@@ -262,7 +257,7 @@ class QihooLogin:
                     try:
                         cookie = getattr(browser_ref, "qt_cookie", "") or ""
                         if not cookie:
-                            self.logger.warning(f"{TAG} 未取得 Q/T cookie")
+                            self.logger.warning(f"{TAG} 登录未完成，请重试")
                             on_complete(None)
                             return
                         result = self.login_by_qt(cookie)
@@ -276,7 +271,7 @@ class QihooLogin:
 
         cookie = getattr(browser, "qt_cookie", "") or ""
         if not cookie:
-            self.logger.warning(f"{TAG} 网页登录未取得 Q/T cookie")
+            self.logger.warning(f"{TAG} 登录未完成，请重试")
             if on_complete is not None:
                 on_complete(None)
                 return None

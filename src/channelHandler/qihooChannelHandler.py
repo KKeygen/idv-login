@@ -76,23 +76,16 @@ class qihooChannel(channelmgr.channel):
         app_key = None
         protocol_app_channel = QC.APP_CHANNEL_FALLBACK
         sdk_ver = QC.UNISDK_SDK_VERSION
-        source = "内置默认值"
 
         try:
             short_gid = getShortGameId(game_id) if game_id else ""
             res = CloudRes().get_channelData(CHANNEL_NAME, short_gid) if short_gid else None
             if res and isinstance(res.get(CHANNEL_NAME), dict):
                 cfg = res[CHANNEL_NAME]
-                source = "cloudRes"
                 app_id = cfg.get("app_id")
                 app_key = cfg.get("app_key")
                 protocol_app_channel = cfg.get("protocol_app_channel") or protocol_app_channel
                 sdk_ver = cfg.get("sdk_ver") or sdk_ver
-            else:
-                self.logger.warning(
-                    f"{TAG} cloudRes 中未找到 {CHANNEL_NAME} 配置 "
-                    f"(game_id={game_id})，使用内置默认值"
-                )
         except Exception:
             self.logger.exception(f"{TAG} 读取 360 渠道配置失败，使用内置默认值")
 
@@ -103,13 +96,10 @@ class qihooChannel(channelmgr.channel):
         try:
             app_id = int(app_id)
         except (TypeError, ValueError):
-            self.logger.warning(f"{TAG} 360 app_id 非法: {app_id!r}，回落到默认值")
+            self.logger.warning(f"{TAG} 渠道配置异常，已回落内置默认值")
+            self.logger.debug(f"{TAG} app_id 非法: {app_id!r}")
             app_id = QC.DEFAULT_APP_ID
 
-        self.logger.info(
-            f"{TAG} 配置来源={source} app_id={app_id} "
-            f"app_channel={protocol_app_channel} sdk_ver={sdk_ver}"
-        )
         return app_id, app_key, protocol_app_channel, sdk_ver
 
     # ── 序列化 / 反序列化 ────────────────────────────────────
@@ -144,7 +134,6 @@ class qihooChannel(channelmgr.channel):
             return False
         # expires_in 约 10 小时；留 5 分钟余量
         if self.token_expire_time and int(time.time()) >= self.token_expire_time - 300:
-            self.logger.info(f"{TAG} access_token 已过期，需要重新获取")
             return False
         return True
 
@@ -161,8 +150,9 @@ class qihooChannel(channelmgr.channel):
             return False
         data = result.get("data") or {}
         if not isinstance(data, dict) or not data.get("qid"):
-            self.logger.warning(
-                f"{TAG} 登录结果缺少 qid，字段="
+            self.logger.warning(f"{TAG} 登录失败：返回数据异常")
+            self.logger.debug(
+                f"{TAG} 缺少 qid，字段="
                 f"{sorted(data.keys()) if isinstance(data, dict) else type(data).__name__}"
             )
             return False
@@ -182,9 +172,9 @@ class qihooChannel(channelmgr.channel):
             self.name = display
 
         self.user_info = {"id": cred["qid"], "token": cred["access_token"]}
-        self.logger.info(
-            f"{TAG} 已保存 360 凭据: qid={cred['qid']} name={self.name} "
-            f"expires_in={expires_in}"
+        self.logger.info(f"{TAG} 登录成功，账号已保存")
+        self.logger.debug(
+            f"{TAG} qid={cred['qid']} name={self.name} expires_in={expires_in}"
         )
         return True
 
@@ -230,10 +220,6 @@ class qihooChannel(channelmgr.channel):
         if not new or new == old:
             return
         self.qt_cookie = new
-        self.logger.info(
-            f"{TAG} 已保存 Q/T cookie（{len(old)} -> {len(new)} 字符），"
-            "token 过期后可免浏览器复验"
-        )
 
     # ── UniSDK 数据 ──────────────────────────────────────────
     def get_uniSdk_data(self, game_id: str = "", on_complete=None):
@@ -246,7 +232,7 @@ class qihooChannel(channelmgr.channel):
         short_game_id = getShortGameId(game_id)
 
         if not self._has_valid_token():
-            self.logger.info(f"{TAG} access_token 不可用，尝试用 cookie 复验登录")
+            self.logger.debug(f"{TAG} access_token 不可用，尝试用 cookie 复验登录")
             if on_complete is not None:
 
                 def _on_login_done(success):
@@ -254,7 +240,7 @@ class qihooChannel(channelmgr.channel):
                         try:
                             on_complete(self._build_unisdk_result(short_game_id))
                         except Exception as e:
-                            self.logger.error(f"{TAG} UniSDK error: {e}")
+                            self.logger.error(f"{TAG} 生成登录数据失败: {e}")
                             on_complete(None)
                     else:
                         on_complete(None)
@@ -297,7 +283,7 @@ class qihooChannel(channelmgr.channel):
         if code != 200:
             # subcode 13 表示 sdk_version 未命中白名单，应与 cloudRes 的 sdk_ver 核对
             self.logger.error(
-                f"{TAG} uni_sauth 未通过: code={code} subcode={subcode} "
+                f"{TAG} 登录校验未通过: code={code} subcode={subcode} "
                 f"status={uniData.get('status') if isinstance(uniData, dict) else None}"
             )
 
