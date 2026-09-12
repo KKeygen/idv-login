@@ -48,8 +48,8 @@ ErrorReplacingExistingFile=尝试替换现有文件时出错，很可能是您�
 SelectDirLabel3=安装程序会将 [name] 放入下列文件夹。此工具为绿色版，安装工具过程不会写入注册表项目。
 
 [Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标"
-Name: "desktopiconmgr"; Description: "体验新版GUI，在桌面上创建GUI快捷方式"; GroupDescription: "附加图标"
+Name: "desktopiconmgr"; Description: "创建用户界面快捷方式（启动器界面）"; GroupDescription: "附加图标"
+Name: "desktopicon"; Description: "创建传统界面快捷方式（黑色窗口；选择任一模式不会影响安装到计算机上的文件数量）"; GroupDescription: "附加图标"
 
 [Files]
 Source: "..\dist\python-embed\*"; DestDir: "{app}\python-embed"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -63,10 +63,13 @@ Source: "..\assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Type: filesandordirs; Name: "{app}\*"
 Type: files; Name: "{autodesktop}\IDV Login - 渠道服管理.lnk"
 Type: files; Name: "{autodesktop}\IDV Login - 新版界面.lnk"
+Type: files; Name: "{autodesktop}\IDV Login.lnk"
+Type: files; Name: "{autodesktop}\IDV Login-GUI.lnk"
+Type: files; Name: "{autodesktop}\IDV Login(传统模式).lnk"
 
 [Icons]
-Name: "{autodesktop}\IDV Login"; Filename: "{app}\点我启动工具.bat"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login.lnk'))
-Name: "{autodesktop}\IDV Login-GUI"; Filename: "{app}\点我启动工具.bat"; Parameters: "--open-ui"; Tasks: desktopiconmgr; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login-GUI.lnk'))
+Name: "{autodesktop}\IDV Login(传统模式)"; Filename: "{app}\点我启动工具.bat"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login(传统模式).lnk'))
+Name: "{autodesktop}\IDV Login"; Filename: "{app}\点我启动工具.bat"; Parameters: "--open-ui"; Tasks: desktopiconmgr; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login.lnk'))
 
 [Run]
 Filename: "{app}\点我启动工具.bat"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
