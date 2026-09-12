@@ -39,6 +39,12 @@ AUTO_UPDATE_CHANNELS = [
     "4399com", "nearme_vivo", "oppo", "360_assistant",
 ]
 
+# 渠道专属数据文件名，用于候选提示（排除 modules_* / extend 等模块文件）
+KNOWN_CHANNEL_DATA = (
+    "360_assistant", "4399com", "honor_sdk", "uc_platform",
+    "huawei", "myapp", "xiaomi_app",
+)
+
 
 # ──────────────────────────────────────────────────────────────
 # 渠道数据解密
@@ -167,6 +173,47 @@ def attr_value(manifest, name, res_table=None):
         resolved = res_table.resolve(value[1]) if res_table is not None else None
         return str(resolved) if resolved is not None else ""
     return str(value)
+
+
+def read_declared_channel(zf):
+    """读取包内声明的渠道标识（明文，未加密）。
+
+    来源优先级：
+      1. assets/ntunisdk_common_data 的 APP_CHANNEL
+      2. assets/channel_infos_data 的 main_channel.*.channel_id
+
+    官方包会得到 "netease"；渠道包会得到对应渠道名。
+    """
+    text = read_text(zf, "assets/ntunisdk_common_data")
+    if text:
+        try:
+            channel = json.loads(text).get("APP_CHANNEL")
+            if channel:
+                return channel
+        except json.JSONDecodeError:
+            pass
+
+    text = read_text(zf, "assets/channel_infos_data")
+    if text:
+        try:
+            main = json.loads(text).get("main_channel") or {}
+            for value in main.values():
+                if isinstance(value, dict) and value.get("channel_id"):
+                    return value["channel_id"]
+        except json.JSONDecodeError:
+            pass
+
+    return ""
+
+
+def list_channel_data_candidates(names):
+    """列出包内存在的渠道专属 _data 文件名。"""
+    present = {
+        n.split("/")[1][:-5]
+        for n in names
+        if n.startswith("assets/") and n.endswith("_data")
+    }
+    return sorted(present & set(KNOWN_CHANNEL_DATA))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -353,7 +400,12 @@ def build_channel_data(zf, manifest, res_table, app_channel, my_data, package_na
 # 主流程
 # ──────────────────────────────────────────────────────────────
 def update_cloud_res(item, token=None):
-    """把条目追加到 assets/cloudRes.json（通过 GitHub API）。"""
+    """把条目写入 assets/cloudRes.json（通过 GitHub API）。
+
+    以 (app_channel, game_id) 为键做去重：命中已有条目则**就地更新**，
+    否则追加。否则同一渠道新增包名变体（如 uc 的 dwrg.uc -> dwrg.aligames）
+    会产生重复项，而 get_channelData 只取第一个，新条目永远不会生效。
+    """
     token = token or os.getenv("GITHUB_TOKEN")
     headers = {"Authorization": "token %s" % token} if token else {}
 
@@ -362,15 +414,39 @@ def update_cloud_res(item, token=None):
     sha = file_info["sha"]
     data = json.loads(base64.b64decode(file_info["content"]).decode())
 
+    key = (item["app_channel"], item["game_id"])
+    index = next(
+        (i for i, existing in enumerate(data["data"])
+         if (existing.get("app_channel"), existing.get("game_id")) == key),
+        None,
+    )
+
+    if index is None:
+        data["data"].append(item)
+        action = "新增"
+    else:
+        old = data["data"][index]
+        # 保留人工维护的展示字段（channel / name 等）
+        merged = dict(item)
+        for field in ("channel", "name"):
+            if not merged.get(field) and old.get(field):
+                merged[field] = old[field]
+        data["data"][index] = merged
+        action = "更新"
+        if old.get("package_name") != item.get("package_name"):
+            logging.info("包名变更: %s -> %s"
+                         % (old.get("package_name"), item.get("package_name")))
+
     data["lastModified"] = int(time.time())
-    data["data"].append(item)
 
     payload = {
-        "message": "Live update for %s-%s" % (item["game_id"], item["app_channel"]),
+        "message": "Live update for %s-%s (%s)"
+                   % (item["game_id"], item["app_channel"], action),
         "content": base64.b64encode(json.dumps(data, indent=4).encode()).decode(),
         "sha": sha,
     }
     result = requests.put(CLOUDRES_API, headers=headers, json=payload, timeout=30)
+    logging.info("cloudRes %s: %s-%s" % (action, item["game_id"], item["app_channel"]))
     print(result.json())
 
 
@@ -419,7 +495,24 @@ def get_netease_game_info(source, token=None):
 
         app_channel, data_file_channel = detect_channel(manifest.package, names)
         if not app_channel:
-            logging.error("无法判定渠道，请补充包名特征")
+            declared = read_declared_channel(zf)
+            candidates = list_channel_data_candidates(names)
+            if declared == "netease":
+                logging.info(
+                    "这是网易官方包（渠道标识 netease），无需渠道配置。\n"
+                    "  如需提取渠道参数，请改用对应渠道的 APK"
+                    "（包名通常带 .m4399 / .huawei / .nearme.gamecenter 等后缀）。"
+                )
+            else:
+                logging.error(
+                    "无法判定渠道。\n"
+                    "  包名          : %s\n"
+                    "  包内声明渠道  : %s\n"
+                    "  渠道数据文件  : %s\n"
+                    "  请把以上信息反馈给开发者以补充特征。"
+                    % (manifest.package, declared or "<未声明>",
+                       ", ".join(candidates) if candidates else "<无>")
+                )
             return None
         logging.info("判定渠道: %s (数据文件: %s)" % (app_channel, data_file_channel))
 
