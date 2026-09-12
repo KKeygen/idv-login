@@ -1,5 +1,5 @@
 {
-  "lastModified": 1789191667,
+  "lastModified": 1789193178,
   "version": "v6.2.3-stable",
   "hotfix": [
     {
@@ -1941,6 +1941,160 @@
         "app_key": "838559dca512625db0deadb1a974d5e6",
         "protocol_app_channel": "allysdk.360_assistant",
         "sdk_ver": "2.4.0_816"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.dhxy.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "TWTLlTMu20vwTCi0eQ7EmLN8rs5Lu45i",
+      "game_id": "g17",
+      "360_assistant": {
+        "app_id": "202636926",
+        "app_key": "240265941e39f5e078d434ec9f5123c3",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.3.4_794"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.dtws.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "J0VLuWkJ05971Vqvs45p6jI13lvhTB6I",
+      "game_id": "g51",
+      "360_assistant": {
+        "app_id": "202911721",
+        "app_key": "f997d884f4feec27e2320b6d37d41a3d",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.3.4_794"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.hyxd.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "VkGABZk0GPAvtNitnJT65ZGaNKPrO9tz",
+      "game_id": "g83",
+      "360_assistant": {
+        "app_id": "203801196",
+        "app_key": "79ebba8afd7a06ed3531aca50093c0c8",
+        "protocol_app_channel": "allysdk.360_assistant",
+        "sdk_ver": "2.4.0_816"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.l10.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "orDyw8ztTopWRymZVUR-8KErWFTzxt_S",
+      "game_id": "l10",
+      "360_assistant": {
+        "app_id": "202825981",
+        "app_key": "5677ae31c6b6a7db18ec710214d088f9",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.4.0_816"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.ldxy.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "LnJXEOj4nc7NUJtzgUrUrU7tJT8BPU-m",
+      "game_id": "g4",
+      "360_assistant": {
+        "app_id": "201777836",
+        "app_key": "1de6106aeb1b754e3dde63214dbea08e",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.4.0_816"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.moba.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "CXDS3WlfYNmX4JNdFDzN8kE9-_ZD2yUD",
+      "game_id": "g78",
+      "360_assistant": {
+        "app_id": "203815246",
+        "app_key": "d51f2fa0554b5b3909175f719e1e2674",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.3.4_794"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.mrzh.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "-BQb6RCHHhYI1ADS6pJigOehE-sITVya",
+      "game_id": "g66",
+      "360_assistant": {
+        "app_id": "204073156",
+        "app_key": "af2cd37acca2259cc35aa66642ad1fed",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.3.4_788"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.pes.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "QFfWa20Aj-kErIZJULkRbVIvgfSme676",
+      "game_id": "ma78",
+      "360_assistant": {
+        "app_id": "204036446",
+        "app_key": "dd782db16dd50de1f993844f05b77620",
+        "protocol_app_channel": "allysdk.360_assistant",
+        "sdk_ver": "2.4.0_816"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.tomX.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "4z8-xZCh7F1eW0bWu4lab4aeEdXGB0u8",
+      "game_id": "h18",
+      "360_assistant": {
+        "app_id": "204495521",
+        "app_key": "95b1801b587df3ee943895ac20f99f44",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.4.0_816"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.wecc.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "ABBoc9df1dlfNtY0hxSTvk6leAeTVPmI",
+      "game_id": "ma80",
+      "360_assistant": {
+        "app_id": "204036456",
+        "app_key": "0cbe8f97d3273d8de6cf8331a853e48e",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.3.4_794"
+      },
+      "channel": "360_assistant",
+      "name": "360账号"
+    },
+    {
+      "package_name": "com.netease.wyclx.qihoo",
+      "app_channel": "360_assistant",
+      "log_key": "yi8_cXKEm4Pe2XYL3E4GjjD9MVtYRuGy",
+      "game_id": "h42",
+      "360_assistant": {
+        "app_id": "203810216",
+        "app_key": "e7e8d257f9a8ac6c9dd53b2005046d33",
+        "protocol_app_channel": "360_assistant",
+        "sdk_ver": "2.3.4_794"
       },
       "channel": "360_assistant",
       "name": "360账号"
