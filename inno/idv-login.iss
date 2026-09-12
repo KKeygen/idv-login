@@ -73,7 +73,7 @@ Name: "{autodesktop}\IDV Login"; Filename: "{app}\点我启动工具.bat"; Param
 
 [Run]
 Filename: "{app}\点我启动工具.bat"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
-Filename: "https://yuque.com/keygen/kg2r5k/izpgpf4g3ecqsbf3"; Description: "查看教程"; Flags: postinstall shellexec runasoriginaluser
+Filename: "https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e"; Description: "查看教程"; Flags: postinstall shellexec runasoriginaluser
 
 [Code]
 
@@ -173,7 +173,7 @@ begin
       Result := False;
       Exit;
     end;
-    OpenURL('https://www.yuque.com/keygen/kg2r5k/sni3150i6dfykkt1#qy7EN');
+    OpenURL('https://kkeygenn.feishu.cn/wiki/W3IfwUkUki6cYqkJ5grckRmvnWb#doxcnqGFuI329MORYmWzbWsXlsR');
   end;
   WriteInstallerLog('WindowsVersionCheck=PASS');
 
@@ -188,7 +188,7 @@ begin
       mbInformation, MB_OKCANCEL);
     WriteInstallerLog(Format('VCRedistPromptResponse=%d', [Response]));
     if Response = IDOK then
-      OpenURL('https://www.yuque.com/keygen/kg2r5k/sni3150i6dfykkt1#TXNIg');
+      OpenURL('https://kkeygenn.feishu.cn/wiki/W3IfwUkUki6cYqkJ5grckRmvnWb#doxcnLjPJuX1bpjzumtCYBp6prd');
   end;
   WriteInstallerLog('InitializeSetup end (continue install)');
 end;
