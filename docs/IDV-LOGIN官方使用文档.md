@@ -1,10 +1,10 @@
 2026/1/29 新引擎更新文档：
 
-[https://www.yuque.com/keygen/kg2r5k/eczvdfpiq5l6gicw](https://www.yuque.com/keygen/kg2r5k/eczvdfpiq5l6gicw?singleDoc#)
+[https://kkeygenn.feishu.cn/wiki/UlCqwTzQdieyl1kwqAOctutEnoc](https://kkeygenn.feishu.cn/wiki/UlCqwTzQdieyl1kwqAOctutEnoc)
 
 2026/04/03 6.X版本常见问题解答：
 
-[https://www.yuque.com/keygen/kg2r5k/sni3150i6dfykkt1#syRtF](https://www.yuque.com/keygen/kg2r5k/sni3150i6dfykkt1#syRtF)
+[https://kkeygenn.feishu.cn/wiki/W3IfwUkUki6cYqkJ5grckRmvnWb#doxcn20zOzLAmtLjoSMnncu28hf](https://kkeygenn.feishu.cn/wiki/W3IfwUkUki6cYqkJ5grckRmvnWb#doxcn20zOzLAmtLjoSMnncu28hf)
 
 # 简介
 **为了防止迷路，建议按`Ctrl+D`收藏本页！**
@@ -19,9 +19,9 @@
 
 更新日志:[idv-login 发行版 - Gitee.com](https://gitee.com/opguess/idv-login/releases)
 
-[常见问题解决方案](https://www.yuque.com/keygen/kg2r5k/xl9zosrwviyc54nu) cr：第五人格bwiki 作业君
+[常见问题解决方案](https://kkeygenn.feishu.cn/wiki/W3IfwUkUki6cYqkJ5grckRmvnWb) cr：第五人格bwiki 作业君
 
-如果这个工具帮到了你，**请考虑一下**[赞赏渠道](https://www.yuque.com/keygen/kg2r5k/cbbtbqqe4g457t5d)
+如果这个工具帮到了你，**请考虑一下**[赞赏渠道](https://kkeygenn.feishu.cn/wiki/YgapwhR4uiSpm8kIymIcEN3BnDe)
 
 # 下载前必读
 ## 免责声明
@@ -162,7 +162,7 @@ Windows 7的桌面长这样：
 
 如果游戏是《第五人格》，而且已经装了发烧平台的新引擎，先完成**<font style="color:#DF2A3F;">一次</font>**以下步骤：
 
-[免发烧平台升级新引擎教程](https://www.yuque.com/keygen/kg2r5k/eczvdfpiq5l6gicw#twBmj)
+[免发烧平台升级新引擎教程](https://kkeygenn.feishu.cn/wiki/UlCqwTzQdieyl1kwqAOctutEnoc#doxcnTFpSzW9WNj0cwYPiQYg1Ih)
 
 ②出现“拦截成功！”的提示，即可打开游戏
 
@@ -204,7 +204,7 @@ Windows 7的桌面长这样：
 ## <font style="color:#000000;">扫码登录（b站、OPPO、应用宝）</font>
 此处的教程为**扫码登录**教程，原理是用手机上的游戏（或对应 App）扫码一次，记录扫码结果，下次登录不再扫码。
 
-如果想**用账号密码、手机验证码等方式手动登录**（华为、小米、VIVO、应用宝、荣耀、九游、4399、360、OPPO、b站），请直接看[渠道服手动登录教程](https://www.yuque.com/keygen/kg2r5k/fey3i1pi6k9fgz86)<font style="color:#000000;">。</font>
+如果想**用账号密码、手机验证码等方式手动登录**（华为、小米、VIVO、应用宝、荣耀、九游、4399、360、OPPO、b站），请直接看[渠道服手动登录教程](https://kkeygenn.feishu.cn/wiki/N80EwfZsDi5Ep3kitUlc470Dnup)<font style="color:#000000;">。</font>
 
 <font style="color:#000000;">教程开始：</font>
 
@@ -213,7 +213,7 @@ Windows 7的桌面长这样：
 
 如果游戏是《第五人格》，而且已经装了发烧平台的新引擎，先完成**<font style="color:#DF2A3F;">一次</font>**以下步骤：
 
-[免发烧平台升级新引擎教程](https://www.yuque.com/keygen/kg2r5k/eczvdfpiq5l6gicw#twBmj)
+[免发烧平台升级新引擎教程](https://kkeygenn.feishu.cn/wiki/UlCqwTzQdieyl1kwqAOctutEnoc#doxcnTFpSzW9WNj0cwYPiQYg1Ih)
 
 ②**在手机上用对应渠道的游戏扫码登录**，进入游戏，随后点击**电脑上游戏主界面的退出登录**
 
@@ -233,10 +233,10 @@ Windows 7的桌面长这样：
 **<font style="color:red;">成功登录后再关掉登录程序</font>**噢！不要提前关闭！（不关也可以）
 
 ## 华为/小米（含QQ登录）/VIVO/OPPO/应用宝/九游/Bilibili/荣耀/4399/360 渠道服
-[渠道服手动登录教程](https://www.yuque.com/keygen/kg2r5k/fey3i1pi6k9fgz86)
+[渠道服手动登录教程](https://kkeygenn.feishu.cn/wiki/N80EwfZsDi5Ep3kitUlc470Dnup)
 
 ### 渠道服账号数据云同步功能
-[渠道服账号云同步说明及教程](https://www.yuque.com/keygen/kg2r5k/pvb2mdma2zpq442g#IpChx)
+[渠道服账号云同步说明及教程](https://kkeygenn.feishu.cn/wiki/ZbgVwYBjliWSoakinFbcqt40n8k#doxcnWh6bI4lxgpy50ywL6bAYZf)
 
 
 
@@ -247,7 +247,7 @@ Windows 7的桌面长这样：
 
 
 # 渠道服使用教程（原生保存版）
-**<font style="color:#585A5A;">工具更新至6.0.4版本后，第五人格支持扫码记录渠道服账号。目前记录的时间</font>****<font style="color:#DF2A3F;">为三天左右</font>****<font style="color:#585A5A;">。可以记录所有渠道服账号。其他渠道推荐使用上一节的“管理界面版”。同时，原本渠道服管理界面的渠道服记录方式依旧有效。如果是扫码导入账号，两种方式为互斥，请查阅</font>**[**https://www.yuque.com/keygen/kg2r5k/izpgpf4g3ecqsbf3#gJK96**](#gJK96)**<font style="color:#585A5A;">。</font>**
+**<font style="color:#585A5A;">工具更新至6.0.4版本后，第五人格支持扫码记录渠道服账号。目前记录的时间</font>****<font style="color:#DF2A3F;">为三天左右</font>****<font style="color:#585A5A;">。可以记录所有渠道服账号。其他渠道推荐使用上一节的“管理界面版”。同时，原本渠道服管理界面的渠道服记录方式依旧有效。如果是扫码导入账号，两种方式为互斥，请查阅</font>**[**https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e#doxcn4Iymqmx1E54u0SBdCZ1zUb**](#gJK96)**<font style="color:#585A5A;">。</font>**
 
 **<font style="color:#585A5A;">您可以在渠道服管理界自由选用两种方式。</font>**
 
@@ -256,7 +256,7 @@ Windows 7的桌面长这样：
 
 **<font style="color:#585A5A;">如果游戏是《第五人格》，而且已经装了发烧平台的新引擎，先完成</font>****<font style="color:#DF2A3F;">一次</font>****<font style="color:#585A5A;">以下步骤：</font>**
 
-[免发烧平台升级新引擎教程](https://www.yuque.com/keygen/kg2r5k/eczvdfpiq5l6gicw#twBmj)
+[免发烧平台升级新引擎教程](https://kkeygenn.feishu.cn/wiki/UlCqwTzQdieyl1kwqAOctutEnoc#doxcnTFpSzW9WNj0cwYPiQYg1Ih)
 
 ②打开游戏，选择扫码登录，
 
@@ -288,7 +288,7 @@ Windows 7的桌面长这样：
 
 如果游戏是《第五人格》，先完成以下步骤：
 
-[免发烧平台升级新引擎教程](https://www.yuque.com/keygen/kg2r5k/eczvdfpiq5l6gicw#twBmj)
+[免发烧平台升级新引擎教程](https://kkeygenn.feishu.cn/wiki/UlCqwTzQdieyl1kwqAOctutEnoc#doxcnTFpSzW9WNj0cwYPiQYg1Ih)
 
 ②**不要扫码，直接点击**二维码下面的游戏图标（注意此时工具不能被关闭）
 
@@ -364,7 +364,7 @@ Windows 7的桌面长这样：
 # 常见问题
 此处会收集一些大家使用工具时可能遇到的常见错误/问题，如果下面没有你遇到的问题或者问题不能用下面的方法解决，请看下一节“反馈问题”
 
-点击进入：[常见问题解决方案](https://www.yuque.com/keygen/kg2r5k/xl9zosrwviyc54nu)
+点击进入：[常见问题解决方案](https://kkeygenn.feishu.cn/wiki/W3IfwUkUki6cYqkJ5grckRmvnWb)
 
 # 反馈Bug或寻求帮助
 在反馈Bug前，请先了解以下概念。

@@ -19,3 +19,9 @@ tools/oppo_*
 analysis/
 .claude/
 _sdk_ref/*
+.agents/
+.hermes/
+.pi/
+.trae/
+.windsurf/
+skills-lock.json
