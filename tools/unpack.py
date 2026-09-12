@@ -442,12 +442,22 @@ def update_cloud_res(item, token=None):
     payload = {
         "message": "Live update for %s-%s (%s)"
                    % (item["game_id"], item["app_channel"], action),
-        "content": base64.b64encode(json.dumps(data, indent=4).encode()).decode(),
+        "content": base64.b64encode(render_cloud_res(data)).decode(),
         "sha": sha,
     }
     result = requests.put(CLOUDRES_API, headers=headers, json=payload, timeout=30)
     logging.info("cloudRes %s: %s-%s" % (action, item["game_id"], item["app_channel"]))
     print(result.json())
+
+
+def render_cloud_res(data):
+    """按仓库既有风格序列化 cloudRes.json。
+
+    历史原因：早期脚本用 indent=4 + ensure_ascii=True，导致每次 CI 提交
+    都会把整份文件重排（中文转 \\uXXXX、缩进 2 -> 4），产生上千行无意义 diff。
+    这里统一为 indent=2 + ensure_ascii=False，与人工维护的版本一致。
+    """
+    return json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
 
 
 def get_netease_game_info(source, token=None):
