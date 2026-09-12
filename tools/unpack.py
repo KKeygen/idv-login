@@ -382,7 +382,17 @@ def get_netease_game_info(source, token=None):
 
     if re.match(r"^https?://", source):
         logging.info("远程读取 APK: %s" % source[:100])
-        ctx = RemoteZip(source, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            ctx = RemoteZip(source, headers={"User-Agent": "Mozilla/5.0"})
+        except Exception as exc:
+            # remotezip 依赖 HTTP Range 请求。若服务器不支持（未返回 206），
+            # 需要先下载整个 APK 再改用本地路径。
+            logging.error(
+                "远程读取失败：服务器可能不支持 HTTP Range 请求。\n"
+                "  可先下载 APK，再以本地路径运行：python tools/unpack.py app.apk\n"
+                "  原始错误: %s" % exc
+            )
+            return None
     else:
         logging.info("本地读取 APK: %s" % source)
         ctx = zipfile.ZipFile(source)
