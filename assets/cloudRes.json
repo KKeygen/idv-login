@@ -1,5 +1,5 @@
 {
-  "lastModified": 1789263588,
+  "lastModified": 1789314043,
   "version": "v6.3.0-stable",
   "hotfix": [
     {
@@ -548,6 +548,38 @@
       "target_module": "cloudSync",
       "target_commit": "b210db3393ca7da736c7faee66fef322aad0fb1a",
       "note": "修复了云同步会静默失败的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "cloudRes",
+      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
+      "note": "允许下载、更新和修复国际服游戏"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "gamecatalog",
+      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
+      "note": "允许下载、更新和修复国际服游戏"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
+      "note": "允许下载、更新和修复国际服游戏"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
+      "note": "允许下载、更新和修复国际服游戏"
     }
   ],
   "shortcuts": [
