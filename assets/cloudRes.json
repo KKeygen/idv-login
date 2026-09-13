@@ -1,5 +1,5 @@
 {
-  "lastModified": 1789314043,
+  "lastModified": 1789314782,
   "version": "v6.3.0-stable",
   "hotfix": [
     {
@@ -254,16 +254,6 @@
         "v6.0.1-stable",
         "v6.0.2-stable"
       ],
-      "target_module": "mitm_addon",
-      "target_commit": "c37c58fb0ba076a1800d0e0b6af916896869170f",
-      "note": "恢复官服扫码记住账号，云端配置已同步更新，如不应用此热更新可能出现非法请求错误"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.0-beta",
-        "v6.0.1-stable",
-        "v6.0.2-stable"
-      ],
       "target_module": "cloudRes",
       "target_commit": "c37c58fb0ba076a1800d0e0b6af916896869170f",
       "note": "恢复官服扫码记住账号，云端配置已同步更新，如不应用此热更新可能出现非法请求错误"
@@ -311,14 +301,6 @@
         "v6.0.4-stable"
       ],
       "target_module": "main",
-      "target_commit": "57fef3d3c5ccbe8fb068010746631c830352d3f0",
-      "note": "尝试修复某些情况下，关闭原生扫码时保存记录仍然只有三天的问题。一并修复可能造成误解的文案"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.4-stable"
-      ],
-      "target_module": "mitm_addon",
       "target_commit": "57fef3d3c5ccbe8fb068010746631c830352d3f0",
       "note": "尝试修复某些情况下，关闭原生扫码时保存记录仍然只有三天的问题。一并修复可能造成误解的文案"
     },
@@ -494,17 +476,6 @@
     },
     {
       "need_hotfix_version": [
-        "v6.2.0-beta",
-        "v6.2.1-stable",
-        "v6.2.2-stable",
-        "v6.2.3-stable"
-      ],
-      "target_module": "mitm_addon",
-      "target_commit": "36bf9f985b95de8d5b42d30aead4dc90a7b59b87",
-      "note": "修复关闭自动登录后，旧版完整游戏 ID 配置仍会被读取、导致仍自动登录的问题"
-    },
-    {
-      "need_hotfix_version": [
         "v6.0.1-stable",
         "v6.0.2-stable",
         "v6.0.4-stable",
@@ -580,6 +551,39 @@
       "target_module": "main",
       "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
       "note": "允许下载、更新和修复国际服游戏"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "5da21ee137e7da9c18b5a6a23f2d9733647342cc",
+      "note": "修复国际服登录的时候提示cv参数错误的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "320af1b1146f1df4225d62fdde62e2caad0c64cc",
+      "note": "修复国际服登录的时候提示cv参数错误的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable",
+        "v6.2.3-stable",
+        "v6.3.0-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "3ff15ebe2a394b7531e6ca4ed85ad6ab69479762",
+      "note": "修复国际服登录的时候提示cv参数错误的问题"
     }
   ],
   "shortcuts": [
