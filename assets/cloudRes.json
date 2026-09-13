@@ -1,5 +1,5 @@
 {
-  "lastModified": 1789202597,
+  "lastModified": 1789263588,
   "version": "v6.3.0-stable",
   "hotfix": [
     {
@@ -519,6 +519,35 @@
       "target_module": "channelHandler.oppoChannelHandler",
       "target_commit": "241fb2468b80d919af71e0211b7ed98cf924bb23",
       "note": "修复了阴阳师登录OPPO渠道服的时候，提示需要在手机上重新登录的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v5.8.3.1-beta",
+        "v5.9.0-beta",
+        "v5.9.1-stable"
+      ],
+      "target_module": "cloudSync",
+      "target_commit": "110cf3af3e34412d8882704e752b8d37a05dd1f1",
+      "note": "修复了云同步会静默失败的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable",
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable",
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable",
+        "v6.2.3-stable",
+        "v6.3.0-stable"
+      ],
+      "target_module": "cloudSync",
+      "target_commit": "b210db3393ca7da736c7faee66fef322aad0fb1a",
+      "note": "修复了云同步会静默失败的问题"
     }
   ],
   "shortcuts": [
