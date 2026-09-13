@@ -18,7 +18,7 @@ from envmgr import genv
 
 
 class WebNote:
-    BASE_URL = "https://api.txttool.cn/netcut/note"
+    BASE_URL = "https://api-webnote.txttool.cn/netcut/note"
     SALT_NOTE_ID = b"idv-login/cloud-sync/note-id/v2"
     SALT_NOTE_PASSWORD = b"idv-login/cloud-sync/note-password/v2"
     ARGON2_TIME_COST = 3
