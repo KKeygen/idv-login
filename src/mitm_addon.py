@@ -119,9 +119,12 @@ class IDVLoginAddon:
         self.stack_mgr = LoginStackManager.get_instance()
         self.cloud_res = CloudRes
 
+        self.oversea_domain = str(
+            genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com")
+        ).strip().lower()
         self.target_domains = {
-            genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
-            genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
+            str(genv.get("DOMAIN_TARGET", "service.mkey.163.com")).lower(),
+            self.oversea_domain,
         }
 
         # Regex patterns for route matching
@@ -152,6 +155,12 @@ class IDVLoginAddon:
             self._handle_idv_login_request(flow, path)
             return
 
+        # Overseas MPay uses a different API namespace.  Keep its
+        # requests untouched; only pc/config is intentionally patched
+        # on the response side below.
+        if host == self.oversea_domain:
+            return
+
         # ── Game API routes: may modify query before forwarding ──
         if path == "/mpay/api/qrcode/create_login":
             self._modify_create_login_request(flow)
@@ -176,8 +185,6 @@ class IDVLoginAddon:
             pass  # handled in response
         elif path == "/mpay/api/data/upload":
             pass  # handled in response
-        elif path == "/api/games/pc/config":
-            pass  # handled in response
         elif not path.startswith("/mpay/api/qrcode/") and not path.startswith("/mpay/api/reverify/"):
             # Global catch-all: add CV to query + POST body, remove arch
             flow.request.query["cv"] = self.cv
@@ -196,6 +203,11 @@ class IDVLoginAddon:
             return
 
         try:
+            if host == self.oversea_domain:
+                if path == "/api/games/pc/config":
+                    self._modify_oversea_config_response(flow)
+                return
+
             if self._re_login_methods.match(path):
                 self._modify_login_methods_response(flow)
             elif self._re_handle_login.match(path) and flow.request.method == "GET":
@@ -213,8 +225,6 @@ class IDVLoginAddon:
                 self._handle_exchange_token_response(flow)
             elif path == "/mpay/api/data/upload":
                 self._handle_data_upload_response(flow)
-            elif path == "/api/games/pc/config":
-                self._modify_oversea_config_response(flow)
         except Exception:
             self.logger.exception(f"处理响应时出错: {path}")
 
