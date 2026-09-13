@@ -34,7 +34,14 @@ class DynamicGameCatalog:
         "https://loadingbaycn.webapp.163.com/app/v1/game_library/app"
         "?force=1&app_id={}"
     )
-    CACHE_SCHEMA_VERSION = 4
+    OVERSEA_RECOMMEND_URL = (
+        "https://api.loadingbay.com/app/v1/game_store/recommend/list"
+    )
+    OVERSEA_APP_DETAIL_URL = (
+        "https://api.loadingbay.com/app/v1/game_library/app"
+        "?force=1&app_id={}"
+    )
+    CACHE_SCHEMA_VERSION = 5
     DEFAULT_REFRESH_INTERVAL = 24 * 60 * 60
 
     _MODIFIED = "modified"
@@ -79,6 +86,8 @@ class DynamicGameCatalog:
             "checked_at": 0,
             "sources": {},
             "game_configs": {},
+            "homepage_apps_cn": [],
+            "homepage_apps_oversea": [],
             "homepage_apps": [],
             "app_details": {},
             "games": [],
@@ -132,7 +141,7 @@ class DynamicGameCatalog:
         if source_key == "game_config":
             data = payload.get("data", {})
             return data.get("gameConfigList", []) if isinstance(data, dict) else []
-        if source_key == "homepage_info":
+        if source_key in ("homepage_info", "oversea_recommend"):
             return payload.get("data", {})
         return payload
 
@@ -200,7 +209,9 @@ class DynamicGameCatalog:
         return result
 
     @staticmethod
-    def _normalize_homepage_apps(payload: dict) -> List[dict]:
+    def _normalize_homepage_apps(
+        payload: dict, catalog_source: str = "cn", default_app_type=None
+    ) -> List[dict]:
         ordered_apps = []
         apps_by_id = {}
 
@@ -213,13 +224,16 @@ class DynamicGameCatalog:
                     except (TypeError, ValueError):
                         app_id = -1
                     app_type = app_data.get("app_type")
+                    if app_type is None:
+                        app_type = default_app_type
                     # Type 1 = 直接管理的 Windows 游戏；Type 3 = 模拟器移动游戏
-                    # （如阴阳师）。两者都纳入目录，便于选择/定位；Type 3 若无
-                    # Windows 下载分发则前端只提供"选择游戏路径"。
+                    # （如阴阳师）。国际服 recommend/list 当前不返回 app_type，
+                    # 该来源按 Windows 游戏处理。
                     if app_id >= 0 and app_type in (1, 3):
                         normalized = {
                             "app_id": app_id,
                             "app_type": app_type,
+                            "catalog_source": catalog_source,
                             "display_name": str(
                                 app_data.get("display_name") or ""
                             ).strip(),
@@ -269,12 +283,14 @@ class DynamicGameCatalog:
         games_by_short_id = {}
         for app in homepage_apps:
             app_id = app.get("app_id")
+            catalog_source = str(app.get("catalog_source") or "cn")
             # type=3 为模拟器移动游戏（APK，无 Windows 启动路径）：仅展示，标记 fever_display
             if int(app.get("app_type") or 1) == 3:
                 platform_type = "fever_display"
             else:
                 platform_type = "fever"
-            detail = app_details.get(str(app_id), {})
+            detail_key = f"{catalog_source}:{app_id}"
+            detail = app_details.get(detail_key, {})
             short_id = str(detail.get("game_id") or "").strip()
             if not short_id:
                 continue
@@ -286,6 +302,11 @@ class DynamicGameCatalog:
                     existing["download_distributions"].append(app_id)
                 if app_id not in existing["catalog_app_ids"]:
                     existing["catalog_app_ids"].append(app_id)
+                if catalog_source not in existing["catalog_sources"]:
+                    existing["catalog_sources"].append(catalog_source)
+                existing["distribution_sources"].setdefault(
+                    str(app_id), catalog_source
+                )
                 continue
             record = {
                 "game_id": cloud_game_id or short_id,
@@ -308,7 +329,10 @@ class DynamicGameCatalog:
                 "platform_type": platform_type,
                 "catalog_app_id": app_id,
                 "catalog_app_ids": [app_id],
+                "catalog_source": catalog_source,
+                "catalog_sources": [catalog_source],
                 "download_distributions": [app_id],
+                "distribution_sources": {str(app_id): catalog_source},
                 "launcher": dict(detail),
             }
             games.append(record)
@@ -352,35 +376,74 @@ class DynamicGameCatalog:
                 "homepage_info", self.HOMEPAGE_URL
             )
             sources["homepage_info"] = homepage_meta
-            if homepage_status == self._MODIFIED or not self._cache.get("homepage_apps"):
+            if (
+                homepage_status == self._MODIFIED
+                or not self._cache.get("homepage_apps_cn")
+            ):
                 if homepage_payload is not None:
                     normalized_apps = self._normalize_homepage_apps(
-                        homepage_payload
+                        homepage_payload, catalog_source="cn"
                     )
-                    if normalized_apps != self._cache.get("homepage_apps", []):
-                        self._cache["homepage_apps"] = normalized_apps
+                    if normalized_apps != self._cache.get("homepage_apps_cn", []):
+                        self._cache["homepage_apps_cn"] = normalized_apps
                         changed = True
 
-            homepage_apps = self._cache.get("homepage_apps", [])
+            oversea_status, oversea_payload, oversea_meta = self._request_json(
+                "oversea_recommend", self.OVERSEA_RECOMMEND_URL
+            )
+            sources["oversea_recommend"] = oversea_meta
+            if (
+                oversea_status == self._MODIFIED
+                or not self._cache.get("homepage_apps_oversea")
+            ):
+                if oversea_payload is not None:
+                    normalized_apps = self._normalize_homepage_apps(
+                        oversea_payload,
+                        catalog_source="oversea",
+                        default_app_type=1,
+                    )
+                    if normalized_apps != self._cache.get(
+                        "homepage_apps_oversea", []
+                    ):
+                        self._cache["homepage_apps_oversea"] = normalized_apps
+                        changed = True
+
+            homepage_apps = (
+                list(self._cache.get("homepage_apps_cn", []))
+                + list(self._cache.get("homepage_apps_oversea", []))
+            )
+            if homepage_apps != self._cache.get("homepage_apps", []):
+                self._cache["homepage_apps"] = homepage_apps
+                changed = True
+
             app_details = dict(self._cache.get("app_details", {}))
-            active_ids = {str(item.get("app_id")) for item in homepage_apps}
+            active_ids = {
+                f"{item.get('catalog_source') or 'cn'}:{item.get('app_id')}"
+                for item in homepage_apps
+            }
             app_details = {
                 key: value for key, value in app_details.items() if key in active_ids
             }
             for app in homepage_apps:
                 app_id = app.get("app_id")
-                detail_key = str(app_id)
+                catalog_source = str(app.get("catalog_source") or "cn")
+                detail_key = f"{catalog_source}:{app_id}"
                 if detail_key in app_details:
                     continue
+                if catalog_source == "oversea":
+                    detail_url = self.OVERSEA_APP_DETAIL_URL.format(app_id)
+                    detail_headers = None
+                else:
+                    detail_url = self.APP_DETAIL_URL.format(app_id)
+                    detail_headers = {"channel": "mkt-h55"}
                 detail_status, detail_payload, _ = self._request_json(
-                    f"app_detail:{detail_key}",
-                    self.APP_DETAIL_URL.format(app_id),
-                    {"channel": "mkt-h55"},
+                    f"app_detail:{detail_key}", detail_url, detail_headers
                 )
                 if detail_status == self._ERROR or detail_payload is None:
                     continue
                 detail = self._normalize_app_detail(detail_payload, app_id)
                 if detail:
+                    detail["catalog_source"] = catalog_source
                     app_details[detail_key] = detail
                     changed = True
 
@@ -394,7 +457,11 @@ class DynamicGameCatalog:
                 changed = True
             self._cache["sources"] = sources
             self._cache["app_details"] = app_details
-            if config_status != self._ERROR and homepage_status != self._ERROR:
+            if (
+                config_status != self._ERROR
+                and homepage_status != self._ERROR
+                and oversea_status != self._ERROR
+            ):
                 self._cache["checked_at"] = int(time.time())
             self._cache["schema_version"] = self.CACHE_SCHEMA_VERSION
             write_json_restricted(self.cache_file, self._cache)
@@ -465,6 +532,7 @@ class DynamicGameCatalog:
             "downloadable": item.get("platform_type") == "fever",
             "platform_type": item.get("platform_type", "fever"),
             "catalog_app_id": item.get("catalog_app_id"),
+            "distribution_sources": dict(item.get("distribution_sources", {})),
         }
 
     def get_status(self) -> dict:

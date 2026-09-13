@@ -755,6 +755,7 @@ def handle_download_task(task_file_path):
     version_code = task_data.get("version_code", "")
     distribution_id = int(task_data.get("distribution_id", -1))
     content_id = task_data.get("content_id")
+    oversea = bool(task_data.get("oversea", False))
     original_version = task_data.get("original_version", "")
     repair_list_path = task_data.get("repair_list_path", "")
     progress_file = task_data.get("progress_file", "")
@@ -812,7 +813,7 @@ def handle_download_task(task_file_path):
                     os.path.join(os.getcwd(), "downloadIPC.exe"),
                     f"--gameid:{distribution_id}",
                     f"--env:live",
-                    f"--oversea:0",
+                    f"--oversea:{1 if oversea else 0}",
                     f"--scene:3",
                     f"--rateLimit:0",
                     f"--channel:platform",

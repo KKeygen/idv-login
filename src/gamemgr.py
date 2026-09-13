@@ -1122,7 +1122,12 @@ class Game:
             # 获取游戏名称
             name_from_launcher = ""
             if genv.get("launcher_data_cache", {}) and isinstance(genv.get("launcher_data_cache", {}), dict):
-                launcher_data = genv.get("launcher_data_cache", {}).get(str(self.default_distribution), {})
+                launcher_cache = genv.get("launcher_data_cache", {})
+                launcher_data = launcher_cache.get(
+                    self._distribution_cache_key(self.default_distribution), {}
+                )
+                if not launcher_data and self._distribution_source(self.default_distribution) == "cn":
+                    launcher_data = launcher_cache.get(str(self.default_distribution), {})
                 if isinstance(launcher_data, dict):
                     display_name = launcher_data.get("display_name", "")
                     if display_name:
@@ -1361,12 +1366,25 @@ class Game:
         short_game_id = getShortGameId(self.game_id)
         distributions = cloud_res.get_download_distributions(short_game_id)
         return self._normalize_distribution_ids(distributions)
+
+    def _distribution_source(self, distribution_id: int) -> str:
+        cloud_res = CloudRes()
+        return cloud_res.get_distribution_source(
+            getShortGameId(self.game_id), distribution_id
+        )
+
+    def _distribution_cache_key(self, distribution_id: int) -> str:
+        return f"{self._distribution_source(distribution_id)}:{int(distribution_id)}"
         
     def get_launcher_data_for_distribution(self, distribution_id: int) -> Optional[dict]:
         """获取指定分发ID的启动器数据"""
         cache = genv.get("launcher_data_cache", {})
+        source = self._distribution_source(distribution_id)
+        cache_key = self._distribution_cache_key(distribution_id)
         if isinstance(cache, dict):
-            cached_data = cache.get(str(distribution_id))
+            cached_data = cache.get(cache_key)
+            if not cached_data and source == "cn":
+                cached_data = cache.get(str(distribution_id))
             if isinstance(cached_data, dict) and cached_data:
                 return cached_data
         cloud_res = CloudRes()
@@ -1377,11 +1395,18 @@ class Game:
             return None
         import requests
         try:
-            url=f"https://loadingbaycn.webapp.163.com/app/v1/game_library/app?force=1&app_id={distribution_id}"
-            headers={
-                "User-Agent": "",
-                "channel": "mkt-h55",
-            }
+            if source == "oversea":
+                url = (
+                    "https://api.loadingbay.com/app/v1/game_library/app"
+                    f"?force=1&app_id={distribution_id}"
+                )
+                headers = None
+            else:
+                url = (
+                    "https://loadingbaycn.webapp.163.com/app/v1/game_library/app"
+                    f"?force=1&app_id={distribution_id}"
+                )
+                headers = {"User-Agent": "", "channel": "mkt-h55"}
             session = requests.Session()
             session.trust_env = False
             response=session.get(url,headers=headers,timeout=10)
@@ -1390,7 +1415,7 @@ class Game:
                 return None
             data = response.json().get("data", {})
             if isinstance(cache, dict) and isinstance(data, dict) and data:
-                cache[str(distribution_id)] = data
+                cache[cache_key] = data
                 genv.set("launcher_data_cache", cache, cached=False)
             return data
         except Exception as e:
@@ -1402,18 +1427,27 @@ class Game:
         cache = genv.get("file_distribution_info_cache", {})
         if not isinstance(cache, dict):
             cache = {}
-        cache_key = str(distribution_id)
+        source = self._distribution_source(distribution_id)
+        cache_key = self._distribution_cache_key(distribution_id)
         cached_data = cache.get(cache_key)
+        if not cached_data and source == "cn":
+            cached_data = cache.get(str(distribution_id))
         if isinstance(cached_data, dict) and cached_data:
             return cached_data
         try:
-            #https://loadingbaycn.webapp.163.com/app/v1/file_distribution/download_app?app_id=
             import requests
-            url=f"https://loadingbaycn.webapp.163.com/app/v1/file_distribution/download_app?app_id={distribution_id}"
-            headers={
-                "User-Agent": "",
-                "channel": "mkt-h55"
-            }
+            if source == "oversea":
+                url = (
+                    "https://api.loadingbay.com/app/v1/file_distribution/download_app"
+                    f"?app_id={distribution_id}"
+                )
+                headers = None
+            else:
+                url = (
+                    "https://loadingbaycn.webapp.163.com/app/v1/file_distribution/download_app"
+                    f"?app_id={distribution_id}"
+                )
+                headers = {"User-Agent": "", "channel": "mkt-h55"}
             session = requests.Session()
             session.trust_env = False
             response=session.get(url,headers=headers,timeout=10)
@@ -1505,6 +1539,7 @@ class Game:
             "installation_id": installation.installation_id,
             "distribution_id": dist_id,
             "content_id":file_distribution_info.get("app_content_id"),
+            "oversea": self._distribution_source(dist_id) == "oversea",
             "repair_list_path": repair_list_path,
             "progress_file": os.path.abspath(progress_file) if progress_file else "",
             "control_file": os.path.abspath(control_file) if control_file else "",
