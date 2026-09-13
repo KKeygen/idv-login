@@ -6,7 +6,6 @@ import requests
 
 from channelHandler.oppoLogin.consts import DEFAULT_CONSTS, OppoNativeConsts
 from channelHandler.oppoLogin.consts import build_vip_header_json
-from channelHandler.oppoOpenAccount.crypto import OPPO_PROTOCOL_VERSION
 from channelHandler.oppoOpenAccount.envinfo import (
     build_env_info_pkg,
     build_env_param_minimal,
@@ -17,6 +16,7 @@ from ssl_utils import should_verify_ssl
 
 
 DEFAULT_BASE_URL = "https://uc-client-cn.heytapmobi.com/"
+OPPO_PROTOCOL_VERSION = "3.0"
 
 
 @dataclass
