@@ -132,9 +132,12 @@ class IDVLoginAddon:
         self.auth_status_domain = str(
             genv.get("DOMAIN_TARGET_AUTH_STATUS", "") or ""
         ).strip().lower()
+        self.oversea_domain = str(
+            genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com")
+        ).strip().lower()
         self.target_domains = {
             str(genv.get("DOMAIN_TARGET", "service.mkey.163.com")).lower(),
-            str(genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com")).lower(),
+            self.oversea_domain,
         }
         if self.auth_status_domain:
             self.target_domains.add(self.auth_status_domain)
@@ -170,6 +173,12 @@ class IDVLoginAddon:
         # ── _idv-login routes: handle locally, do NOT forward upstream ──
         if path.startswith("/_idv-login/"):
             self._handle_idv_login_request(flow, path)
+            return
+
+        # Overseas MPay uses a different API namespace.  Keep its
+        # requests untouched; only pc/config is intentionally patched
+        # on the response side below.
+        if host == self.oversea_domain:
             return
 
         request_role = self._classify_mpay_request(flow)
@@ -216,8 +225,6 @@ class IDVLoginAddon:
             pass  # handled in response
         elif path == "/mpay/api/data/upload":
             pass  # handled in response
-        elif path == "/api/games/pc/config":
-            pass  # handled in response
         elif not path.startswith("/mpay/api/qrcode/") and not path.startswith("/mpay/api/reverify/"):
             # Global catch-all: add CV to query + POST body, remove arch
             flow.request.query["cv"] = self.cv
@@ -241,6 +248,11 @@ class IDVLoginAddon:
             return
 
         try:
+            if host == self.oversea_domain:
+                if path == "/api/games/pc/config":
+                    self._modify_oversea_config_response(flow)
+                return
+
             request_role = self._classify_mpay_request(flow)
             if request_role == ROLE_BRIDGED_GAME:
                 # op14 only transfers the one-shot ticket/code to the game.
@@ -293,8 +305,6 @@ class IDVLoginAddon:
                 self._handle_exchange_token_response(flow)
             elif path == "/mpay/api/data/upload":
                 self._handle_data_upload_response(flow)
-            elif path == "/api/games/pc/config":
-                self._modify_oversea_config_response(flow)
         except Exception:
             self.logger.exception(f"处理响应时出错: {path}")
 
