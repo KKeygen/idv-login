@@ -18,7 +18,7 @@ from envmgr import genv
 
 
 class WebNote:
-    BASE_URL = "https://api.txttool.cn/netcut/note"
+    BASE_URL = "https://api-webnote.txttool.cn/netcut/note"
     SALT_NOTE_ID = b"idv-login/cloud-sync/note-id/v2"
     SALT_NOTE_PASSWORD = b"idv-login/cloud-sync/note-password/v2"
     ARGON2_TIME_COST = 3
@@ -435,10 +435,18 @@ class CloudSyncManager:
             if uuid not in merged:
                 merged[uuid] = copy.deepcopy(item)
             else:
+                local = merged[uuid]
+                local_name_time = int(local.get("name_updated_at", 0) or 0)
+                remote_name_time = int(item.get("name_updated_at", 0) or 0)
                 local_time = int((merged[uuid] or {}).get("last_login_time", 0) or 0)
                 remote_time = int((item or {}).get("last_login_time", 0) or 0)
                 if remote_time >= local_time:
                     merged[uuid] = copy.deepcopy(item)
+                # 名称修改独立于登录凭据；旧记录仍沿用原有合并规则。
+                if local_name_time != remote_name_time:
+                    renamed = local if local_name_time > remote_name_time else item
+                    merged[uuid]["name"] = renamed["name"]
+                    merged[uuid]["name_updated_at"] = renamed["name_updated_at"]
         return list(merged.values())
 
     def _write_local_channels(self, channels: List[dict]):

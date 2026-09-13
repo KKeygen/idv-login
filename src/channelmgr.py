@@ -168,6 +168,8 @@ class ChannelManager:
                                 self.channels.append(tmpChannel)
                             else:
                                 self.channels.append(channel.from_dict(item))
+                            if "name_updated_at" in item:
+                                self.channels[-1].name_updated_at = item["name_updated_at"]
                 except:
                     self.logger.exception(f"读取渠道服登录信息失败。已经清空渠道服信息。")
                     from secure_write import write_json_restricted
@@ -261,6 +263,8 @@ class ChannelManager:
                 to_be_deleted = sorted(to_be_deleted, key=lambda x: x.last_login_time, reverse=True)
                 tmp_channel.name = to_be_deleted[0].name
                 tmp_channel.uuid = to_be_deleted[0].uuid
+                if hasattr(to_be_deleted[0], "name_updated_at"):
+                    tmp_channel.name_updated_at = to_be_deleted[0].name_updated_at
                 tmp_channel.last_login_time = int(time.time())
                 for i in to_be_deleted:
                     self.channels.remove(i)
@@ -458,6 +462,9 @@ class ChannelManager:
         for channel in self.channels:
             if channel.uuid == uuid:
                 channel.name = new_name
+                channel.name_updated_at = max(
+                    time.time_ns(), int(getattr(channel, "name_updated_at", 0) or 0) + 1
+                )
                 self.save_records()
                 return True
         return False
