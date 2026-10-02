@@ -96,6 +96,7 @@ class miChannel(channelmgr.channel):
             self.oAuthData = data
             self._update_oauth_name(previous_oauth)
             self.account_type = self.miLogin.account_type
+            self.mark_manual_login_success()
             return True
         try:
             if on_complete is not None:

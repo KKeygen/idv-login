@@ -181,6 +181,7 @@ class bilibiliChannel(channelmgr.channel):
             uname = str(data.get("uname") or "")
             if uname:
                 self.name = uname
+            self.mark_manual_login_success()
             return True
 
         def _on_done(resp):

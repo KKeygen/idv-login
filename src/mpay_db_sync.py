@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import base64
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, TimeoutError
 from contextlib import contextmanager
 import ctypes
 import json
 import os
+import copy
+import hashlib
+import re
 from pathlib import Path
 import threading
 import time
@@ -18,25 +21,30 @@ from envmgr import genv
 from mpay_wasm import MpayWasm, MAX_DB_BYTES
 from secure_write import write_file_restricted
 
-INVALID_SUFFIX = "（已失效，在网页重新登录）"
 SQLITE_PENDING_BYTE = 0x40000000
 
 
 def credential_expires_at(record):
-    """Read existing channel expiry rules; absent rules mean no deadline."""
+    """Only consult local credential fields; never invoke a login accessor."""
+    attrs = vars(record)
+    channel = record.channel_name
     value = None
-    if record.channel_name == "myapp":
-        session = getattr(record, "session", None)
-        if session is not None and session.atk_expire:
-            value = record.last_login_time + int(session.atk_expire)
-    elif record.channel_name == "honor_sdk":
-        value = record.honorLogin.expiredTime
-    elif record.channel_name == "bilibili_sdk":
-        value = (record._get_login_data() or {}).get("expires")
-    elif record.channel_name == "uc_platform":
-        value = record.sid_expire_time
-    elif record.channel_name == "360_assistant":
-        value = record.token_expire_time
+    if channel in ('myapp', 'myapp_qq'):
+        session = attrs.get('session')
+        session = session if isinstance(session, dict) else vars(session) if session else {}
+        duration = session.get('atk_expire')
+        if duration:
+            value = attrs.get('token_issued_at', record.last_login_time) + int(duration)
+    elif channel in ('honor', 'honor_sdk'):
+        login = attrs.get('honorLogin')
+        value = getattr(login, 'expiredTime', None)
+    elif channel == 'bilibili_sdk':
+        data = attrs.get('loginResp') or {}
+        value = (data.get('data') or data).get('expires')
+    elif channel == 'uc_platform':
+        value = attrs.get('sid_expire_time')
+    elif channel in ('qihoo', '360_assistant'):
+        value = attrs.get('token_expire_time')
     try:
         return int(value) if value is not None and int(value) > 0 else None
     except (TypeError, ValueError, OverflowError):
@@ -126,37 +134,43 @@ def credentials_from_packet(packet: dict, game_id: str) -> tuple[str, dict]:
 
 
 class MpayDBSync:
-    def __init__(self, manager, artifact: Path):
-        self.manager = manager
-        self.logger = manager.logger
-        self.wasm = MpayWasm(artifact)
-        self.root = Path(os.environ["APPDATA"]) / "Netease" / "Mpay"
-        self.identity = machine_identifier()
-        self.lock = threading.RLock()
-        self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mpay-renew")
-        self.stopping = False
-        # UUID -> game -> MPay UID. SDK UID and MPay UID are not assumed equal
-        # when a real exchange_token response provides the mapping.
-        self.bindings = genv.get("mpay_db_bindings", {})
-        self.writes = genv.get("mpay_db_writes", {})
 
-    def paths(self, game_id: str) -> list[Path]:
-        return sorted(self.root.glob(f"*-g-{getShortGameId(game_id)}-64-mpay.db"))
+    def __init__(self, manager, artifact):
+        self.manager, self.logger = manager, manager.logger
+        self.wasm = MpayWasm(artifact)
+        self.root = Path(os.environ.get('APPDATA', '')) / 'Netease' / 'Mpay'
+        self.identity = machine_identifier() if os.name == 'nt' else ''
+        self.lock = threading.RLock()
+        self.stopping = False
+        self.bindings = genv.get('mpay_db_bindings', {})
+        self.writes = genv.get('mpay_db_writes', {})
+        self.baselines, self.active, self.candidates = {}, {}, {}
+        self.pending, self.shells, self.signatures = {}, {}, {}
+        self.helpers = genv.get("mpay_db_helpers", {})
+        self.attempted = {}
+        self.projected_aliases = {}
+        self.exchange_pending = {}
+
+    def paths(self, game):
+        return sorted(self.root.glob(f'*-g-{getShortGameId(game)}-64-mpay.db'))
+
+    def game_ids(self):
+        return sorted({m.group(1) for p in self.root.glob('*-g-*-64-mpay.db')
+                       if (m := re.match(r'.*-g-(.+)-64-mpay\.db$', p.name))})
 
     def save_bindings(self):
-        genv.set("mpay_db_bindings", self.bindings, True)
-        genv.set("mpay_db_writes", self.writes, True)
+        genv.set('mpay_db_bindings', self.bindings, True)
+        genv.set('mpay_db_writes', self.writes, True)
 
-    def operate(self, path: Path, operation: str, **args):
+    def operate(self, path, operation, **args):
         with self.lock, locked_database(path) as file:
             original = file.read(MAX_DB_BYTES + 1)
             if len(original) > MAX_DB_BYTES:
-                raise ValueError("MPay database exceeds the supported size")
+                raise ValueError('MPay database exceeds supported size')
             result = self.wasm.invoke(operation, original, **args)
-            if operation == "list_uids":
+            if operation == 'list_uids':
                 return set(json.loads(result))
-            # Preserve only an encrypted backup. No plaintext database IO.
-            write_file_restricted(str(path) + ".idv-login.bak", original)
+            write_file_restricted(str(path) + '.idv-login.bak', original)
             try:
                 file.seek(0)
                 file.write(result)
@@ -171,200 +185,414 @@ class MpayDBSync:
                 os.fsync(file.fileno())
                 raise
 
-    def remember_exchange(self, record, game_id: str, user: dict):
-        """Observe the successful MPay UID; let MPay persist its own response."""
+    def _snapshot(self, paths):
+        for path in paths:
+            if path not in self.baselines:
+                self.baselines[path] = self.operate(path, 'list_uids')
+                self.active[path], self.candidates[path] = {}, set()
+
+    def _cache(self, record, game, sdkuid, credentials, expiry=None):
+        self.writes.setdefault(record.uuid, {})[game] = {
+            'sdkuid': str(sdkuid), 'credentials': copy.deepcopy(credentials),
+            'written_at': int(time.time()), 'expires_at': expiry, 'expired': False}
+        self.pending[(game, record.channel_name, str(sdkuid))] = record.uuid
+        self.save_bindings()
+
+    def _scan_credentials(self, record):
+        user = record.user_info
+        if not user.get('id') or not user.get('token'):
+            return None
+        expiry = user.get('expires', user.get('expire'))
+        try:
+            expiry = int(expiry) if expiry is not None else None
+        except (ValueError, TypeError):
+            expiry = None
+        return str(user['id']), {'token': user['token'], 'pc_ext_info': copy.deepcopy(user.get('pc_ext_info') or record.ext_info)}, expiry
+
+    def remember_exchange(self, record, game_id, user):
+        game = getShortGameId(game_id)
         with self.lock:
-            self.bindings.setdefault(record.uuid, {})[getShortGameId(game_id)] = str(user["id"])
+            self.bindings.setdefault(record.uuid, {})[game] = str(user['id'])
+            sdkuid = str(user['id'])
+            complete = False
+            credentials = {'token': user.get('token', ''), 'pc_ext_info': copy.deepcopy(user.get('pc_ext_info') or record.ext_info)}
+            try:
+                extra = credentials['pc_ext_info'].get('extra_unisdk_data', '{}')
+                extra = json.loads(extra) if isinstance(extra, str) else extra
+                auth = json.loads(base64.b64decode(unquote(extra['SAUTH_JSON'])))
+                sdkuid = str(auth['sdkuid'])
+                complete = bool(auth.get('sessionid'))
+            except (KeyError, ValueError, TypeError):
+                pass
+            if credentials['token'] and (record.record_source != 'manual' or complete):
+                scan = self._scan_credentials(record)
+                prior = self.writes.get(record.uuid, {}).get(game, {})
+                expiry = prior.get('expires_at') if record.record_source == 'manual' else scan[2] if scan else None
+                self._cache(record, game, sdkuid, credentials, expiry)
+            self.exchange_pending[(game, record.channel_name)] = record.uuid
+            self.pending[(game, record.channel_name, sdkuid)] = record.uuid
             self.save_bindings()
 
-    def reconcile_game_deletions(self):
-        """Only remembered, previously synchronized records can be deleted here."""
-        with self.lock:
-            game_uids = {}
-            for uuid, games in list(self.bindings.items()):
-                for game_id, uid in list(games.items()):
-                    if game_id not in game_uids:
-                        paths = self.paths(game_id)
-                        game_uids[game_id] = (set().union(
-                            *(self.operate(p, "list_uids") for p in paths)
-                        ) if paths else None)
-                    uids = game_uids[game_id]
-                    if uids is None:
-                        # Missing DB is not proof the user removed this account.
-                        continue
-                    if uid not in uids:
-                        self.logger.info("[mpay-db] 游戏已删除关联记录，同步删除工具账号")
-                        self.manager.delete(uuid)
-                        break
+    def is_expired(self, uuid, game):
+        return bool(self.writes.get(uuid, {}).get(getShortGameId(game), {}).get('expired'))
 
-    def delete_record(self, uuid: str):
+    def imported_uuids(self, game):
+        game = getShortGameId(game)
         with self.lock:
-            for game_id, uid in self.bindings.get(uuid, {}).items():
-                for path in self.paths(game_id):
-                    self.operate(path, "delete_uid", uid=uid)
-            self.bindings.pop(uuid, None)
-            self.writes.pop(uuid, None)
-            self.save_bindings()
+            included = {uuid for path in self.paths(game) for uuid in self.active.get(path, {})}
+            return included | {alias for alias, winner in self.projected_aliases.get(game, {}).items() if winner in included}
 
-    def rename_record(self, uuid: str, name: str):
-        with self.lock:
-            for game_id, uid in self.bindings.get(uuid, {}).items():
-                for path in self.paths(game_id):
-                    if uid in self.operate(path, "list_uids"):
-                        self.operate(path, "rename_uid", uid=uid, name=name)
-
-    def write_packet(self, record, game_id: str, sdkuid: str, credentials: dict, *, new=False):
-        with self.lock:
-            if self.stopping:
-                return False
-            if not new and self.manager.query_channel(record.uuid) is not record:
-                return False  # The user deleted/replaced it during a network renewal.
-            paths = self.paths(game_id)
-            if not paths:
-                raise FileNotFoundError("请先启动该游戏一次，初始化 MPay 数据库")
-            uid = self.bindings.get(record.uuid, {}).get(getShortGameId(game_id), sdkuid)
-            create = {"id": uid, "login_channel": record.channel_name, "login_type": 0,
-                "__user_login_method": 17, "__user_platform_selected": "",
-                "__user_platform_selected_second": "", "__user_platform_selected_third": "",
-                "__user_typed_username": "", "client_username": record.name,
-                "display_username": record.name, "nickname": "", "avatar": "",
-                "ext_access_token": "", "need_mask": False, "pc_ext_info": {},
-                "related_login_status": 0, "mask_related_mobile": ""}
-            for path in paths:
-                self.operate(path, "write_credentials", uid=uid, credentials=credentials,
-                             create=create, machine_identifier=self.identity)
-            self.bindings.setdefault(record.uuid, {})[getShortGameId(game_id)] = uid
-            self.writes.setdefault(record.uuid, {})[getShortGameId(game_id)] = {
-                "sdkuid": sdkuid,
-                "written_at": int(time.time()),
-                "expires_at": credential_expires_at(record),
-            }
-            self.save_bindings()
-            self.logger.info("[mpay-db] 凭证已写入游戏账号库")
-            return True
-
-    def packet_credentials(self, record, game_id: str, packet):
+    def packet_credentials(self, record, game, packet):
         if packet is None or packet is False:
             return packet
-        if not isinstance(packet, dict):
-            raise ValueError("渠道没有返回有效续期凭证")
-        if packet.get("login_channel") != record.channel_name:
-            raise ValueError("渠道凭证与账号渠道不一致")
-        return credentials_from_packet(packet, game_id)
+        if not isinstance(packet, dict) or packet.get('login_channel') != record.channel_name:
+            raise ValueError('渠道没有返回一致的续期凭证')
+        return credentials_from_packet(packet, game)
 
-    def prepare_credentials(self, record, game_id: str):
-        packet = record.get_uniSdk_data(game_id, interactive=False)
-        return self.packet_credentials(record, game_id, packet)
+    def prepare_credentials(self, record, game):
+        return self.packet_credentials(record, game, record.get_uniSdk_data(game, interactive=False))
 
-    def renew(self, record, game_id: str):
-        if record.record_source != "manual":
-            return
-        written = self.writes.get(record.uuid, {}).get(getShortGameId(game_id), {})
-        if written.get("written_at") and (
-            written.get("expires_at") is None or written["expires_at"] > time.time()
-        ):
-            return
-        name = record.name
-        try:
-            prepared = self.prepare_credentials(record, game_id)
-            if prepared is None or prepared is False:
-                raise ValueError("渠道续期需要用户重新登录")
-        except Exception as error:
-            record.name = name
-            log_failure(self.logger, "[mpay-db] 渠道续期失败", error)
-            self.mark_expired(record)
-            return
-        with self.lock:
-            if self.manager.query_channel(record.uuid) is not record:
-                return
-            record.name = name
+    @staticmethod
+    def _clone(record):
+        record.before_save()
+        data = {}
+        for key, value in vars(record).items():
             try:
-                if self.write_packet(record, game_id, *prepared):
-                    self.manager.save_records()
-            except Exception as error:
-                log_failure(self.logger, "[mpay-db] 数据库同步失败，账号未删除", error)
+                data[key] = json.loads(json.dumps(value))
+            except (TypeError, ValueError):
+                pass
+        clone = type(record).from_dict(data)
+        for key in ('uuid', 'name', 'last_login_time', 'game_id', 'crossGames', 'record_source'):
+            setattr(clone, key, getattr(record, key))
+        return clone
 
-    def mark_expired(self, record):
-        with self.lock:
-            if self.manager.query_channel(record.uuid) is not record:
-                return
-            name = record.name if record.name.endswith(INVALID_SUFFIX) else record.name + INVALID_SUFFIX
-            record.name = name
-            self.manager.save_records()
-            self.rename_record(record.uuid, name)
-            self.logger.warning("[mpay-db] 续期失败，关联账号已标记为失效")
-
-    def mark_sauth_expired(self, data):
-        """A failed check expires the matching account/channel/game write."""
-        if not isinstance(data, dict) or not data.get("gameid") or not data.get("sdkuid"):
-            return
-        game_id = getShortGameId(str(data["gameid"]))
-        with self.lock:
-            for record in self.manager.channels:
-                written = self.writes.get(record.uuid, {}).get(game_id)
-                if (written and record.channel_name == data.get("login_channel")
-                        and str(written["sdkuid"]) == str(data["sdkuid"])):
-                    written["expires_at"] = int(time.time())
-            self.save_bindings()
+    @staticmethod
+    def _fresh(written):
+        return bool(written.get('credentials')) and not written.get('expired') and (written.get('expires_at') is None or written['expires_at'] > time.time())
 
     def refresh_startup(self):
-        # Check first: renewing first would resurrect a game-side deletion.
-        self.reconcile_game_deletions()
-        for record in list(self.manager.channels):
-            if record.record_source != "manual":
-                continue
-            games = {getShortGameId(game) for game in
-                     (record.game_id, *self.bindings.get(record.uuid, {}))}
-            for game_id in games:
+        from account_list_policy import AccountListPolicy
+        selected = AccountListPolicy(self.manager).select()
+        with self.lock:
+            self._snapshot([p for game in self.game_ids() for p in self.paths(game)])
+        self._prepare_selected(selected)
+        for game in selected:
+            self._project_game(game)
+
+    def _prepare_selected(self, selected):
+        with self.lock:
+            self._snapshot([p for game in selected for p in self.paths(game)])
+        jobs = []
+        for game, records in selected.items():
+            for record in records:
+                written = self.writes.get(record.uuid, {}).get(game, {})
+                if self._fresh(written):
+                    continue
+                cache_version = (written.get('written_at'), written.get('expires_at'), written.get('expired'))
+                if self.attempted.get((record.uuid, game)) == cache_version:
+                    continue
+                self.attempted[(record.uuid, game)] = cache_version
+                if record.record_source != 'manual':
+                    scan = self._scan_credentials(record)
+                    if scan and not written.get('expired') and (scan[2] is None or scan[2] > time.time()):
+                        with self.lock:
+                            self._cache(record, game, *scan[:2], expiry=scan[2])
+                    else:
+                        self.mark_expired(record, game)
+                    current = self.writes.get(record.uuid, {}).get(game, {})
+                    self.attempted[(record.uuid, game)] = (current.get('written_at'), current.get('expires_at'), current.get('expired'))
+                    continue
+                future, started = Future(), time.monotonic()
                 try:
-                    self.renew(record, game_id)
-                except (OSError, RuntimeError) as error:
-                    log_failure(self.logger, "[mpay-db] 数据库同步失败，账号未删除", error)
+                    clone = self._clone(record)
+                except Exception:
+                    self.mark_expired(record, game)
+                    current = self.writes.get(record.uuid, {}).get(game, {})
+                    self.attempted[(record.uuid, game)] = (current.get('written_at'), current.get('expires_at'), current.get('expired'))
+                    continue
+                def run(future=future, clone=clone, game=game, started=started):
+                    try:
+                        from prefetch_context import prefetch_scope
+                        with prefetch_scope(started + 5):
+                            prepared = self.prepare_credentials(clone, game)
+                            future.set_result((clone, prepared, credential_expires_at(clone), time.monotonic()))
+                    except BaseException as error:
+                        future.set_exception(error)
+                threading.Thread(target=run, daemon=True, name='mpay-renew').start()
+                jobs.append((record, game, future, started))
+        for record, game, future, started in jobs:
+            try:
+                clone, prepared, expiry, finished = future.result(timeout=max(0, 5 - (time.monotonic() - started)))
+                if finished > started + 5 or not prepared:
+                    raise TimeoutError()
+                with self.lock:
+                    if self.stopping or self.manager.query_channel(record.uuid) is not record:
+                        continue
+                    preserved = {key: getattr(record, key) for key in ('uuid', 'name', 'last_login_time', 'game_id', 'crossGames', 'record_source')}
+                    record.__dict__.update(clone.__dict__)
+                    record.__dict__.update(preserved)
+                    self._cache(record, game, *prepared, expiry=expiry)
+                    self.manager.save_records()
+            except Exception:
+                self.mark_expired(record, game)
+                current = self.writes.get(record.uuid, {}).get(game, {})
+                self.attempted[(record.uuid, game)] = (current.get('written_at'), current.get('expires_at'), current.get('expired'))
+
+    def mark_expired(self, record, game=None):
+        with self.lock:
+            if self.manager.query_channel(record.uuid) is not record:
+                return
+            game = getShortGameId(game or record.game_id)
+            self.writes.setdefault(record.uuid, {}).setdefault(game, {}).update(expires_at=int(time.time()), expired=True)
+            self.save_bindings()
+
+    def record_sauth(self, data, success):
+        if not isinstance(data, dict):
+            return False
+        game = getShortGameId(str(data.get('gameid', '')))
+        key = (game, data.get('login_channel'), str(data.get('sdkuid', '')))
+        with self.lock:
+            uuid = self.pending.get(key)
+            if uuid is None:
+                uuid = next((r.uuid for r in self.manager.channels if r.channel_name == key[1] and str(self.writes.get(r.uuid, {}).get(game, {}).get('sdkuid', '')) == key[2]), None)
+            if uuid is None:
+                uuid = self.exchange_pending.get((game, key[1]))
+                if uuid and key[2]:
+                    self.writes.setdefault(uuid, {}).setdefault(game, {})['sdkuid'] = key[2]
+                    self.pending[key] = uuid
+                    self.save_bindings()
+            record = self.manager.query_channel(uuid) if uuid else None
+            if record is None:
+                return False
+            self.exchange_pending.pop((game, key[1]), None)
+            if success:
+                record.last_login_time = int(time.time())
+                self.manager.save_records()
+                self.pending.pop(key, None)
+            else:
+                # The game invalidates the cached package; only a failed silent
+                # renewal changes the UI's explicit "已过期" state.
+                self.writes.setdefault(record.uuid, {}).setdefault(game, {})['expires_at'] = int(time.time())
+                self.attempted.pop((record.uuid, game), None)
+                self.save_bindings()
+            return True
+
+    def mark_sauth_expired(self, data):
+        return self.record_sauth(data, False)
 
     def created(self, record, on_complete=None):
-        """Complete the interactive packet first, then write on the single worker."""
-        def packet_ready(packet):
+        def ready(packet):
             try:
                 prepared = self.packet_credentials(record, record.game_id, packet)
-                if self.stopping:
-                    result = False
-                elif prepared is None or prepared is False:
-                    result = prepared
-                else:
-                    future = self.worker.submit(
-                        self.write_packet, record, record.game_id, *prepared, new=True
-                    )
-                    if on_complete:
-                        import app_state
-                        def written(done):
-                            try:
-                                result = done.result()
-                            except Exception as error:
-                                log_failure(self.logger, "[mpay-db] 新账号同步失败", error)
-                                result = False
-                            app_state.run_on_main_thread(lambda: on_complete(result))
-                        future.add_done_callback(written)
-                        return None
-                    return future.result()
+                result = prepared if prepared is None or prepared is False else not self.stopping
+                if result:
+                    with self.lock:
+                        self._cache(record, getShortGameId(record.game_id), *prepared, expiry=credential_expires_at(record))
             except Exception as error:
-                log_failure(self.logger, "[mpay-db] 新账号同步失败", error)
+                log_failure(self.logger, '[mpay-db] 新账号凭证准备失败', error)
                 result = False
             if on_complete:
-                on_complete(result)
+                import app_state
+                app_state.run_on_main_thread(lambda: on_complete(result))
             return result
-
         if self.stopping:
-            if on_complete:
-                on_complete(False)
-            return False
+            return ready(False)
         if on_complete:
-            record.get_uniSdk_data(
-                record.game_id, on_complete=packet_ready, interactive=True
-            )
+            record.get_uniSdk_data(record.game_id, on_complete=ready, interactive=True)
             return None
-        return packet_ready(record.get_uniSdk_data(record.game_id, interactive=True))
+        return ready(record.get_uniSdk_data(record.game_id, interactive=True))
+
+    def _placeholder(self, game, uid, record, credentials=None):
+        credentials = copy.deepcopy(credentials or {})
+        credentials.setdefault('token', record.user_info.get('token', ''))
+        ext = credentials.setdefault('pc_ext_info', copy.deepcopy(record.ext_info))
+        try:
+            extra = ext.get('extra_unisdk_data', '{}')
+            extra = json.loads(extra) if isinstance(extra, str) else copy.deepcopy(extra)
+            auth = json.loads(base64.b64decode(unquote(extra['SAUTH_JSON'])))
+            auth['sdkuid'] = uid
+            extra['SAUTH_JSON'] = base64.b64encode(json.dumps(auth).encode()).decode()
+            ext['extra_unisdk_data'] = json.dumps(extra)
+        except (KeyError, ValueError, TypeError):
+            pass
+        return credentials
+
+    def _helper_uid(self, game, role, source, occupied):
+        helpers = self.helpers.setdefault(game, {})
+        existing = helpers.get(role)
+        if existing and existing['uid'] not in occupied:
+            return existing['uid']
+        salt = 0
+        while True:
+            digest = hashlib.sha256(f'{game}:{role}:{source}:{salt}'.encode()).hexdigest()
+            if source.isdigit():
+                uid = str(int(digest, 16) % (10 ** len(source))).zfill(len(source))
+            elif re.fullmatch('[0-9a-fA-F]+', source):
+                uid = (digest * ((len(source) // len(digest)) + 1))[:len(source)]
+            else:
+                uid = digest[:32]
+            if uid not in occupied:
+                helpers[role] = {'uid': uid}
+                genv.set('mpay_db_helpers', self.helpers, True)
+                return uid
+            salt += 1
+
+    @staticmethod
+    def _create(uid, name, channel_name):
+        return {'id': uid, 'login_channel': channel_name, 'login_type': 0,
+                '__user_login_method': 17, '__user_platform_selected': '',
+                '__user_platform_selected_second': '', '__user_platform_selected_third': '',
+                '__user_typed_username': '', 'client_username': name,
+                'display_username': name, 'nickname': '', 'avatar': '',
+                'ext_access_token': '', 'need_mask': False, 'pc_ext_info': {},
+                'related_login_status': 0, 'mask_related_mobile': ''}
+
+    def refresh_before_game(self, game_id):
+        from account_list_policy import AccountListPolicy
+        selected = AccountListPolicy(self.manager).select()
+        game = getShortGameId(game_id)
+        self._prepare_selected({game: selected.get(game, [])})
+        self._project_game(game)
+
+    def _project_game(self, game_id):
+        from account_list_policy import AccountListPolicy
+        game = getShortGameId(game_id)
+        policy = AccountListPolicy(self.manager)
+        records = policy.select().get(game, [])
+        game_records = policy._candidates(game)
+        self.projected_aliases[game] = dict(policy.aliases.get(game, {}))
+        accounts, active, shells = [], {}, set()
+        for record in records:
+            written = self.writes.get(record.uuid, {}).get(game, {})
+            uid = str(self.bindings.get(record.uuid, {}).get(game) or written.get('sdkuid') or record.user_info.get('id') or hashlib.sha256(record.uuid.encode()).hexdigest()[:32])
+            fresh = self._fresh(written)
+            credentials = written['credentials'] if fresh else self._placeholder(game, uid, record, written.get("credentials"))
+            if not fresh:
+                shells.add(uid)
+            name = policy.account_label(record, expired=self.is_expired(record.uuid, game))
+            accounts.append({'uid': uid, 'name': name, 'credentials': credentials, 'create': self._create(uid, name, record.channel_name)})
+            active[record.uuid] = uid
+        roles = [('help', '【点我再点登录获取帮助】')]
+        if any(self.is_expired(r.uuid, game) for r in game_records):
+            roles.append(('expired', '【点我再点击登录刷新过期记录】'))
+        paths = self.paths(game)
+        with self.lock:
+            self._snapshot(paths)
+        occupied = set(active.values())
+        helper_known = {item['uid'] for item in self.helpers.get(game, {}).values()}
+        occupied.update(uid for path in paths for uid in self.baselines[path] if uid not in helper_known)
+        if game_records:
+            source = records[0] if records else game_records[0]
+            written = self.writes.get(source.uuid, {}).get(game, {})
+            template = accounts[0] if accounts else {
+                'uid': str(self.bindings.get(source.uuid, {}).get(game) or written.get('sdkuid')
+                           or source.user_info.get('id') or hashlib.sha256(source.uuid.encode()).hexdigest()[:32]),
+                'credentials': written.get('credentials') or self._placeholder(game, '', source),
+            }
+            for role, name in roles:
+                uid = self._helper_uid(game, role, template['uid'], occupied)
+                occupied.add(uid)
+                self.helpers[game][role].update(channel=source.channel_name, game=game)
+                accounts.append({'uid': uid, 'name': name,
+                                 'credentials': self._placeholder(game, uid, source, template['credentials']),
+                                 'create': self._create(uid, name, source.channel_name), 'append': True})
+                shells.add(uid)
+            genv.set('mpay_db_helpers', self.helpers, True)
+        signature = json.dumps(accounts, sort_keys=True, ensure_ascii=False)
+        with self.lock:
+            if self.stopping:
+                return
+            paths = self.paths(game)
+            self._snapshot(paths)
+            for path in paths:
+                if self.signatures.get(path) == signature:
+                    continue
+                stale = set(self.active[path].values()) - set(active.values())
+                if stale:
+                    self.operate(path, 'cleanup_accounts', uids=list(stale), baseline_uids=list(self.baselines[path]))
+                self.operate(path, 'project_accounts', accounts=accounts, machine_identifier=self.identity)
+                self.active[path] = dict(active)
+                self.candidates[path].update(a['uid'] for a in accounts)
+                self.signatures[path] = signature
+            self.shells[game] = shells
+
+    def write_packet(self, record, game_id, sdkuid, credentials, *, new=False):
+        with self.lock:
+            self._cache(record, getShortGameId(game_id), sdkuid, credentials, credential_expires_at(record))
+        return True
+
+    def intercept_mpay_login(self, game_id, uid):
+        game, uid = getShortGameId(game_id), str(uid)
+        role = next((role for role, item in self.helpers.get(game, {}).items() if item['uid'] == uid), None)
+        if role is None and uid not in self.shells.get(game, set()):
+            return False
+        import app_state
+        if role == 'help':
+            import webbrowser
+            cloud = app_state.cloud_res
+            url = cloud.get_by_game_id_and_key(game, 'account_help_url') if cloud else None
+            app_state.run_on_main_thread(lambda: webbrowser.open(url or 'https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e'))
+        else:
+            app_state.run_on_main_thread(lambda: app_state.ui_mgr.open_for_game(game, 'accounts') if app_state.ui_mgr else None)
+        return True
+
+    def intercept_auth(self, data):
+        return isinstance(data, dict) and self.intercept_mpay_login(str(data.get('gameid', '')), data.get('sdkuid', ''))
+
+    def reconcile_game_deletions(self):
+        missing = set()
+        with self.lock:
+            for path, active in self.active.items():
+                if path.exists():
+                    uids = self.operate(path, 'list_uids')
+                    missing.update(uuid for uuid, uid in active.items() if uid not in uids)
+        missing.update(alias for aliases in self.projected_aliases.values() for alias, canonical in aliases.items() if canonical in missing)
+        for uuid in missing:
+            if self.manager.query_channel(uuid) is not None:
+                self.manager.delete(uuid)
+
+    def delete_record(self, uuid):
+        with self.lock:
+            for game, uid in self.bindings.get(uuid, {}).items():
+                for path in self.paths(game):
+                    self.operate(path, 'delete_uid', uid=uid)
+            for path, active in self.active.items():
+                uid = active.pop(uuid, None)
+                if uid and path.exists():
+                    self.operate(path, 'delete_uid', uid=uid)
+            self.bindings.pop(uuid, None)
+            self.writes.pop(uuid, None)
+            self.pending = {key: value for key, value in self.pending.items() if value != uuid}
+            self.attempted = {key: value for key, value in self.attempted.items() if key[0] != uuid}
+            self.signatures.clear()
+            self.save_bindings()
+
+    def rename_record(self, uuid, name):
+        from account_list_policy import AccountListPolicy
+        record = self.manager.query_channel(uuid)
+        if record is None:
+            return
+        policy = AccountListPolicy(self.manager)
+        renamed = copy.copy(record)
+        renamed.name = name
+        with self.lock:
+            targets = {(path, game): uid for game, uid in self.bindings.get(uuid, {}).items()
+                       for path in self.paths(game)}
+            for path, active in self.active.items():
+                uid = active.get(uuid)
+                if uid and path.exists():
+                    game = next((g for g in self.game_ids() if path in self.paths(g)), record.game_id)
+                    targets[path, game] = uid
+            for (path, game), uid in targets.items():
+                if uid in self.operate(path, 'list_uids'):
+                    self.operate(path, 'rename_uid', uid=uid, name=policy.account_label(renamed, expired=self.is_expired(uuid, game)))
+            self.signatures.clear()
 
     def shutdown(self):
         self.stopping = True
-        self.worker.shutdown(wait=True)
         self.reconcile_game_deletions()
+        with self.lock:
+            for path, candidates in self.candidates.items():
+                if path.exists():
+                    self.operate(path, 'cleanup_accounts', uids=list(candidates), baseline_uids=list(self.baselines[path]))
+            self.active.clear()

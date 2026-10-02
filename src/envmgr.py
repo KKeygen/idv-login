@@ -12,6 +12,10 @@ class genv:
     _cache_writes_disabled = False
 
     def set(key, value, cached=False):
+        if key == 'GLOB_LOGIN_UUID':
+            from prefetch_context import in_prefetch
+            if in_prefetch():
+                return  # Silent renewal must not replace the user's active login.
         _list[key] = value
         #if this object is json storeable
         if isinstance(value, (str, int, float, bool, list, dict)) and isinstance(key, str):

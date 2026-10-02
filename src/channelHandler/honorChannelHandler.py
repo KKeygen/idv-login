@@ -90,6 +90,7 @@ class honorChannel(channelmgr.channel):
                 return False
             self.unionToken = token
             self._update_name()
+            self.mark_manual_login_success()
             return True
         try:
             if on_complete is not None:

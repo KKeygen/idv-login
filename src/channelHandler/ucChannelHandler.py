@@ -188,6 +188,8 @@ class ucChannel(channelmgr.channel):
                 return None
             try:
                 success = self._store_session(session_data)
+                if success is True:
+                    self.mark_manual_login_success()
             except Exception:
                 self.logger.exception("UC 异步登录处理失败")
                 success = False

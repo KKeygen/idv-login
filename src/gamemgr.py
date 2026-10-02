@@ -863,6 +863,9 @@ class Game:
             self.last_start_error = "游戏路径无效或不存在"
             return False
         self.active_installation_id = installation.installation_id
+        if app_state.channels_helper and app_state.channels_helper.db_sync:
+            # Account settings take effect before the native SDK reads its list.
+            app_state.channels_helper.db_sync.refresh_before_game(self.game_id)
         cloud_res = CloudRes()
         short_game_id = getShortGameId(self.game_id)
         has_manual_feature = cloud_res.has_manual_game_feature(short_game_id)

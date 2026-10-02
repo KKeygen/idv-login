@@ -1,7 +1,7 @@
 {
-  "abi": 1,
-  "sha256": "b87956238957233470a6c98885325e23d1748b4ded998f4e8ba068a5a19e0ef4",
-  "source_commit": "c02f6b0ecb4943ff91ff374e3d0084e5b8723997",
+  "abi": 2,
+  "sha256": "9d4a5c811b4586865c8c00069e9edc858fa2eb6c97ef8db1aae9d3532e438314",
+  "source_commit": "3787b23030723b4304fc3d7757b8a4797f0304bc",
   "protected": true,
   "imports": [],
   "exports": [

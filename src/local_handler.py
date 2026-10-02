@@ -111,6 +111,7 @@ class LocalRequestHandler:
             "/_idv-login/health": self._health,
             "/_idv-login/manualChannels": self._manual_channels,
             "/_idv-login/list": self._list_channels,
+            "/_idv-login/account-list-settings": self._account_list_settings,
             "/_idv-login/qrcode": self._channel_qrcode,
             "/_idv-login/cancel-qr": self._cancel_qr,
             "/_idv-login/switch": self._switch_channel,
@@ -210,6 +211,7 @@ class LocalRequestHandler:
             "success": True,
             "status": "ok",
             "installation_model_version": 1,
+            "account_list_model_version": 1,
             "version": genv.get("VERSION", ""),
         })
 
@@ -340,9 +342,60 @@ class LocalRequestHandler:
             pass
         return self._json_response(200, const.manual_login_channels)
 
+    def _account_list_settings(self, args, body, method):
+        if method not in ("GET", "POST"):
+            return self._json_response(405, {
+                "success": False, "error": "Method not allowed",
+            })
+        from account_list_policy import AccountListPolicy
+        manager = app_state.channels_helper
+        policy = AccountListPolicy(manager)
+        game_id = str(args.get("game_id") or "")
+        try:
+            if method == "POST":
+                if not isinstance(body, dict):
+                    raise ValueError("账号列表设置必须是 JSON 对象")
+                settings = policy.set_settings(game_id, **{
+                    key: body[key] for key in ("global_limit", "limit", "pinned")
+                    if key in body
+                })
+            else:
+                settings = policy.status(game_id) if game_id else policy.get_settings()
+            sync = getattr(manager, "db_sync", None)
+            settings = dict(settings)
+            settings["will_include"] = list(settings.get("included", []))
+            settings["included"] = sorted(sync.imported_uuids(game_id)) if sync else []
+            return self._json_response(200, {"success": True, **settings})
+        except (TypeError, ValueError) as exc:
+            return self._json_response(400, {"success": False, "error": str(exc)})
+
     def _list_channels(self, args, body, method):
         try:
-            result = app_state.channels_helper.list_channels(args.get("game_id", ""))
+            manager = app_state.channels_helper
+            game_id = str(args.get("game_id") or "")
+            result = manager.list_channels(game_id)
+            if game_id:
+                from account_list_policy import AccountListPolicy
+                policy = AccountListPolicy(manager)
+                settings = policy.get_settings(game_id)
+                pinned = set(settings.get("pinned", []))
+                selected = policy.select().get(getShortGameId(game_id), [])
+                planned = {record.uuid for record in selected}
+                aliases = policy.aliases.get(getShortGameId(game_id), {})
+                pinned = {aliases.get(uuid, uuid) for uuid in pinned}
+                sync = getattr(manager, "db_sync", None)
+                included = sync.imported_uuids(game_id) if sync else set()
+                for item in result:
+                    uuid = item["uuid"]
+                    record = manager.query_channel(uuid)
+                    expired = bool(sync and sync.is_expired(uuid, game_id))
+                    item["display_name"] = (
+                        policy.account_label(record, expired=expired) if record else item["name"]
+                    )
+                    identity_uuid = aliases.get(uuid, uuid)
+                    item["pinned"] = identity_uuid in pinned
+                    item["included"] = uuid in included or identity_uuid in included
+                    item["will_include"] = identity_uuid in planned
         except Exception as e:
             result = {"error": str(e)}
         return self._json_response(200, result)

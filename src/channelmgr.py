@@ -81,8 +81,9 @@ class channel:
         self.create_time = create_time
         self.last_login_time = last_login_time
         self.uuid = f"{login_info['login_channel']}-{login_info['code']}" if uuid == "" else uuid
-        self.channel_name = login_info["login_channel"]
-        self.crossGames = True
+        self.channel_name = (ext_info.get("src_app_channel2") or login_info["login_channel"]) if self.record_source == "scan" else login_info["login_channel"]
+        self.game_id = ext_info.get("from_game_id", "")
+        self.crossGames = type(self) is not channel
         if name == "":
             self.name = self.uuid
         else:
@@ -90,7 +91,7 @@ class channel:
 
     @classmethod
     def from_dict(cls, data: dict):
-        return cls(
+        restored = cls(
             login_info=data.get("login_info", {}),
             user_info=data.get("user_info", {}),
             ext_info=data.get("ext_info", {}),
@@ -101,13 +102,19 @@ class channel:
             uuid=data.get("uuid", ""),
         )
 
-    def get_uniSdk_data(self, game_id: str = ""):
+        restored.game_id = data.get("game_id", restored.game_id)
+        restored.crossGames = data.get("crossGames", restored.crossGames)
+        if "token_issued_at" in data:
+            restored.token_issued_at = data["token_issued_at"]
+        return restored
+
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         if "id" not in self.user_info or "token" not in self.user_info:
             raise ValueError("渠道登录信息不完整：缺少 user_id 或 token，请重新登录")
-        return {
+        result = {
             "user_id": self.user_info["id"],
             "token": self.user_info["token"],
-            "login_channel": self.ext_info.get("src_app_channel2", ""),
+            "login_channel": self.ext_info.get("src_app_channel2") or self.channel_name,
             "udid": self.ext_info.get("src_udid", ""),
             "app_channel": self.ext_info.get("src_app_channel", ""),
             "sdk_version": self.ext_info.get("src_jf_game_id", ""),
@@ -120,6 +127,10 @@ class channel:
             "cv": "a1.5.0",
         }
 
+        if on_complete is not None:
+            on_complete(result)
+        return result
+
     def get_non_sensitive_data(self):
         return {
             "create_time": self.create_time,
@@ -128,6 +139,16 @@ class channel:
             "name": self.name,
             "record_source": self.record_source,
         }
+
+    def mark_manual_login_success(self):
+        from prefetch_context import in_prefetch
+        if self.record_source != "manual" or in_prefetch():
+            return
+        self.last_login_time = int(time.time())
+        import app_state
+        manager = app_state.channels_helper
+        if manager is not None and any(record is self for record in manager.channels):
+            manager.save_records()
 
     def before_save(self):
         pass
@@ -209,6 +230,10 @@ class ChannelManager:
                                 continue
                             # 部分旧适配器的 from_dict 不接收 uuid，统一恢复记录标识。
                             self.channels[-1].uuid = item["uuid"]
+                            self.channels[-1].game_id = item.get("game_id", self.channels[-1].game_id)
+                            self.channels[-1].crossGames = item.get("crossGames", self.channels[-1].crossGames)
+                            if "token_issued_at" in item:
+                                self.channels[-1].token_issued_at = item["token_issued_at"]
                             imported_name = item.get("import_nickname")
                             self.channels[-1].import_nickname = (
                                 imported_name if isinstance(imported_name, str) and imported_name
@@ -282,9 +307,21 @@ class ChannelManager:
             exchange_info["user"],
             exchange_info["ext_info"] if "ext_info" in exchange_info.keys() else {},
             exchange_info["device"] if "device" in exchange_info.keys() else {},
+            name=str(exchange_info["user"].get("client_username")
+                     or exchange_info["user"].get("nickname")
+                     or exchange_info["user"]["id"]),
         )
+        from channelHandler.channelUtils import getShortGameId
+        from account_list_policy import native_scan_channels
+        tmp_channel.game_id = getShortGameId(game_id or tmp_channel.game_id)
+        tmp_channel.crossGames = False
+        tmp_channel.last_login_time = int(time.time())
         import app_state
-        login_channel = login_info["login_channel"]
+        login_channel = tmp_channel.ext_info.get("src_app_channel2") or login_info["login_channel"]
+
+        if login_channel in native_scan_channels(tmp_channel.game_id):
+            app_state.toast("扫码登录由游戏原生保存，可在游戏账号列表中继续使用。", duration=5000)
+            return False
 
         manual_name = self._manual_channel_name(login_channel, game_id)
         if manual_name:
@@ -292,11 +329,6 @@ class ChannelManager:
             toast_text = f"您正在扫码导入{manual_name}账号，保存时间较短，请及时参看教程，前往【渠道服管理界面】操作"
         else:
             toast_text = "扫码结果已临时保存，时长约3天，可在游戏的下拉框中选择账号登录。"
-
-        if login_channel in [i["channel"] for i in manual_login_channels] and login_channel not in ("myapp", "oppo", "bilibili_sdk", "myapp_qq"):
-            # 这些渠道不写入工具记录，仅依赖游戏原生保存。
-            app_state.toast(toast_text, duration=5000)
-            return False
 
         app_state.toast(toast_text, duration=5000)
         #寻找是否有重复的self.user_info["id"]
@@ -306,7 +338,8 @@ class ChannelManager:
             for i_channel in self.channels:
                 if (i_channel.record_source == "scan"
                         and i_channel.channel_name == tmp_channel.channel_name
-                        and i_channel.user_info.get("id") == account_name):
+                        and i_channel.user_info.get("id") == account_name
+                        and cmp_game_id(i_channel.game_id, tmp_channel.game_id)):
                     to_be_deleted.append(i_channel)
             #按self.last_login_time排序，取最近一次登录过的账号的名字和uuid给新账号
             if len(to_be_deleted) > 0:
@@ -700,10 +733,8 @@ class ChannelManager:
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 verify=should_verify_ssl()
             )
-            self.logger.info(f"模拟确认请求返回: {r.json()}")
+            self.logger.info("模拟确认请求返回 HTTP {}", r.status_code)
             if r.status_code == 200:
-                channel.last_login_time = int(time.time())
-                self.save_records()
                 result = r.json()
                 if on_complete:
                     on_complete(result)
@@ -742,10 +773,7 @@ class ChannelManager:
                 try:
                     if scanner_uuid=="Kinich":
                         def _ready(channel_data):
-                            if channel_data:
-                                channel.last_login_time = int(time.time())
-                                self.save_records()
-                            else:
+                            if not channel_data:
                                 genv.set("CHANNEL_ACCOUNT_SELECTED", "")
                             if on_complete:
                                 on_complete(channel_data)

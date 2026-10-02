@@ -183,6 +183,8 @@ class qihooChannel(channelmgr.channel):
         """请求用户登录。先用本地 cookie 复验；失败则拉起浏览器。"""
         genv.set("GLOB_LOGIN_UUID", self.uuid)
 
+        browser_login = False
+
         def _on_done(result):
             if result is None:
                 if on_complete is not None:
@@ -195,6 +197,8 @@ class qihooChannel(channelmgr.channel):
                 success = self._store_result(result)
                 if success:
                     self._sync_cookie_from_login()
+                    if browser_login:
+                        self.mark_manual_login_success()
             except Exception:
                 self.logger.exception(f"{TAG} 异步登录处理失败")
                 success = False
@@ -203,8 +207,16 @@ class qihooChannel(channelmgr.channel):
                 return
             return success
 
+        if self.qt_cookie:
+            try:
+                cached_result = self.qihooLogin.login_by_qt(self.qt_cookie)
+            except Exception:
+                cached_result = False
+            if isinstance(cached_result, dict) and cached_result.get("ok"):
+                return _on_done(cached_result)
+        browser_login = interactive
         result = self.qihooLogin.web_login(
-            self.qt_cookie, on_complete=_on_done if on_complete else None, interactive=interactive
+            "", on_complete=_on_done if on_complete else None, interactive=interactive
         )
         if on_complete is not None:
             # 异步模式：web_login 返回 None，结果由回调给出

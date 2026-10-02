@@ -46,6 +46,7 @@ class qqChannel(channelmgr.channel):
         game_id: str = "",
         session: myappVeriftResp = None,
         uuid: str = "",
+        token_issued_at: int | None = None,
     ) -> None:
         super().__init__(
             login_info,
@@ -57,6 +58,7 @@ class qqChannel(channelmgr.channel):
             name,
             uuid,
         )
+        self.token_issued_at = last_login_time if token_issued_at is None else token_issued_at
         self.logger = setup_logger()
         self.crossGames = False
         cloudRes = CloudRes()
@@ -89,7 +91,8 @@ class qqChannel(channelmgr.channel):
                 return False
             self.session = myappVeriftResp(resp)
             self._fetch_nickname()
-            self.last_login_time = int(time.time())
+            self.token_issued_at = int(time.time())
+            self.mark_manual_login_success()
             return True
 
         if on_complete is not None:
@@ -127,7 +130,7 @@ class qqChannel(channelmgr.channel):
 
     def is_token_valid(self):
         if self.session is not None and self.session.atk_expire:
-            return self.last_login_time + self.session.atk_expire > int(time.time())
+            return self.token_issued_at + self.session.atk_expire > int(time.time())
         return False
 
     def before_save(self):
@@ -147,6 +150,7 @@ class qqChannel(channelmgr.channel):
             game_id=data.get("game_id", ""),
             session=data.get("session_json", None),
             uuid=data.get("uuid", ""),
+            token_issued_at=data.get("token_issued_at", data.get("last_login_time", 0)),
         )
 
     def _get_extra_data(self):

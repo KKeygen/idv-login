@@ -310,6 +310,7 @@ class oppoChannel(channelmgr.channel):
             except Exception:
                 self.loginResp, self.oppo_open_account = previous_resp, previous_open_account
                 return False
+            self.mark_manual_login_success()
             return True
         try:
             if on_complete is not None:

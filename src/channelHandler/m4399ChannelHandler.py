@@ -349,6 +349,7 @@ class m4399Channel(channelmgr.channel):
                 self.lastWebLoginTime = int(time.time())
                 self._persist_recovery_state()
                 self._warn_recovery_timeline("Web 登录成功，已保存 callback JSON/cookies/refresh_token")
+                self.mark_manual_login_success()
                 success = True
             if on_complete is not None:
                 on_complete(success)

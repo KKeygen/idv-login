@@ -176,11 +176,17 @@ class vivoChannel(channelmgr.channel):
 
     def request_user_login(self, on_complete=None, user_id: str = ""):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
+        def _accept(resp):
+            result = self._apply_login_data(resp, user_id)
+            if result is True:
+                self.mark_manual_login_success()
+            return result
+
         try:
             if on_complete is not None:
-                self.vivoLogin.webLogin(self.cookies, on_complete=lambda resp: on_complete(self._apply_login_data(resp, user_id)))
+                self.vivoLogin.webLogin(self.cookies, on_complete=lambda resp: on_complete(_accept(resp)))
                 return None
-            return self._apply_login_data(self.vivoLogin.webLogin(self.cookies), user_id)
+            return _accept(self.vivoLogin.webLogin(self.cookies))
         except Exception:
             self.logger.error("渠道登录未完成")
             if on_complete is not None:

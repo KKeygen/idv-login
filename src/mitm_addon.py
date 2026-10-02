@@ -129,6 +129,7 @@ class IDVLoginAddon:
         self.cloud_res = CloudRes
         self._hosted_targets_by_process = {}
         self._held_hosted_query_flows = {}
+        self._pending_tool_auth = {}
 
         self.auth_status_domain = str(
             genv.get("DOMAIN_TARGET_AUTH_STATUS", "") or ""
@@ -166,9 +167,24 @@ class IDVLoginAddon:
 
         path = flow.request.path.split("?")[0]
 
-        # 会话在启动时写回 MPay 账号库；uni_sauth 保留 SDK 原始请求。
         if host == getattr(self, "auth_status_domain", ""):
+            if path.endswith("/sdk/uni_sauth"):
+                try:
+                    data = json.loads(flow.request.content or b"{}")
+                except (TypeError, ValueError, UnicodeDecodeError):
+                    data = None
+                sync = getattr(app_state.channels_helper, "db_sync", None)
+                if isinstance(data, dict) and sync and sync.intercept_auth(data):
+                    flow.metadata["idv_local_auth_cancel"] = True
+                    self._cancel_login(flow)
             return
+
+        match = self._re_handle_login.match(path)
+        if match and flow.request.method == "GET":
+            sync = getattr(app_state.channels_helper, "db_sync", None)
+            if sync and sync.intercept_mpay_login(match.group(1), match.group(3)):
+                self._cancel_login(flow)
+                return
 
         # ── _idv-login routes: handle locally, do NOT forward upstream ──
         if path.startswith("/_idv-login/"):
@@ -180,6 +196,9 @@ class IDVLoginAddon:
         # on the response side below.
         if host == self.oversea_domain:
             return
+
+        if path == "/mpay/api/users/login/qrcode/exchange_token":
+            flow.metadata["idv_selected_uuid"] = self.genv.get("CHANNEL_ACCOUNT_SELECTED", "")
 
         request_role = self._classify_mpay_request(flow)
         if request_role == ROLE_BRIDGED_GAME:
@@ -308,25 +327,37 @@ class IDVLoginAddon:
         except Exception:
             self.logger.exception(f"处理响应时出错: {path}")
 
+    @staticmethod
+    def _cancel_login(flow):
+        message = "请在渠道服管理界面完成登录后重试"
+        flow.response = http.Response.make(
+            200, json.dumps({"code": 401, "subcode": 1, "msg": message,
+                             "reason": message}, ensure_ascii=False).encode(),
+            {"Content-Type": "application/json; charset=utf-8"})
+
     def _check_uni_sauth_response(self, flow: http.HTTPFlow):
-        """Notify when the game's short-id uni_sauth check is no longer valid."""
+        if flow.metadata.get("idv_local_auth_cancel"):
+            return
         try:
             payload = json.loads(flow.response.content or b"{}")
+            data = json.loads(flow.request.content or b"{}")
         except (TypeError, ValueError, UnicodeDecodeError):
-            payload = {}
-        if isinstance(payload, dict) and payload.get("code") == 200 and payload.get("subcode") == 0:
             return
+        if not isinstance(payload, dict) or "code" not in payload or not isinstance(data, dict):
+            return
+        success = payload.get("code") == 200 and payload.get("subcode") == 0
         sync = getattr(app_state.channels_helper, "db_sync", None)
-        if sync:
-            try:
-                sync.mark_sauth_expired(json.loads(flow.request.content or b"{}"))
-            except (TypeError, ValueError, UnicodeDecodeError):
-                pass
-        self.logger.warning("uni_sauth 校验失败，账号登录已过期")
-        app_state.toast(
-            "登录失败，请前往【渠道服管理界面】重新登录。",
-            duration=5000,
-        )
+        matched = bool(sync and sync.record_sauth(data, success))
+        key = (getShortGameId(str(data.get("gameid", ""))),
+               str(data.get("sdkuid", "")), str(data.get("login_channel", "")))
+        pending = self._pending_tool_auth.get(key)
+        if success:
+            self._pending_tool_auth.pop(key, None)
+            if pending and self.game_helper.get_auto_close_setting(pending["game_id"]):
+                self._trigger_auto_close()
+        elif matched:
+            self.logger.warning("uni_sauth 校验失败，关联账号登录已过期")
+            app_state.toast("登录失败，请前往【渠道服管理界面】重新登录。", duration=5000)
 
     # ------------------------------------------------------------------
     # Request modification helpers
@@ -421,6 +452,7 @@ class IDVLoginAddon:
 
     def _modify_exchange_token_request(self, flow: http.HTTPFlow):
         """覆写 exchange_token 请求参数（query + body），与 v5.9.1 行为一致。"""
+        flow.metadata["idv_selected_uuid"] = self.genv.get("CHANNEL_ACCOUNT_SELECTED", "")
         game_id = flow.request.query.get("game_id", "")
         dst_game_id = flow.request.query.get("dst_jf_game_id", "")
         if not game_id or not dst_game_id:
@@ -748,142 +780,85 @@ class IDVLoginAddon:
         effective_game_id: str = "",
         allow_auto_close: bool = True,
     ):
-        selected_uuid = self.genv.get("CHANNEL_ACCOUNT_SELECTED", "")
-        is_selected = bool(selected_uuid)
+        from account_list_policy import AccountListPolicy, native_scan_channels
+        from channelmgr import channel
+
+        selected_uuid = flow.metadata.get("idv_selected_uuid", "")
         try:
-            raw_data = flow.response.content
-            form_data = {}
-            content_type = flow.request.headers.get("content-type", "")
-            if "application/x-www-form-urlencoded" in content_type:
-                from urllib.parse import parse_qs
-                raw = flow.request.content.decode("utf-8", errors="replace")
-                parsed = parse_qs(raw, keep_blank_values=True)
-                form_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-            elif "application/json" in content_type:
-                form_data = json.loads(flow.request.content)
-
-            game_id = flow.request.query.get("game_id", "") or form_data.get("game_id", "")
-            game_id = effective_game_id or game_id
+            if flow.response.status_code != 200:
+                return
+            resp_data = json.loads(flow.response.content)
+            user = resp_data.get("user", {})
+            if not isinstance(user, dict) or not user.get("id"):
+                return
+            values = _request_values(flow.request)
+            game_id = effective_game_id or values.get("game_id", "")
             process_id = self._request_process_id(flow)
-
-            if flow.response.status_code == 200:
-                resp_data = json.loads(flow.response.content)
-                modified = False
-
-                login_channel = resp_data.get("user", {}).get("login_channel", "")
-                if not login_channel.startswith("netease"):
-                    ext_info = resp_data.get("ext_info", {})
-                    if not ext_info.get("is_remember"):
-                        ext_info["is_remember"] = True
-                        resp_data["ext_info"] = ext_info
-                        modified = True
-
-                    user = resp_data.get("user", {})
-
-                    # pc_ext_info.is_remember 强制设为 true
-                    pc_ext = user.get("pc_ext_info", {})
-                    if isinstance(pc_ext, dict) and not pc_ext.get("is_remember"):
-                        pc_ext["is_remember"] = True
-                        user["pc_ext_info"] = pc_ext
-                        modified = True
-
-                    resp_data["user"] = user
-                    manual_record = None
-                    manager = app_state.channels_helper
-                    if selected_uuid:
-                        selected = manager.query_channel(selected_uuid) if manager else None
-                        if (selected is not None and selected.record_source == "manual"
-                                and selected.channel_name == login_channel):
-                            manual_record = selected
-                    import base64
-
-                    display_channel = login_channel
-                    if (manual_record is not None and login_channel == "myapp"
-                            and manual_record.uuid.removeprefix("idv-").startswith("qq-")):
-                        display_channel = "myapp_qq"
-                    if manager:
-                        display_channel = manager._manual_channel_name(display_channel, game_id) or login_channel
-                    uid = str(user.get("id") or "")
-                    account_name = str(user.get("client_username") or user.get("nickname") or uid[-3:])
-                    if manual_record is not None:
-                        account_name = getattr(manual_record, "import_nickname", "") or manual_record.name
-                    if account_name.startswith(login_channel):
-                        account_name = display_channel + account_name[len(login_channel):]
-                    if display_channel not in account_name:
-                        account_name = f"{display_channel} {account_name}".strip()
-                    label = "长期保存" if manual_record is not None else "短期保存"
-                    display_name = f"{account_name}（{label}）"
-                    user["client_username"] = display_name
-
-                    cd_raw = user.get("client_data", "")
-                    try:
-                        cd = json.loads(base64.b64decode(cd_raw)) if cd_raw else {}
-                    except Exception:
-                        cd = {}
-                    if not isinstance(cd, dict):
-                        cd = {}
-                    cd["display_username"] = display_name
-                    user["client_data"] = base64.b64encode(
-                        json.dumps(cd, ensure_ascii=False).encode()
-                    ).decode()
-                    if manual_record is not None and manager.db_sync:
-                        manager.db_sync.remember_exchange(manual_record, game_id, user)
-                    modified = True
-                    self.logger.info("已更新原生渠道服账号显示名称")
-
-                if modified:
-                    flow.response.content = json.dumps(resp_data).encode()
-
-            if is_selected:
-                if (
-                    allow_auto_close
-                    and flow.response.status_code == 200
-                    and self.game_helper.get_auto_close_setting(game_id)
-                ):
-                    self._trigger_auto_close()
-            else:
-                if flow.response.status_code == 200 and self.genv.get("SCAN_RECORD_ENABLED", True):
-                    pending_login_info = self.stack_mgr.pop_pending_login_info(game_id, process_id)
-                    if pending_login_info:
-                        resp_data = json.loads(raw_data)
-                        app_state.channels_helper.import_from_scan(
-                            pending_login_info, resp_data, game_id
-                        )
+            manager = app_state.channels_helper
+            selected = manager.query_channel(selected_uuid) if manager and selected_uuid else None
+            login_channel = str(user.get("login_channel", ""))
+            if selected and selected.channel_name != login_channel:
+                selected = None
+            record = selected
+            if not selected_uuid and manager and self.genv.get("SCAN_RECORD_ENABLED", True):
+                pending = self.stack_mgr.pop_pending_login_info(game_id, process_id)
+                if pending:
+                    manager.import_from_scan(pending, resp_data, game_id)
+                    record = next((r for r in manager.channels
+                                   if r.record_source == "scan"
+                                   and r.channel_name == login_channel
+                                   and str(r.user_info.get("id", "")) == str(user["id"])
+                                   and getShortGameId(r.game_id) == getShortGameId(game_id)), None)
+            if not login_channel.startswith("netease"):
+                remember = bool((selected and selected.record_source == "manual")
+                                or (not selected_uuid and login_channel in native_scan_channels(game_id)))
+                ext_info = resp_data.setdefault("ext_info", {})
+                ext_info["is_remember"] = remember
+                pc_ext = user.setdefault("pc_ext_info", {})
+                if isinstance(pc_ext, dict):
+                    pc_ext["is_remember"] = remember
+                label_record = record or channel(
+                    {"login_channel": login_channel, "code": str(user["id"])}, user, ext_info,
+                    resp_data.get("device", {}),
+                    name=str(user.get("client_username") or user.get("nickname") or user["id"]))
+                if record is None:
+                    label_record.record_source = "scan"
+                    label_record.game_id = getShortGameId(game_id)
+                display_name = AccountListPolicy(manager).account_label(label_record)
+                user["client_username"] = display_name
+                try:
+                    cd = json.loads(base64.b64decode(user.get("client_data", "")))
+                except (TypeError, ValueError, UnicodeDecodeError):
+                    cd = {}
+                if not isinstance(cd, dict):
+                    cd = {}
+                cd["display_username"] = display_name
+                user["client_data"] = base64.b64encode(
+                    json.dumps(cd, ensure_ascii=False).encode()).decode()
+                if record and manager.db_sync:
+                    manager.db_sync.remember_exchange(record, game_id, user)
+                flow.response.content = json.dumps(resp_data).encode()
+            if selected:
+                sdkuid = str(user["id"])
+                try:
+                    from urllib.parse import unquote
+                    extra = user.get("pc_ext_info", {}).get("extra_unisdk_data", {})
+                    if isinstance(extra, str):
+                        extra = json.loads(extra)
+                    sauth = json.loads(base64.b64decode(unquote(extra["SAUTH_JSON"])))
+                    sdkuid = str(sauth["sdkuid"])
+                except (KeyError, TypeError, ValueError, UnicodeDecodeError):
+                    pass
+                key = (getShortGameId(game_id), sdkuid, login_channel)
+                self._pending_tool_auth[key] = {"game_id": game_id, "uuid": selected.uuid}
         except Exception:
             self.logger.exception("处理 exchange_token 响应失败")
 
     def _handle_bridged_game_exchange_token_response(
         self, flow: http.HTTPFlow
     ) -> None:
-        """Close only after the game has exchanged its handed-off ticket."""
-        try:
-            if flow.response.status_code != 200:
-                return
-            self._handle_exchange_token_response(
-                flow, allow_auto_close=False
-            )
-            form_data = {}
-            content_type = flow.request.headers.get("content-type", "")
-            if "application/x-www-form-urlencoded" in content_type:
-                from urllib.parse import parse_qs
-
-                raw = flow.request.content.decode("utf-8", errors="replace")
-                parsed = parse_qs(raw, keep_blank_values=True)
-                form_data = {
-                    key: value[0] if len(value) == 1 else value
-                    for key, value in parsed.items()
-                }
-            elif "application/json" in content_type:
-                form_data = json.loads(flow.request.content or b"{}")
-
-            game_id = (
-                flow.request.query.get("game_id", "")
-                or form_data.get("game_id", "")
-            )
-            if game_id and self.game_helper.get_auto_close_setting(game_id):
-                self._trigger_auto_close()
-        except Exception:
-            self.logger.exception("处理游戏 exchange_token 完成状态失败")
+        """Observe the game's exchange; completion waits for uni_sauth."""
+        self._handle_exchange_token_response(flow)
 
     def _handle_data_upload_response(self, flow: http.HTTPFlow):
         try:
@@ -896,7 +871,7 @@ class IDVLoginAddon:
                 form_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
 
             game_id = form_data.get("game_id", "")
-            if self.game_helper.get_auto_close_setting(game_id):
+            if not self._pending_tool_auth and self.game_helper.get_auto_close_setting(game_id):
                 self._trigger_auto_close()
         except Exception:
             self.logger.exception("处理 data/upload 响应失败")

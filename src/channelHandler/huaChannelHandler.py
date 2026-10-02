@@ -100,6 +100,7 @@ class huaweiChannel(channelmgr.channel):
             if nick:
                 self.name = nick
                 self.user_info["name"] = nick
+            self.mark_manual_login_success()
             return True
         try:
             if login_method == "qr":

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import wasmtime
 
-OPERATIONS = {"write_credentials": 1, "list_uids": 2, "delete_uid": 3, "rename_uid": 4}
+OPERATIONS = {"write_credentials": 1, "list_uids": 2, "delete_uid": 3, "rename_uid": 4, "project_accounts": 5, "cleanup_accounts": 6}
 MAX_DB_BYTES = 32 * 1024 * 1024
 
 
@@ -15,7 +15,7 @@ class MpayWasm:
     def __init__(self, path: Path):
         raw = path.read_bytes()
         manifest = json.loads(path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
-        if manifest["abi"] != 1 or hashlib.sha256(raw).hexdigest() != manifest["sha256"]:
+        if manifest["abi"] != 2 or hashlib.sha256(raw).hexdigest() != manifest["sha256"]:
             raise ValueError("MPay Wasm artifact hash/ABI mismatch")
         config = wasmtime.Config()
         config.consume_fuel = True

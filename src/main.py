@@ -1199,6 +1199,8 @@ def setup_network_proxy(proxy_port):
         from mpay_db_sync import MpayDBSync
         db_sync = MpayDBSync(app_state.channels_helper, Path(__file__).parent / "resources" / "idv-db.wasm")
         app_state.channels_helper.db_sync = db_sync
+        from prefetch_context import install_request_deadline
+        install_request_deadline()
         # DNS overrides must exist first: compat mode redirects system DNS
         # to loopback. Complete refresh before any automatic game launch.
         db_sync.refresh_startup()

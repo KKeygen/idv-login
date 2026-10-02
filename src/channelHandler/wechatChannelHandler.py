@@ -83,6 +83,7 @@ class wechatChannel(channelmgr.channel):
         game_id: str = "",
         session: myappVeriftResp = None,
         uuid: str = "",
+        token_issued_at: int | None = None,
     ) -> None:
         super().__init__(
             login_info,
@@ -94,6 +95,7 @@ class wechatChannel(channelmgr.channel):
             name,
             uuid,
         )
+        self.token_issued_at = last_login_time if token_issued_at is None else token_issued_at
         self.logger = setup_logger()
         self.crossGames = False
         cloudRes = CloudRes()
@@ -127,7 +129,8 @@ class wechatChannel(channelmgr.channel):
                 ):
                     return False
                 self.session = myappVeriftResp(resp)
-                self.last_login_time = int(time.time())
+                self.token_issued_at = int(time.time())
+                self.mark_manual_login_success()
                 try:
                     r = requests.get(
                         f"https://api.weixin.qq.com/sns/userinfo?access_token={self.session.atk}&openid={self.session.openid}",
@@ -169,7 +172,7 @@ class wechatChannel(channelmgr.channel):
             renewed.update(atk=data["access_token"], rtk=data["refresh_token"],
                            atk_expire=int(data["expires_in"]))
             self.session = myappVeriftResp(renewed)
-            self.last_login_time = int(time.time())
+            self.token_issued_at = int(time.time())
             return True
         except Exception:
             self.logger.error("微信凭证续期失败")
@@ -177,7 +180,7 @@ class wechatChannel(channelmgr.channel):
 
     def is_token_valid(self):
         #	/sns/auth
-        if self.session != None and self.last_login_time+self.session.atk_expire > int(time.time()):
+        if self.session != None and self.token_issued_at+self.session.atk_expire > int(time.time()):
             r = requests.get(
                     f"https://api.weixin.qq.com/sns/auth?access_token={self.session.atk}&openid={self.session.openid}",
                     verify=should_verify_ssl()
@@ -204,6 +207,7 @@ class wechatChannel(channelmgr.channel):
             game_id=data.get("game_id", ""),
             session=data.get("session_json", None),
             uuid=data.get("uuid", ""),
+            token_issued_at=data.get("token_issued_at", data.get("last_login_time", 0)),
         )
 
     def _get_extra_data(self):
