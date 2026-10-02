@@ -314,11 +314,17 @@ class IDVLoginAddon:
             payload = json.loads(flow.response.content or b"{}")
         except (TypeError, ValueError, UnicodeDecodeError):
             payload = {}
-        if payload.get("code") == 200 and payload.get("subcode") == 0:
+        if isinstance(payload, dict) and payload.get("code") == 200 and payload.get("subcode") == 0:
             return
+        sync = getattr(app_state.channels_helper, "db_sync", None)
+        if sync:
+            try:
+                sync.mark_sauth_expired(json.loads(flow.request.content or b"{}"))
+            except (TypeError, ValueError, UnicodeDecodeError):
+                pass
         self.logger.warning("uni_sauth 校验失败，账号登录已过期")
         app_state.toast(
-            "登录已过期，请考虑重新扫码或在渠道服管理界面手动执行本渠道登录以保存更久时间。",
+            "登录失败，请前往【渠道服管理界面】重新登录。",
             duration=5000,
         )
 

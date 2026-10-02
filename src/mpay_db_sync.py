@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 import traceback
 from urllib.parse import unquote
 
@@ -19,6 +20,27 @@ from secure_write import write_file_restricted
 
 INVALID_SUFFIX = "（已失效，在网页重新登录）"
 SQLITE_PENDING_BYTE = 0x40000000
+
+
+def credential_expires_at(record):
+    """Read existing channel expiry rules; absent rules mean no deadline."""
+    value = None
+    if record.channel_name == "myapp":
+        session = getattr(record, "session", None)
+        if session is not None and session.atk_expire:
+            value = record.last_login_time + int(session.atk_expire)
+    elif record.channel_name == "honor_sdk":
+        value = record.honorLogin.expiredTime
+    elif record.channel_name == "bilibili_sdk":
+        value = (record._get_login_data() or {}).get("expires")
+    elif record.channel_name == "uc_platform":
+        value = record.sid_expire_time
+    elif record.channel_name == "360_assistant":
+        value = record.token_expire_time
+    try:
+        return int(value) if value is not None and int(value) > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def log_failure(logger, message: str, error: Exception):
@@ -116,12 +138,14 @@ class MpayDBSync:
         # UUID -> game -> MPay UID. SDK UID and MPay UID are not assumed equal
         # when a real exchange_token response provides the mapping.
         self.bindings = genv.get("mpay_db_bindings", {})
+        self.writes = genv.get("mpay_db_writes", {})
 
     def paths(self, game_id: str) -> list[Path]:
         return sorted(self.root.glob(f"*-g-{getShortGameId(game_id)}-64-mpay.db"))
 
     def save_bindings(self):
         genv.set("mpay_db_bindings", self.bindings, True)
+        genv.set("mpay_db_writes", self.writes, True)
 
     def operate(self, path: Path, operation: str, **args):
         with self.lock, locked_database(path) as file:
@@ -179,6 +203,7 @@ class MpayDBSync:
                 for path in self.paths(game_id):
                     self.operate(path, "delete_uid", uid=uid)
             self.bindings.pop(uuid, None)
+            self.writes.pop(uuid, None)
             self.save_bindings()
 
     def rename_record(self, uuid: str, name: str):
@@ -209,6 +234,11 @@ class MpayDBSync:
                 self.operate(path, "write_credentials", uid=uid, credentials=credentials,
                              create=create, machine_identifier=self.identity)
             self.bindings.setdefault(record.uuid, {})[getShortGameId(game_id)] = uid
+            self.writes.setdefault(record.uuid, {})[getShortGameId(game_id)] = {
+                "sdkuid": sdkuid,
+                "written_at": int(time.time()),
+                "expires_at": credential_expires_at(record),
+            }
             self.save_bindings()
             self.logger.info("[mpay-db] 凭证已写入游戏账号库")
             return True
@@ -228,6 +258,11 @@ class MpayDBSync:
 
     def renew(self, record, game_id: str):
         if record.record_source != "manual":
+            return
+        written = self.writes.get(record.uuid, {}).get(getShortGameId(game_id), {})
+        if written.get("written_at") and (
+            written.get("expires_at") is None or written["expires_at"] > time.time()
+        ):
             return
         name = record.name
         try:
@@ -258,6 +293,19 @@ class MpayDBSync:
             self.manager.save_records()
             self.rename_record(record.uuid, name)
             self.logger.warning("[mpay-db] 续期失败，关联账号已标记为失效")
+
+    def mark_sauth_expired(self, data):
+        """A failed check expires the matching account/channel/game write."""
+        if not isinstance(data, dict) or not data.get("gameid") or not data.get("sdkuid"):
+            return
+        game_id = getShortGameId(str(data["gameid"]))
+        with self.lock:
+            for record in self.manager.channels:
+                written = self.writes.get(record.uuid, {}).get(game_id)
+                if (written and record.channel_name == data.get("login_channel")
+                        and str(written["sdkuid"]) == str(data["sdkuid"])):
+                    written["expires_at"] = int(time.time())
+            self.save_bindings()
 
     def refresh_startup(self):
         # Check first: renewing first would resurrect a game-side deletion.
