@@ -39,9 +39,11 @@ METHOD_USER_INFO = "CommonAccount.getUserInfo"  # 携带 Cookie 换 token（免�
 LOGIN_METHOD_PASSWORD = 2
 
 # ── Web 登录 ────────────────────────────────────────────────
-# 手机端登录页
-LOGIN_URL = "https://i.360.cn/login/wap?show_index=1&showH5=1"
-# 登录成功判定页
+# 登录页：登录成功后按 destUrl 跳转到 i.360.cn 首页
+LOGIN_URL = "https://i.360.cn/login?destUrl=https%3A%2F%2Fi.360.cn%2F"
+# 新登录页登录成功后的跳转目标（destUrl 解码值）
+SUCCESS_URL_TARGET = "https://i.360.cn/"
+# 旧登录页（/login/wap）的登录成功判定页，保留兼容
 SUCCESS_URL_PREFIX = "https://i.360.cn/index/wap"
 
 # 渠道名（= assets/360_assistant_data 的文件名前缀）
@@ -61,6 +63,13 @@ DEFAULT_APP_KEY = "838559dca512625db0deadb1a974d5e6"
 MOBILE_USER_AGENT = (
     "Mozilla/5.0 (Linux; Android 13; SM-G9910) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+)
+
+# 桌面端 UA：i.360.cn/login 用桌面 UA 直接渲染电脑版「360帐号中心」登录页；
+# 手机 UA 会被 360 强制跳转到 /login/wap（看起来与旧抓包页面相同，造成困惑）。
+DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
 # ── 响应字段 ────────────────────────────────────────────────

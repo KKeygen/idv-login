@@ -1,7 +1,7 @@
 # coding=UTF-8
 """360（奇虎）渠道。
 
-登录方式：Web 登录 https://i.360.cn/login/wap 取得 Q/T cookie，
+登录方式：Web 登录 https://i.360.cn/login 取得 Q/T cookie，
           再用该 cookie 换取 access_token（免密码，可长期保存）。
 
 会话续期：本地 cookie 仍有效时直接复验；失效则重新拉起浏览器。

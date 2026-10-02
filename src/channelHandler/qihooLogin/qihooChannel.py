@@ -2,7 +2,7 @@
 """360（奇虎）登录实现。
 
 登录流程：
-  1. 在 https://i.360.cn/login/wap 完成网页登录，取得 Q / T cookie
+  1. 在 https://i.360.cn/login 完成网页登录，取得 Q / T cookie
   2. 携带该 cookie 调用 CommonAccount.getUserInfo，换取 access_token
   3. 将 qid + access_token 交给网易 uni_sauth
 
@@ -48,15 +48,17 @@ DEFAULT_OS_VERSION = "12"
 class QihooBrowser(WebBrowser):
     """360 网页登录。
 
-    与华为/OPPO 一致：移动端登录页 → 按手机比例开窗 + 手机 UA。
-    成功判定：URL 跳到 i.360.cn/index/wap（个人中心首页）。
+    成功判定：URL 跳到 destUrl（i.360.cn 首页）即登录成功；
+    旧版 /index/wap 判定页仍兼容。
     """
 
     def __init__(self):
         super().__init__("360_assistant", True, frameless=True)
         self.logger = setup_logger()
         self.setWindowTitle("360账号登录")
-        self.set_user_agent(C.MOBILE_USER_AGENT)
+        # 用桌面 UA 打开 i.360.cn/login，直接显示电脑版登录页；
+        # 手机 UA 会被 360 强制跳转到 /login/wap
+        self.set_user_agent(C.DESKTOP_USER_AGENT)
         self.qt_cookie: str = ""
 
     # ── 成功判定 ────────────────────────────────────────────
@@ -64,9 +66,31 @@ class QihooBrowser(WebBrowser):
         text = str(url or "")
         if not text:
             return False
-        if text.startswith(C.SUCCESS_URL_PREFIX) or "i.360.cn/index/wap" in text:
+        if self._is_success_url(text):
             return self.parseReslt(text)
         return False
+
+    @staticmethod
+    def _is_success_url(text: str) -> bool:
+        """新登录页跳回 i.360.cn 即判定成功；旧 /index/wap 仍兼容。
+
+        destUrl 为 https://i.360.cn/，登录成功后可能落在：
+          https://i.360.cn/        （path 为空或 /）
+          https://i.360.cn/index   （桌面版首页）
+          旧版 https://i.360.cn/index/wap（手机版首页，兼容保留）
+        """
+        if text.startswith(C.SUCCESS_URL_PREFIX) or "i.360.cn/index/wap" in text:
+            return True
+        try:
+            parsed = urllib.parse.urlparse(text)
+            target = urllib.parse.urlparse(C.SUCCESS_URL_TARGET)
+        except ValueError:
+            return False
+        return (
+            parsed.scheme == target.scheme
+            and parsed.netloc == target.netloc
+            and parsed.path in ("", "/", "/index")
+        )
 
     def parseReslt(self, url: str) -> bool:
         cookie = self._pick_qt_cookie()
