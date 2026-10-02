@@ -18,4 +18,4 @@ aiofiles==23.2.1
 xxhash==3.5.0
 pyzmq>=25.0.0
 protobuf==5.29.6
-wasmtime==49.0.0
+wasmtime==49.0.0; sys_platform == "win32"

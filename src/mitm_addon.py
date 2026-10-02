@@ -16,7 +16,6 @@ You should have received a copy of the GNU General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 """
 
-import asyncio
 import base64
 import json
 import os
@@ -160,7 +159,7 @@ class IDVLoginAddon:
     # mitmproxy hooks
     # ------------------------------------------------------------------
 
-    async def request(self, flow: http.HTTPFlow):
+    def request(self, flow: http.HTTPFlow):
         host = flow.request.pretty_host.lower()
         if host not in self.target_domains:
             return
@@ -169,8 +168,6 @@ class IDVLoginAddon:
 
         # 会话在启动时写回 MPay 账号库；uni_sauth 保留 SDK 原始请求。
         if host == getattr(self, "auth_status_domain", ""):
-            if path.endswith("/sdk/uni_sauth") and flow.request.method == "POST":
-                self.logger.info("[native-login] uni_sauth 请求已到达代理")
             return
 
         # ── _idv-login routes: handle locally, do NOT forward upstream ──
@@ -185,11 +182,6 @@ class IDVLoginAddon:
             return
 
         request_role = self._classify_mpay_request(flow)
-        if self.genv.get("DEBUG_MODE", False):
-            self.logger.info(
-                "[native-login] MPay 请求: method={}, cached_login={}, role={}",
-                flow.request.method, bool(self._re_handle_login.match(path)), request_role,
-            )
         if request_role == ROLE_BRIDGED_GAME:
             return
         if request_role == ROLE_HOSTED_FEVER_MPAY:
@@ -239,7 +231,7 @@ class IDVLoginAddon:
             if flow.request.method == "POST":
                 self._modify_post_body_cv(flow)
 
-    async def response(self, flow: http.HTTPFlow):
+    def response(self, flow: http.HTTPFlow):
         host = flow.request.pretty_host.lower()
         if host not in self.target_domains:
             return
@@ -262,16 +254,6 @@ class IDVLoginAddon:
                 return
 
             request_role = self._classify_mpay_request(flow)
-            if flow.response.status_code >= 400:
-                self.logger.warning(
-                    "[native-login] MPay 失败响应: status={}, body={}",
-                    flow.response.status_code, flow.response.get_text(),
-                )
-            if self.genv.get("DEBUG_MODE", False):
-                self.logger.info(
-                    "[native-login] MPay 响应: status={}, cached_login={}, role={}",
-                    flow.response.status_code, bool(self._re_handle_login.match(path)), request_role,
-                )
             if request_role == ROLE_BRIDGED_GAME:
                 # op14 only transfers the one-shot ticket/code to the game.
                 # Login is complete from the game's perspective only after its
@@ -309,7 +291,7 @@ class IDVLoginAddon:
             if self._re_login_methods.match(path):
                 self._modify_login_methods_response(flow)
             elif self._re_handle_login.match(path) and flow.request.method == "GET":
-                await self._modify_handle_login_response(flow)
+                self._modify_handle_login_response(flow)
             elif path == "/mpay/api/qrcode/image":
                 self._modify_qrcode_image_response(flow)
             elif path == "/mpay/games/pc_config":
@@ -334,10 +316,6 @@ class IDVLoginAddon:
             payload = {}
         if payload.get("code") == 200 and payload.get("subcode") == 0:
             return
-        self.logger.warning(
-            "[native-login] uni_sauth 失败响应: status={}, body={}",
-            flow.response.status_code, flow.response.get_text(),
-        )
         self.logger.warning("uni_sauth 校验失败，账号登录已过期")
         app_state.toast(
             "登录已过期，请考虑重新扫码或在渠道服管理界面手动执行本渠道登录以保存更久时间。",
@@ -536,7 +514,7 @@ class IDVLoginAddon:
         except Exception:
             pass
 
-    async def _modify_handle_login_response(self, flow: http.HTTPFlow):
+    def _modify_handle_login_response(self, flow: http.HTTPFlow):
         if flow.response.status_code != 200:
             return
         data = json.loads(flow.response.content)
@@ -545,7 +523,6 @@ class IDVLoginAddon:
         # Preserve that complete bundle here; a second proxy renewal would mix
         # native SDK state with a different session/timestamp.
         if user.get("pc_ext_info", {}).get("extra_unisdk_data"):
-            self.logger.info("[native-login] 保留账号库中的完整渠道登录数据")
             return
         user["pc_ext_info"] = PC_INFO
         flow.response.content = json.dumps(data).encode("utf-8")

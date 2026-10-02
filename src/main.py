@@ -30,6 +30,7 @@ def parse_command_line_args():
     arg_parser.add_argument('--uri', type=str, default="", help='处理 idvlogin:// URI Scheme 调用')
     arg_parser.add_argument('--open-ui', action='store_true', help='启动后直接打开渠道服管理界面')
     arg_parser.add_argument('--proxy-port', type=int, default=10717, help='mitmproxy 监听端口 (默认 10717)')
+    arg_parser.add_argument('--debug', action='store_true', help='开发调试：使用 mitmweb 打开 Web 代理界面 (默认 http://127.0.0.1:8081/)')
     return arg_parser.parse_args()
 
 
@@ -1181,14 +1182,14 @@ def setup_network_proxy(proxy_port):
             # 回退到常规模式（不持久化，下次启动仍尝试兼容模式）
             proxy_mode = "process" if auto_games else "global"
             from mitm_proxy import MitmProxyManager
-            proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular")
+            proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
             proxy_mgr.start()
             m_proxy = proxy_mgr
             app_state.proxy_mgr = proxy_mgr
     else:
         # 常规代理模式（global 或 process）
         from mitm_proxy import MitmProxyManager
-        proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular")
+        proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
         proxy_mgr.start()
         m_proxy = proxy_mgr
         app_state.proxy_mgr = proxy_mgr
@@ -1384,7 +1385,7 @@ def _setup_compat_mode(addon):
 
     # 4. 启动 mitmproxy 反向代理
     from mitm_proxy import MitmProxyManager
-    proxy_mgr = MitmProxyManager(addon=addon, mode="compat")
+    proxy_mgr = MitmProxyManager(addon=addon, mode="compat", debug=bool(CLI_ARGS.debug))
     proxy_mgr.start()
     m_proxy = proxy_mgr
     app_state.proxy_mgr = proxy_mgr

@@ -120,28 +120,6 @@ class channel:
             "cv": "a1.5.0",
         }
 
-    @staticmethod
-    def _session_result(user_id: str, sdkuid, sessionid, **fields):
-        """校验目标账号后返回 SAUTH 所需字段，不生成另一套登录请求。"""
-        sdkuid = str(sdkuid or "")
-        if not sdkuid or not sessionid:
-            raise ValueError("渠道登录信息不完整：缺少账号或 session，请重新登录")
-        if user_id and str(user_id) != sdkuid:
-            raise ValueError("渠道返回的账号与本次登录账号不一致，请重新选择账号")
-        return {"sdkuid": sdkuid, "sessionid": sessionid, **fields}
-
-    def get_session(self, user_id: str, game_id: str):
-        """扫码记录沿用捕获的 SAUTH，不把它升级为可刷新的手动账号。"""
-        import base64
-        from urllib.parse import unquote
-
-        extra = json.loads(self.ext_info["extra_unisdk_data"])
-        data = json.loads(base64.b64decode(unquote(extra["SAUTH_JSON"])))
-        if not cmp_game_id(data["gameid"], game_id):
-            raise ValueError("扫码记录与本次登录游戏不一致")
-        self._session_result(user_id, data["sdkuid"], data["sessionid"])
-        return data
-
     def get_non_sensitive_data(self):
         return {
             "create_time": self.create_time,
@@ -403,47 +381,64 @@ class ChannelManager:
                 self.logger.error(f"不支持的渠道: {channle_name}")
                 if on_complete:
                     on_complete(False)
-                return
+                return False
         except Exception as e:
             self.logger.error(f"创建渠道登录实例失败 ({channle_name}): {e}")
             if on_complete:
                 on_complete(False)
-            return
+            return False
 
         old_uuid = tmp_channel.uuid
         tmp_channel.uuid = "idv-" + old_uuid.removeprefix("idv-")
         if tmp_channel.name == old_uuid:
             tmp_channel.name = tmp_channel.uuid
 
-        if on_complete is not None:
-            # 保持对 tmp_channel 的引用，防止异步登录期间被 GC
-            # 否则 tmp_channel 是局部变量，函数返回后会被销毁
-            self._pending_login_channel = tmp_channel
-            
-            def _finish_import(success):
-                # 只在引用仍指向当前 channel 时才清空，避免覆盖后续导入的引用
-                if self._pending_login_channel is tmp_channel:
-                    self._pending_login_channel = None
-                try:
-                    if success is None:
-                        # 用户主动取消，不视为错误
-                        self.logger.info(f"手动导入已取消: {tmp_channel.name}")
-                        on_complete(None)
-                    elif success and tmp_channel.is_token_valid():
-                        tmp_channel.last_login_time = int(time.time())
-                        tmp_channel.import_nickname = tmp_channel.name
-                        self.channels.append(tmp_channel)
-                        self.save_records()
-                        if self.db_sync:
-                            self.db_sync.created(tmp_channel)
-                        on_complete(True)
-                    else:
-                        self.logger.error(f"手动导入失败: {tmp_channel.name}")
-                        on_complete(False)
-                except Exception:
-                    self.logger.exception(f"异步手动导入失败: {tmp_channel.name}")
-                    on_complete(False)
+        import_finished = False
 
+        def _finish_import(result):
+            nonlocal import_finished
+            if import_finished:
+                return result
+            import_finished = True
+            if self._pending_login_channel is tmp_channel:
+                self._pending_login_channel = None
+            if result is True:
+                tmp_channel.last_login_time = int(time.time())
+                tmp_channel.import_nickname = tmp_channel.name
+                self.channels.append(tmp_channel)
+                try:
+                    self.save_records()
+                except Exception as error:
+                    self.channels.remove(tmp_channel)
+                    self.logger.error("手动导入保存失败 [{}]", type(error).__name__)
+                    result = False
+            elif result is None:
+                self.logger.info(f"手动导入已取消: {tmp_channel.name}")
+            else:
+                self.logger.error(f"手动导入失败: {tmp_channel.name}")
+                result = False
+            if on_complete:
+                on_complete(result)
+            return result
+
+        def _login_finished(result):
+            if result is not True:
+                return _finish_import(result)
+            try:
+                if not tmp_channel.is_token_valid():
+                    result = False
+                elif self.db_sync:
+                    if on_complete:
+                        self.db_sync.created(tmp_channel, on_complete=_finish_import)
+                        return None
+                    result = self.db_sync.created(tmp_channel)
+            except Exception as error:
+                self.logger.error("手动导入收尾失败 [{}]", type(error).__name__)
+                result = False
+            return _finish_import(result)
+
+        if on_complete is not None:
+            self._pending_login_channel = tmp_channel
             try:
                 if channle_name == "myapp":
                     # 微信登录不使用浏览器，在后台线程运行避免阻塞主线程
@@ -452,16 +447,13 @@ class ChannelManager:
                     def _run_sync():
                         try:
                             self.logger.info("微信登录：开始 request_user_login")
-                            tmp_channel.request_user_login()
-                            self.logger.info(f"微信登录：request_user_login 完成，session={tmp_channel.session is not None}")
-                            success = tmp_channel.is_token_valid()
-                            self.logger.info(f"微信登录：is_token_valid={success}")
+                            success = tmp_channel.request_user_login()
+                            self.logger.info(f"微信登录：request_user_login={success}")
                         except Exception:
                             self.logger.exception(f"微信异步登录失败")
                             success = False
-                        # 必须在主线程调用 _finish_import，因为后续可能涉及 Qt 操作
-                        self.logger.info(f"微信登录：准备调用 _finish_import(success={success})")
-                        app_state.run_on_main_thread(lambda: _finish_import(success))
+                        # 必须在主线程收尾，因为后续可能涉及 Qt 操作
+                        app_state.run_on_main_thread(lambda: _login_finished(success))
                     threading.Thread(target=_run_sync, daemon=True).start()
                 elif channle_name == "bilibili_sdk":
                     # B站登录：QR 模式在后台线程阻塞轮询，Web 模式走 Qt 主线程
@@ -472,20 +464,16 @@ class ChannelManager:
                         def _run_bili_qr():
                             try:
                                 self.logger.info("B站登录：开始 QR 扫码登录")
-                                result = tmp_channel.request_user_login(login_method="qr")
-                                if result is None:
-                                    success = None  # 用户取消
-                                else:
-                                    success = tmp_channel.is_token_valid()
-                                self.logger.info(f"B站登录：is_token_valid={success}")
+                                success = tmp_channel.request_user_login(login_method="qr")
+                                self.logger.info(f"B站登录：request_user_login={success}")
                             except Exception:
                                 self.logger.exception("B站异步登录失败")
                                 success = False
-                            app_state.run_on_main_thread(lambda: _finish_import(success))
+                            app_state.run_on_main_thread(lambda: _login_finished(success))
                         threading.Thread(target=_run_bili_qr, daemon=True).start()
                     else:
                         tmp_channel.request_user_login(
-                            on_complete=_finish_import, login_method="web"
+                            on_complete=_login_finished, login_method="web"
                         )
                 elif channle_name == "huawei":
                     # 华为登录：QR 扫码在后台线程阻塞轮询，Web 浏览器走 Qt 主线程
@@ -496,20 +484,19 @@ class ChannelManager:
                         def _run_huawei_qr():
                             try:
                                 self.logger.info("华为登录：开始扫码登录")
-                                tmp_channel.request_user_login(login_method="qr")
-                                success = tmp_channel.is_token_valid()
-                                self.logger.info(f"华为登录：is_token_valid={success}")
+                                success = tmp_channel.request_user_login(login_method="qr")
+                                self.logger.info(f"华为登录：request_user_login={success}")
                             except Exception:
                                 self.logger.exception("华为扫码登录失败")
                                 success = False
-                            app_state.run_on_main_thread(lambda: _finish_import(success))
+                            app_state.run_on_main_thread(lambda: _login_finished(success))
                         threading.Thread(target=_run_huawei_qr, daemon=True).start()
                     else:
                         tmp_channel.request_user_login(
-                            on_complete=_finish_import, login_method="web"
+                            on_complete=_login_finished, login_method="web"
                         )
                 else:
-                    tmp_channel.request_user_login(on_complete=_finish_import)
+                    tmp_channel.request_user_login(on_complete=_login_finished)
             except Exception:
                 self._pending_login_channel = None  # 异常时也要释放
                 self.logger.exception(f"手动导入失败: {tmp_channel.name}")
@@ -517,21 +504,10 @@ class ChannelManager:
             return
 
         try:
-            tmp_channel.request_user_login()
-            if tmp_channel.is_token_valid():
-                tmp_channel.last_login_time = int(time.time())
-                tmp_channel.import_nickname = tmp_channel.name
-                self.channels.append(tmp_channel)
-                self.save_records()
-                if self.db_sync:
-                    self.db_sync.created(tmp_channel)
-                return True
-            else:
-                self.logger.error(f"手动导入失败: {tmp_channel.name}")
-                return False
-        except:
+            return _login_finished(tmp_channel.request_user_login())
+        except Exception:
             self.logger.exception(f"手动导入失败: {tmp_channel.name}")
-            return False
+            return _finish_import(False)
 
     def login(self, uuid: str):
         for channel in self.channels:
@@ -707,50 +683,14 @@ class ChannelManager:
                 return channel
         return None
 
-    def remember_native_account(self, record: channel, channel_data: dict, game_id: str):
-        if record.record_source != "manual":
-            return
-        import base64
-        from urllib.parse import unquote
-        from channelHandler.channelUtils import getShortGameId
-
-        extra = json.loads(channel_data["extra_unisdk_data"])
-        sauth = json.loads(base64.b64decode(unquote(extra["SAUTH_JSON"])))
-        if not cmp_game_id(sauth["gameid"], game_id):
-            raise ValueError("渠道登录结果与目标游戏不一致")
-        if sauth["login_channel"] != record.channel_name or not sauth["sdkuid"]:
-            raise ValueError("渠道登录结果缺少匹配的账号身份")
-        accounts = genv.get("native_channel_accounts", {})
-        by_channel = accounts.setdefault(getShortGameId(game_id), {})
-        by_user = by_channel.setdefault(sauth["login_channel"], {})
-        # 同一身份再次成功登录时，明确采用最后一次使用的记录。
-        by_user[str(sauth["sdkuid"])] = record.uuid
-        genv.set("native_channel_accounts", accounts, True)
-
-    def native_account(self, login_channel: str, user_id: str, game_id: str):
-        from channelHandler.channelUtils import getShortGameId
-
-        uuid = genv.get("native_channel_accounts", {}).get(
-            getShortGameId(game_id), {}
-        ).get(login_channel, {}).get(str(user_id))
-        if not uuid:
-            return None
-        record = self.query_channel(uuid)
-        if record is None:
-            raise ValueError("原生登录关联的手动账号已删除，请重新选择账号")
-        if record.record_source != "manual" or record.channel_name != login_channel:
-            raise ValueError("原生登录关联的渠道账号不一致")
-        if not record.crossGames and not cmp_game_id(record.game_id, game_id):
-            raise ValueError("原生登录关联的游戏不一致")
-        return record
-
     def simulate_confirm(self, channel: channel, scanner_uuid: str, game_id: str, on_complete=None):
         def _do_confirm(channel_data):
             if not channel_data:
                 genv.set("CHANNEL_ACCOUNT_SELECTED", "")
+                result = None if channel_data is None else False
                 if on_complete:
-                    on_complete(False)
-                return False
+                    on_complete(result)
+                return result
             channel_data["uuid"] = scanner_uuid
             channel_data["game_id"] = game_id
             body = "&".join([f"{k}={v}" for k, v in channel_data.items()])
@@ -762,7 +702,6 @@ class ChannelManager:
             )
             self.logger.info(f"模拟确认请求返回: {r.json()}")
             if r.status_code == 200:
-                self.remember_native_account(channel, channel_data, game_id)
                 channel.last_login_time = int(time.time())
                 self.save_records()
                 result = r.json()
@@ -804,9 +743,10 @@ class ChannelManager:
                     if scanner_uuid=="Kinich":
                         def _ready(channel_data):
                             if channel_data:
-                                self.remember_native_account(channel, channel_data, channel_data["jf_game_id"])
                                 channel.last_login_time = int(time.time())
                                 self.save_records()
+                            else:
+                                genv.set("CHANNEL_ACCOUNT_SELECTED", "")
                             if on_complete:
                                 on_complete(channel_data)
                             return channel_data
@@ -843,6 +783,7 @@ class ChannelManager:
                     if on_complete:
                         on_complete(False)
                     return False
+        genv.set("CHANNEL_ACCOUNT_SELECTED", "")
         if on_complete:
             on_complete(None)
         return None

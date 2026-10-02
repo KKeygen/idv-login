@@ -126,7 +126,7 @@ class VivoLogin:
         self.cookies = {}
         self._active_browser: VivoBrowser = None  # 异步模式下保持强引用
 
-    def webLogin(self, cookies=None, on_complete=None):
+    def webLogin(self, cookies=None, on_complete=None, *, interactive=True):
         u = f"https://joint.vivo.com.cn/h5/union/get?gamePackage={self.gamePackage}"
         self.cookies = cookies or {}
 
@@ -136,7 +136,7 @@ class VivoLogin:
                 r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
                 j = r.json()
                 if j.get("code") == 0:
-                    result = j.get("data")
+                    result = j.get("data") or False
                     if on_complete is not None:
                         on_complete(result)
                         return
@@ -144,6 +144,11 @@ class VivoLogin:
                 self.logger.warning("本地cookies登录失败，拉起浏览器重新登录")
             except Exception as e:
                 self.logger.warning(f"本地cookies请求异常，拉起浏览器重新登录: {e}")
+
+        if not interactive:
+            if on_complete is not None:
+                on_complete(False)
+            return False
 
         login_url = f"https://passport.vivo.com.cn/#/login?client_id=67&redirect_uri=https%3A%2F%2Fjoint.vivo.com.cn%2Fgame-subaccount-login%3Ffrom%3Dlogin"
         miBrowser = VivoBrowser(self.gamePackage)
@@ -165,15 +170,21 @@ class VivoLogin:
                             r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
                             j = r.json()
                             if j.get("code") == 0:
-                                on_complete(j.get("data"))
+                                on_complete(j.get("data") or False)
                                 return
-                        on_complete(None)
+                        on_complete(None if result is None or result == "" else False)
                     except Exception:
                         self.logger.exception("Vivo异步登录处理失败")
-                        on_complete(None)
+                        on_complete(False)
                 miBrowser._async_completion_callback = _on_async_done
             return None
 
+        def _complete(result):
+            if on_complete is not None:
+                on_complete(result)
+            return result
+        if not resp:
+            return _complete(None)
         try:
             if resp.get("code") == 0:
                 # 浏览器退出后再读取Cookies数据库，显著降低Windows文件锁概率
@@ -182,15 +193,15 @@ class VivoLogin:
                 r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
                 j = r.json()
                 if j.get("code") == 0:
-                    return j.get("data")
+                    return _complete(j.get("data") or False)
                 self.logger.error(j.get("msg"))
-                return None
+                return _complete(False)
             else:
                 self.logger.error(resp.get("msg"))
-                return None
+                return _complete(False)
         except:
             self.logger.error(f"登录失败，原始响应{resp}")
-            return None
+            return _complete(False)
 
     def loginSubAccount(self, subOpenId):
         data = {

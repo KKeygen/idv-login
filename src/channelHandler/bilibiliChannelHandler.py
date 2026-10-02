@@ -110,7 +110,7 @@ class bilibiliChannel(channelmgr.channel):
         if not data:
             return False
         access_key = str(data.get("access_key") or "").strip()
-        if not access_key:
+        if not access_key or not data.get("uid"):
             return False
         # 检查过期时间（留 5 分钟安全余量）
         expires = data.get("expires")
@@ -144,11 +144,15 @@ class bilibiliChannel(channelmgr.channel):
 
             self.logger.info("Bilibili auto.login 刷新成功")
             # auto.login 返回根级字段（uid/uname/face等），不含 access_key/expires
+            refreshed_data = dict(data)
             for key in ("uid", "uname", "face"):
                 if key in resp and resp[key] is not None:
-                    data[key] = resp[key]
+                    refreshed_data[key] = resp[key]
             # access_key 验证通过，延长过期时间 30 天
-            data["expires"] = int(time.time()) + 30 * 86400
+            if not refreshed_data.get("uid"):
+                return False
+            refreshed_data["expires"] = int(time.time()) + 30 * 86400
+            data.update(refreshed_data)
             return True
         except Exception as e:
             self.logger.error(f"Bilibili auto.login 请求异常: {e}")
@@ -166,96 +170,77 @@ class bilibiliChannel(channelmgr.channel):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
 
         def _process_resp(resp):
-            if not resp:
-                self.loginResp = None
+            if resp is None:
+                return None
+            if not isinstance(resp, dict):
+                return False
+            data = resp.get("data", resp)
+            if not isinstance(data, dict) or not data.get("uid") or not data.get("access_key"):
                 return False
             self.loginResp = resp
-            data = self._get_login_data()
-            if data:
-                uname = str(data.get("uname") or "")
-                if uname:
-                    self.name = uname
+            uname = str(data.get("uname") or "")
+            if uname:
+                self.name = uname
             return True
 
-        if login_method == "qr":
-            # 二维码登录：阻塞式，需要在工作线程调用
+        def _on_done(resp):
+            result = _process_resp(resp)
             if on_complete is not None:
-                self.logger.warning("QR 登录不支持 on_complete 回调，将同步执行")
+                on_complete(result)
+            return result
+
+        if login_method == "qr":
             resp = self.biliLogin.qr_login()
-            if resp is None and self.biliLogin._qr_cancelled:
-                return None  # 用户主动取消
-            return _process_resp(resp)
+            if resp is None and not self.biliLogin._qr_cancelled:
+                resp = False
+            result = _on_done(resp)
+            return None if on_complete is not None else result
 
-        # 网页 OTP 登录
         if on_complete is not None:
-            def _on_done(resp):
-                if resp is None:
-                    on_complete(None)  # 浏览器关闭 / 用户取消
-                    return
-                try:
-                    success = _process_resp(resp)
-                except Exception:
-                    self.logger.exception("Bilibili 异步登录处理失败")
-                    success = False
-                on_complete(success)
-
             self.biliLogin.web_login(on_complete=_on_done)
-            return
-
-        resp = self.biliLogin.web_login()
-        return _process_resp(resp)
+            return None
+        return _on_done(self.biliLogin.web_login())
 
     # ── UniSDK 数据 ──────────────────────────────────────────
 
-    def get_session(self, user_id: str, game_id: str):
-        if not self.is_token_valid() and not self.validate_token_online():
-            self.request_user_login()
-        data = self._get_login_data()
-        if not data:
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(user_id, data.get("uid"), data.get("access_key"))
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
+        game_id = game_id or self.game_id
         if not game_id:
-            game_id = self.game_id
-        if not game_id:
-            raise RuntimeError("bilibili 缺少 game_id")
-
+            if on_complete is not None:
+                on_complete(False)
+                return None
+            return False
         short_game_id = getShortGameId(game_id)
 
-        if not self.is_token_valid():
-            # token 过期或不存在：先尝试 auto.login 刷新
-            has_key = bool(
-                self._get_login_data()
-                and str(self._get_login_data().get("access_key") or "").strip()
-            )
-            refreshed = has_key and self.validate_token_online()
+        def _deliver(result):
+            if on_complete is not None:
+                on_complete(result)
+                return None
+            return result
 
-            if not refreshed:
-                # 刷新失败，需要重新浏览器登录
-                if on_complete is not None:
-                    def _on_login_done(success):
-                        if success and self.is_token_valid():
-                            try:
-                                result = self._build_unisdk_result(short_game_id)
-                                on_complete(result)
-                            except Exception as e:
-                                self.logger.error(f"Bilibili UniSDK error: {e}")
-                                on_complete(None)
-                        else:
-                            on_complete(None)
-                    # 异步上下文使用网页登录（QR 会阻塞主线程）
-                    self.request_user_login(on_complete=_on_login_done, login_method="web")
-                    return None
-                else:
-                    self.request_user_login()
+        def _build():
+            try:
+                return self._build_unisdk_result(short_game_id)
+            except Exception:
+                self.logger.exception("生成渠道登录数据失败")
+                return False
 
-        result = self._build_unisdk_result(short_game_id)
+        def _on_login_done(success):
+            if success is not True:
+                return _deliver(None if success is None else False)
+            return _deliver(_build() if self.is_token_valid() else False)
+
+        if self.is_token_valid():
+            return _deliver(_build())
+        if bool(self._get_login_data() and self._get_login_data().get("access_key")) and self.validate_token_online():
+            return _deliver(_build() if self.is_token_valid() else False)
+        if not interactive:
+            return _deliver(False)
         if on_complete is not None:
-            on_complete(result)
+            self.request_user_login(on_complete=_on_login_done, login_method="web")
             return None
-        return result
+        return _on_login_done(self.request_user_login())
 
     def _build_unisdk_result(self, short_game_id: str) -> Optional[Dict[str, Any]]:
         data = self._get_login_data()

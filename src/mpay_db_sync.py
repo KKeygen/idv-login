@@ -4,12 +4,10 @@ from __future__ import annotations
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-import copy
 import ctypes
 import json
 import os
 from pathlib import Path
-import sys
 import threading
 import traceback
 from urllib.parse import unquote
@@ -74,21 +72,14 @@ def locked_database(path: Path):
     """
     with path.open("r+b", buffering=0) as file:
         file.seek(SQLITE_PENDING_BYTE)
-        if sys.platform == "win32":
-            import msvcrt
-            msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 512)
-        else:
-            import fcntl
-            fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB, 512, SQLITE_PENDING_BYTE)
+        import msvcrt
+        msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 512)
         try:
             file.seek(0)
             yield file
         finally:
             file.seek(SQLITE_PENDING_BYTE)
-            if sys.platform == "win32":
-                msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 512)
-            else:
-                fcntl.lockf(file, fcntl.LOCK_UN, 512, SQLITE_PENDING_BYTE)
+            msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 512)
 
 
 def credentials_from_packet(packet: dict, game_id: str) -> tuple[str, dict]:
@@ -98,7 +89,7 @@ def credentials_from_packet(packet: dict, game_id: str) -> tuple[str, dict]:
         raise ValueError("Refreshed credentials belong to a different game")
     if str(sauth["sdkuid"]) != str(packet["user_id"]) or sauth["login_channel"] != packet["login_channel"]:
         raise ValueError("Refreshed credentials have inconsistent channel/UID")
-    if not packet["token"] or not sauth["sessionid"]:
+    if not packet["user_id"] or not packet["token"] or not sauth["sessionid"]:
         raise ValueError("Refreshed credentials contain an empty session")
     return str(packet["user_id"]), {
         "token": packet["token"],
@@ -162,35 +153,21 @@ class MpayDBSync:
             self.bindings.setdefault(record.uuid, {})[getShortGameId(game_id)] = str(user["id"])
             self.save_bindings()
 
-    def adopt_existing_bindings(self):
-        """Migrate the known SDK mapping only when that UID really exists in DB."""
-        for game_id, channels in genv.get("native_channel_accounts", {}).items():
-            paths = self.paths(game_id)
-            if not paths:
-                continue
-            uids = set().union(*(self.operate(p, "list_uids") for p in paths))
-            for identities in channels.values():
-                for uid, uuid in identities.items():
-                    if uid in uids and self.manager.query_channel(uuid) is not None:
-                        self.bindings.setdefault(uuid, {}).setdefault(game_id, uid)
-        for record in self.manager.channels:
-            if record.record_source == "scan" and record.user_info.get("id"):
-                uid = str(record.user_info["id"])
-                game_id = getShortGameId(record.ext_info["from_game_id"])
-                if any(uid in self.operate(path, "list_uids") for path in self.paths(game_id)):
-                    self.bindings.setdefault(record.uuid, {}).setdefault(game_id, uid)
-        self.save_bindings()
-
     def reconcile_game_deletions(self):
         """Only remembered, previously synchronized records can be deleted here."""
         with self.lock:
+            game_uids = {}
             for uuid, games in list(self.bindings.items()):
                 for game_id, uid in list(games.items()):
-                    paths = self.paths(game_id)
-                    if not paths:
+                    if game_id not in game_uids:
+                        paths = self.paths(game_id)
+                        game_uids[game_id] = (set().union(
+                            *(self.operate(p, "list_uids") for p in paths)
+                        ) if paths else None)
+                    uids = game_uids[game_id]
+                    if uids is None:
                         # Missing DB is not proof the user removed this account.
                         continue
-                    uids = set().union(*(self.operate(p, "list_uids") for p in paths))
                     if uid not in uids:
                         self.logger.info("[mpay-db] 游戏已删除关联记录，同步删除工具账号")
                         self.manager.delete(uuid)
@@ -202,13 +179,6 @@ class MpayDBSync:
                 for path in self.paths(game_id):
                     self.operate(path, "delete_uid", uid=uid)
             self.bindings.pop(uuid, None)
-            accounts = genv.get("native_channel_accounts", {})
-            for channels in accounts.values():
-                for identities in channels.values():
-                    for uid, record_uuid in list(identities.items()):
-                        if record_uuid == uuid:
-                            del identities[uid]
-            genv.set("native_channel_accounts", accounts, True)
             self.save_bindings()
 
     def rename_record(self, uuid: str, name: str):
@@ -218,11 +188,12 @@ class MpayDBSync:
                     if uid in self.operate(path, "list_uids"):
                         self.operate(path, "rename_uid", uid=uid, name=name)
 
-    def write_packet(self, record, game_id: str, packet: dict):
-        sdkuid, credentials = credentials_from_packet(packet, game_id)
+    def write_packet(self, record, game_id: str, sdkuid: str, credentials: dict, *, new=False):
         with self.lock:
-            if self.manager.query_channel(record.uuid) is not record:
-                return  # The user deleted/replaced it during a network renewal.
+            if self.stopping:
+                return False
+            if not new and self.manager.query_channel(record.uuid) is not record:
+                return False  # The user deleted/replaced it during a network renewal.
             paths = self.paths(game_id)
             if not paths:
                 raise FileNotFoundError("请先启动该游戏一次，初始化 MPay 数据库")
@@ -239,41 +210,44 @@ class MpayDBSync:
                              create=create, machine_identifier=self.identity)
             self.bindings.setdefault(record.uuid, {})[getShortGameId(game_id)] = uid
             self.save_bindings()
-            self.manager.remember_native_account(record, packet, game_id)
             self.logger.info("[mpay-db] 凭证已写入游戏账号库")
+            return True
+
+    def packet_credentials(self, record, game_id: str, packet):
+        if packet is None or packet is False:
+            return packet
+        if not isinstance(packet, dict):
+            raise ValueError("渠道没有返回有效续期凭证")
+        if packet.get("login_channel") != record.channel_name:
+            raise ValueError("渠道凭证与账号渠道不一致")
+        return credentials_from_packet(packet, game_id)
+
+    def prepare_credentials(self, record, game_id: str):
+        packet = record.get_uniSdk_data(game_id, interactive=False)
+        return self.packet_credentials(record, game_id, packet)
 
     def renew(self, record, game_id: str):
-        # Reuse each channel's one correct signing/SESSION implementation.
-        # Startup renewal must not open a browser if the long-lived token expired.
         if record.record_source != "manual":
-            self.logger.info("[mpay-db] 扫码导入记录不具备渠道续期凭证，保留其原有登录路径")
             return
-        if not record.is_token_valid():
-            self.mark_expired(record)
-            return
-        renewed = copy.copy(record)
-        def login_required(*args, **kwargs):
-            raise ValueError("渠道续期需要用户重新登录")
-        renewed.request_user_login = login_required
+        name = record.name
         try:
-            packet = renewed.get_uniSdk_data(game_id)
-            if not packet:
-                raise ValueError("渠道没有返回续期凭证")
-            credentials_from_packet(packet, game_id)
+            prepared = self.prepare_credentials(record, game_id)
+            if prepared is None or prepared is False:
+                raise ValueError("渠道续期需要用户重新登录")
         except Exception as error:
+            record.name = name
             log_failure(self.logger, "[mpay-db] 渠道续期失败", error)
             self.mark_expired(record)
             return
-        # Keep the refreshed channel state in the normal tool cache.
         with self.lock:
             if self.manager.query_channel(record.uuid) is not record:
                 return
-            state = renewed.__dict__.copy()
-            state.pop("request_user_login", None)
-            state["name"] = record.name
-            record.__dict__.update(state)
-            self.manager.save_records()
-            self.write_packet(record, game_id, packet)
+            record.name = name
+            try:
+                if self.write_packet(record, game_id, *prepared):
+                    self.manager.save_records()
+            except Exception as error:
+                log_failure(self.logger, "[mpay-db] 数据库同步失败，账号未删除", error)
 
     def mark_expired(self, record):
         with self.lock:
@@ -286,7 +260,6 @@ class MpayDBSync:
             self.logger.warning("[mpay-db] 续期失败，关联账号已标记为失效")
 
     def refresh_startup(self):
-        self.adopt_existing_bindings()
         # Check first: renewing first would resurrect a game-side deletion.
         self.reconcile_game_deletions()
         for record in list(self.manager.channels):
@@ -300,15 +273,48 @@ class MpayDBSync:
                 except (OSError, RuntimeError) as error:
                     log_failure(self.logger, "[mpay-db] 数据库同步失败，账号未删除", error)
 
-    def created(self, record):
-        if not self.stopping:
-            future = self.worker.submit(self.renew, record, record.game_id)
-            def completed(result):
-                try:
-                    result.result()
-                except Exception as error:
-                    log_failure(self.logger, "[mpay-db] 新账号同步失败", error)
-            future.add_done_callback(completed)
+    def created(self, record, on_complete=None):
+        """Complete the interactive packet first, then write on the single worker."""
+        def packet_ready(packet):
+            try:
+                prepared = self.packet_credentials(record, record.game_id, packet)
+                if self.stopping:
+                    result = False
+                elif prepared is None or prepared is False:
+                    result = prepared
+                else:
+                    future = self.worker.submit(
+                        self.write_packet, record, record.game_id, *prepared, new=True
+                    )
+                    if on_complete:
+                        import app_state
+                        def written(done):
+                            try:
+                                result = done.result()
+                            except Exception as error:
+                                log_failure(self.logger, "[mpay-db] 新账号同步失败", error)
+                                result = False
+                            app_state.run_on_main_thread(lambda: on_complete(result))
+                        future.add_done_callback(written)
+                        return None
+                    return future.result()
+            except Exception as error:
+                log_failure(self.logger, "[mpay-db] 新账号同步失败", error)
+                result = False
+            if on_complete:
+                on_complete(result)
+            return result
+
+        if self.stopping:
+            if on_complete:
+                on_complete(False)
+            return False
+        if on_complete:
+            record.get_uniSdk_data(
+                record.game_id, on_complete=packet_ready, interactive=True
+            )
+            return None
+        return packet_ready(record.get_uniSdk_data(record.game_id, interactive=True))
 
     def shutdown(self):
         self.stopping = True

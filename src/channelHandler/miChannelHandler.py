@@ -87,70 +87,64 @@ class miChannel(channelmgr.channel):
 
     def request_user_login(self, on_complete=None):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
-
-        if on_complete is not None:
-            def _on_done(_data):
-                previous_oauth = self.oAuthData
-                self.oAuthData = self.miLogin.oauthData
-                self._update_oauth_name(previous_oauth)
-                self.account_type = self.miLogin.account_type
-                self.logger.info(f"小米登录类型：{self.account_type}")
-                on_complete(self.oAuthData is not None)
-            self.miLogin.webLogin(on_complete=_on_done)
-            return
-
-        self.miLogin.webLogin()
-        previous_oauth = self.oAuthData
-        self.oAuthData = self.miLogin.oauthData
-        self._update_oauth_name(previous_oauth)
-        self.account_type = self.miLogin.account_type
-        self.logger.info(f"小米登录类型：{self.account_type}")
-        return self.oAuthData != None
-
-    def _get_session(self, on_complete=None):
-        """获取 session 数据，支持异步模式。
-        
-        Args:
-            on_complete: 异步回调函数，接收 (appAccountId, session) 元组或 None
-        """
+        def _apply(data):
+            if data is None or data is False:
+                return data
+            if not isinstance(data, dict) or not data.get("uuid") or not data.get("st"):
+                return False
+            previous_oauth = self.oAuthData
+            self.oAuthData = data
+            self._update_oauth_name(previous_oauth)
+            self.account_type = self.miLogin.account_type
+            return True
         try:
-            data = self.miLogin.initAccountData()
-            result = (data["appAccountId"], data["session"])
             if on_complete is not None:
-                on_complete(result)
+                self.miLogin.webLogin(on_complete=lambda data: on_complete(_apply(data)))
                 return None
-            return result
-        except Exception as e:
-            self.logger.error(f"Failed to get session data {e}")
-            self.oAuthData = None
-            
+            return _apply(self.miLogin.webLogin())
+        except Exception:
+            self.logger.error("渠道登录未完成")
             if on_complete is not None:
-                # 异步模式：重新登录后再获取 session
+                on_complete(False)
+            return False
+
+    def _get_session(self, on_complete=None, *, interactive=True):
+        def _read():
+            data = self.miLogin.initAccountData()
+            if not isinstance(data, dict) or not data.get("appAccountId") or not data.get("session"):
+                raise ValueError("小米未返回有效 session")
+            return data["appAccountId"], data["session"]
+        try:
+            result = _read()
+        except Exception:
+            if not interactive:
+                result = False
+            elif on_complete is not None:
                 def _on_relogin_done(success):
-                    if success:
-                        try:
-                            data = self.miLogin.initAccountData()
-                            if data is None:
-                                on_complete(None)
-                            else:
-                                on_complete((data["appAccountId"], data["session"]))
-                        except Exception as e2:
-                            self.logger.error(f"Failed to get session data after re-login: {e2}")
-                            on_complete(None)
-                    else:
-                        on_complete(None)
+                    if success is not True:
+                        on_complete(success)
+                        return
+                    try:
+                        on_complete(_read())
+                    except Exception:
+                        on_complete(False)
                 self.request_user_login(on_complete=_on_relogin_done)
                 return None
-            
-            # 同步模式
-            self.request_user_login()
-            data = self.miLogin.initAccountData()
-            if data is None:
-                raise Exception("Failed to get session data after re-login")
-            return data["appAccountId"], data["session"]
+            else:
+                success = self.request_user_login()
+                if success is not True:
+                    return success
+                try:
+                    result = _read()
+                except Exception:
+                    result = False
+        if on_complete is not None:
+            on_complete(result)
+            return None
+        return result
 
     def is_token_valid(self):
-        if self.oAuthData is None:
+        if not isinstance(self.oAuthData, dict) or not self.oAuthData.get("uuid") or not self.oAuthData.get("st"):
             self.logger.info(f"Token is invalid for {self.name}")
             return False
         return True
@@ -201,11 +195,7 @@ class miChannel(channelmgr.channel):
         res["realname"] = realname
         return json.dumps(res)
 
-    def get_session(self, user_id: str, game_id: str):
-        account_id, session = self._get_session()
-        return self._session_result(user_id, account_id, session)
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         """获取 UniSDK 登录数据，支持异步模式。
         
         当 token 过期需要重新登录时，会异步弹出浏览器窗口。
@@ -256,10 +246,10 @@ class miChannel(channelmgr.channel):
 
         def _on_session_ready(session_data):
             """session 准备好后的回调"""
-            if session_data is None:
+            if session_data is None or session_data is False:
                 if on_complete:
-                    on_complete(None)
-                return None
+                    on_complete(session_data)
+                return session_data
             try:
                 appAccountId, session = session_data
                 result = _build_unisdk_data(appAccountId, session)
@@ -269,34 +259,44 @@ class miChannel(channelmgr.channel):
             except Exception as e:
                 self.logger.error(f"构建 UniSDK 数据失败: {e}")
                 if on_complete:
-                    on_complete(None)
-                return None
+                    on_complete(False)
+                return False
 
         # 先检查 token
         if not self.is_token_valid():
+            if not interactive:
+                if on_complete is not None:
+                    on_complete(False)
+                return False
             if on_complete is not None:
                 # 异步模式：先完成登录
                 def _on_login_done(success):
-                    if success:
-                        self._get_session(on_complete=_on_session_ready)
+                    if success is True:
+                        self._get_session(on_complete=_on_session_ready, interactive=interactive)
                     else:
-                        on_complete(None)
+                        on_complete(success)
                 self.request_user_login(on_complete=_on_login_done)
                 return None
             else:
                 # 同步模式
-                self.request_user_login()
-                if not self.is_token_valid():
-                    return None
+                success = self.request_user_login()
+                if success is not True:
+                    return success
 
         # 获取 session（可能需要异步重新登录）
         if on_complete is not None:
-            self._get_session(on_complete=_on_session_ready)
+            self._get_session(on_complete=_on_session_ready, interactive=interactive)
             return None
         
         # 同步模式
-        session_data = self._get_session()
-        if session_data is None:
-            return None
+        session_data = self._get_session(interactive=interactive)
+        if session_data is None or session_data is False:
+            return session_data
         appAccountId, session = session_data
-        return _build_unisdk_data(appAccountId, session)
+        try:
+            return _build_unisdk_data(appAccountId, session)
+        except Exception:
+            self.logger.error("构建渠道登录数据失败")
+            if on_complete is not None:
+                on_complete(False)
+            return False

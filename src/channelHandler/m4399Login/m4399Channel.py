@@ -355,8 +355,8 @@ class M4399Login:
         if not login_url:
             self.logger.error("无法获取 4399 登录页 URL")
             if on_complete is not None:
-                on_complete(None)
-            return None
+                on_complete(False)
+            return False
 
         browser = M4399Browser(login_url)
         browser.set_url(login_url)
@@ -369,27 +369,32 @@ class M4399Login:
                 def _on_async_done(done_browser):
                     self._active_browser = None
                     try:
-                        self._capture_browser_session(done_browser)
                         result = done_browser.result
-                        if isinstance(result, dict) and isinstance(
-                            result.get("result"), dict
-                        ):
+                        if self._successful_login_response(result) and result["result"].get("access_token"):
+                            self._capture_browser_session(done_browser)
                             self.login_resp = result
                             on_complete(result)
                         else:
-                            on_complete(None)
+                            on_complete(None if not result else False)
                     except Exception:
                         self.logger.exception("4399 异步登录回调失败")
-                        on_complete(None)
+                        on_complete(False)
 
                 browser._async_completion_callback = _on_async_done
             return None
 
-        self._capture_browser_session(browser)
-        if isinstance(resp, dict) and isinstance(resp.get("result"), dict):
+        if self._successful_login_response(resp) and resp["result"].get("access_token"):
+            self._capture_browser_session(browser)
             self.login_resp = resp
+            if on_complete is not None:
+                on_complete(resp)
+                return None
             return resp
-        return None
+        result = None if not resp else False
+        if on_complete is not None:
+            on_complete(result)
+            return None
+        return result
 
 
 class M4399Browser(WebBrowser):

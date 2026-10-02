@@ -481,6 +481,7 @@ class HuaweiLogin:
             if self._qr_cancelled:
                 self.logger.info("华为扫码登录已取消")
                 self._update_qrcode_cache("cancelled")
+                return None
             else:
                 self.logger.warning("华为扫码登录超时")
                 self._update_qrcode_cache("expired")
@@ -538,8 +539,7 @@ class HuaweiLogin:
                 def _on_async_done(b):
                     self._active_browser = None
                     try:
-                        self._exchange_st(qr_session, qr_token)
-                        success = self.serviceToken is not None
+                        success = self._exchange_st(qr_session, qr_token) if b.result else None
                     except Exception:
                         self.logger.exception("华为异步登录回调失败")
                         success = False
@@ -548,8 +548,10 @@ class HuaweiLogin:
             return None
 
         # 同步模式：run() 已阻塞至登录完成
-        self._exchange_st(qr_session, qr_token)
-        return self.serviceToken is not None
+        result = None if not resp else self._exchange_st(qr_session, qr_token)
+        if on_complete is not None:
+            on_complete(result)
+        return result
 
     def _exchange_st(self, qr_session, qr_token):
         """URL 已跳转 loginSuccess，poll（最多5次）驱动状态机取结果并换 ST。"""
@@ -560,15 +562,16 @@ class HuaweiLogin:
                 break
             time.sleep(0.5)
         if not (isinstance(r, dict) and r.get("userID")):
-            self.logger.error(f"登录成功后轮询未取到扫码结果: {r}")
-            return
+            self.logger.error(f"登录成功后轮询未取到扫码结果")
+            return False
         st, _resp = qr_session.login_by_qrcode(r, self._device_uuid())
         if not st:
             self.logger.error("华为登录换 ST 失败")
-            return
+            return False
         self.serviceToken = st
         self.nickName = self._extract_nick_name(_resp)
         self.logger.info("华为登录成功，已获取 ST")
+        return True
 
     def _extract_nick_name(self, xml_content) -> str:
         return parse_xml_text(xml_content, "nickName")

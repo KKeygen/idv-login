@@ -157,14 +157,15 @@ class qihooChannel(channelmgr.channel):
             )
             return False
 
-        self.userInfo = data
         cred = QihooLogin.extract_credentials(data)
+        if not cred["qid"] or not cred["access_token"]:
+            return False
+        self.userInfo = data
         try:
             expires_in = int(cred.get("expires_in") or 0)
         except (TypeError, ValueError):
             expires_in = 0
-        if expires_in > 0:
-            self.token_expire_time = int(time.time()) + expires_in
+        self.token_expire_time = int(time.time()) + expires_in if expires_in > 0 else 0
 
         # 显示名优先用昵称，其次用户名
         display = (data.get("nickname") or "").strip() or (data.get("username") or "").strip()
@@ -178,7 +179,7 @@ class qihooChannel(channelmgr.channel):
         )
         return True
 
-    def request_user_login(self, on_complete=None):
+    def request_user_login(self, on_complete=None, *, interactive=True):
         """请求用户登录。先用本地 cookie 复验；失败则拉起浏览器。"""
         genv.set("GLOB_LOGIN_UUID", self.uuid)
 
@@ -187,12 +188,13 @@ class qihooChannel(channelmgr.channel):
                 if on_complete is not None:
                     on_complete(None)
                     return
-                return False
+                return None
             try:
                 # 浏览器登录后 Q/T cookie 由 QihooLogin 持有，必须在此回写，
                 # 否则 token 过期后没有 cookie 可用，只能再次弹浏览器。
-                self._sync_cookie_from_login()
                 success = self._store_result(result)
+                if success:
+                    self._sync_cookie_from_login()
             except Exception:
                 self.logger.exception(f"{TAG} 异步登录处理失败")
                 success = False
@@ -202,16 +204,13 @@ class qihooChannel(channelmgr.channel):
             return success
 
         result = self.qihooLogin.web_login(
-            self.qt_cookie, on_complete=_on_done if on_complete else None
+            self.qt_cookie, on_complete=_on_done if on_complete else None, interactive=interactive
         )
         if on_complete is not None:
             # 异步模式：web_login 返回 None，结果由回调给出
             return None
 
-        if result and result.get("ok"):
-            self._sync_cookie_from_login()
-            return self._store_result(result)
-        return False
+        return _on_done(result)
 
     def _sync_cookie_from_login(self) -> None:
         """把 QihooLogin 里最新的 Q/T cookie 回写到本对象（用于持久化）。"""
@@ -222,46 +221,40 @@ class qihooChannel(channelmgr.channel):
         self.qt_cookie = new
 
     # ── UniSDK 数据 ──────────────────────────────────────────
-    def get_session(self, user_id: str, game_id: str):
-        if not self._has_valid_token():
-            self.request_user_login()
-        credentials = self._credentials()
-        return self._session_result(
-            user_id, credentials["qid"], credentials["access_token"],
-        )
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
+        game_id = game_id or self.game_id
         if not game_id:
-            game_id = self.game_id
-        if not game_id:
-            raise RuntimeError("360_assistant 缺少 game_id")
-
+            if on_complete is not None:
+                on_complete(False)
+                return None
+            return False
         short_game_id = getShortGameId(game_id)
 
-        if not self._has_valid_token():
-            self.logger.debug(f"{TAG} access_token 不可用，尝试用 cookie 复验登录")
+        def _deliver(result):
             if on_complete is not None:
-
-                def _on_login_done(success):
-                    if success and self._has_valid_token():
-                        try:
-                            on_complete(self._build_unisdk_result(short_game_id))
-                        except Exception as e:
-                            self.logger.error(f"{TAG} 生成登录数据失败: {e}")
-                            on_complete(None)
-                    else:
-                        on_complete(None)
-
-                self.request_user_login(on_complete=_on_login_done)
+                on_complete(result)
                 return None
-            self.request_user_login()
+            return result
 
-        result = self._build_unisdk_result(short_game_id)
+        def _build():
+            try:
+                return self._build_unisdk_result(short_game_id)
+            except Exception:
+                self.logger.exception("生成渠道登录数据失败")
+                return False
+
+        def _on_login_done(success):
+            if success is not True:
+                return _deliver(None if success is None else False)
+            return _deliver(_build() if self._has_valid_token() else False)
+
+        if self._has_valid_token():
+            return _deliver(_build())
         if on_complete is not None:
-            on_complete(result)
+            self.request_user_login(on_complete=_on_login_done, interactive=interactive)
             return None
-        return result
+        return _on_login_done(self.request_user_login(interactive=interactive))
 
     def _build_unisdk_result(self, short_game_id: str) -> Optional[Dict[str, Any]]:
         cred = self._credentials()

@@ -495,7 +495,9 @@ class LocalRequestHandler:
             success = app_state.channels_helper.manual_import(
                 args.get("channel", ""), args.get("game_id", "")
             )
-            return self._json_response(200, {"success": success})
+            return self._json_response(200, {
+                "success": success is True, "cancelled": success is None
+            })
 
     def _import_status(self, args, body, method):
         task_id = args.get("task_id", "")

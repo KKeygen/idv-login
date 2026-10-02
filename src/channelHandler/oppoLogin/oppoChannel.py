@@ -320,13 +320,14 @@ class OppoLogin:
                         if isinstance(result, dict) and result:
                             on_complete(result)
                         else:
-                            on_complete(None)
+                            on_complete(None if result is None or result == "" else False)
                     except Exception:
                         self.logger.exception("OPPO异步登录处理失败")
-                        on_complete(None)
+                        on_complete(False)
                 browser._async_completion_callback = _on_async_done
             return None
 
-        if isinstance(resp, dict) and resp:
-            return resp
-        return None
+        result = resp if isinstance(resp, dict) and resp else (None if resp is None or resp == "" else False)
+        if on_complete is not None:
+            on_complete(result)
+        return result

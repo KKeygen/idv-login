@@ -184,7 +184,7 @@ jobs:
       - name: Build with PyInstaller
         run: |
           NAME="idv-login-${{github.ref_name}}-mac"
-          pyinstaller -F src/main.py -n "$NAME" -i assets/icon.ico --add-data "src/resources:resources" --version-file assets/version.txt
+          pyinstaller -F src/main.py -n "$NAME" -i assets/icon.ico --version-file assets/version.txt
         shell: bash
 
       - name: Archive production artifacts

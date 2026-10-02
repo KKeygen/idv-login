@@ -32,6 +32,7 @@ import struct
 import subprocess
 import sys
 import threading
+from urllib.parse import urlsplit
 
 from envmgr import genv
 from logutil import setup_logger
@@ -777,16 +778,18 @@ class MitmProxyManager:
     - "compat": Reverse proxy on port 443 for DNS-based traffic interception
     """
 
-    def __init__(self, *, addon, port=DEFAULT_PROXY_PORT, mode="regular"):
+    def __init__(self, *, addon, port=DEFAULT_PROXY_PORT, mode="regular", debug=False):
         """
         Args:
             addon: The mitmproxy addon to use
             port: Proxy listen port (used in regular mode)
             mode: "regular" for HTTP proxy, "compat" for reverse proxy on 443
+            debug: Use mitmweb (Web UI) instead of the headless DumpMaster
         """
         self.addon = addon
         self.port = port
         self.mode = mode
+        self.debug = bool(debug)
         self._thread: threading.Thread | None = None
         self._master = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -897,7 +900,6 @@ class MitmProxyManager:
         """Async entry point – DumpMaster needs a *running* event loop."""
         import logging as _logging
         from mitmproxy.options import Options
-        from mitmproxy.tools.dump import DumpMaster
 
         # 抑制 mitmproxy 自身的控制台日志输出
         _logging.getLogger("mitmproxy").setLevel(_logging.ERROR)
@@ -928,16 +930,27 @@ class MitmProxyManager:
                 ssl_insecure=False,  # DO verify upstream certs
             )
 
-        self._master = DumpMaster(opts, with_dumper=False)
+        if self.debug:
+            # 开发调试：启用 mitmweb 提供 Web 代理界面（默认 http://127.0.0.1:8081/）
+            from mitmproxy.tools.web.master import WebMaster
+            self._master = WebMaster(opts, with_termlog=False)
+            logger.info(
+                f"已启用 mitmweb 调试界面：http://{self._master.options.web_host}:"
+                f"{self._master.options.web_port}/"
+            )
+        else:
+            from mitmproxy.tools.dump import DumpMaster
+            self._master = DumpMaster(opts, with_dumper=False)
         if self.mode == "compat":
             # connection_strategy is registered by mitmproxy's built-in
             # proxyserver addon during DumpMaster construction, so it cannot
             # be passed to Options(...) above.  Update it only after the
             # option exists.  This works with both mitmproxy 10.2 and 11.1.
-            self._master.options.update(connection_strategy="lazy")
-            # Route by the original SNI before the MPay addon classifies or
-            # rewrites the request.  Otherwise requests for another upstream
-            # look like DOMAIN_TARGET and may have their signed body changed.
+            self._master.options.update(
+                connection_strategy="lazy", keep_host_header=True
+            )
+            # Preserve and route by the original HTTP authority before the
+            # business addon classifies or rewrites the request.
             self._master.addons.add(_CompatModeAddon())
         self._master.addons.add(self.addon)
         self._master.addons.add(_ResponseLogAddon())
@@ -1030,55 +1043,35 @@ class _CompatModeAddon:
     此 addon 负责根据 Host 头将请求路由到正确的上游服务器。
     """
 
-    @staticmethod
-    def _normalize_host(value):
-        host = str(value or "").strip().lower().rstrip(".")
-        if not host:
-            return ""
-        if host.startswith("["):
-            return host.split("]", 1)[0] + "]"
-        return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    def requestheaders(self, flow):
+        from mitmproxy import http
 
-    def request(self, flow):
-
-        # 获取目标域名配置
-        from envmgr import genv
-        target_domains = {
-            str(domain).strip()
-            for domain in (
-                str(genv.get("DOMAIN_TARGET", "service.mkey.163.com")).lower(),
-                str(genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com")).lower(),
-                str(genv.get("DOMAIN_TARGET_AUTH_STATUS", "")).lower(),
+        # keep_host_header preserves Host / HTTP/2 :authority.  request.host
+        # already contains the reverse default, so it is never a fallback.
+        authority = flow.request.host_header
+        if not authority:
+            authority = getattr(flow.client_conn, "sni", "")
+        try:
+            if not authority or any(c.isspace() or c in "/?#@\\" for c in authority):
+                raise ValueError("Invalid authority")
+            target = urlsplit("//" + authority)
+            host = (target.hostname or "").lower().rstrip(".")
+            port = target.port if target.port is not None else 443
+            if not host or authority.endswith(":") or not 1 <= port <= 65535:
+                raise ValueError("Invalid authority")
+        except ValueError:
+            flow.response = http.Response.make(
+                400, b"Missing or invalid upstream authority",
+                {"Content-Type": "text/plain"},
             )
-            if str(domain or "").strip()
-        }
-
-        # Reverse mode has already replaced request.host with the default
-        # upstream by the time request hooks run.  client_conn.sni still holds
-        # the hostname from the original TLS ClientHello, so prefer it over
-        # the (possibly rewritten) Host header.
-        candidates = (
-            getattr(flow.client_conn, "sni", ""),
-            flow.request.host_header,
-            flow.request.host,
-        )
-        host = next(
-            (
-                normalized
-                for candidate in candidates
-                if (normalized := self._normalize_host(candidate)) in target_domains
-            ),
-            "",
-        )
-        if not host:
             return
 
-        upstream = (host, 443)
+        upstream = (host, port)
         if flow.server_conn.address != upstream:
             flow.server_conn.address = upstream
         flow.server_conn.sni = host
         flow.request.host = host
-        flow.request.port = 443
+        flow.request.port = port
         flow.request.scheme = "https"
 
     def responseheaders(self, flow):
