@@ -1,0 +1,316 @@
+"""Account lifecycle synchronization. All IO stays in this open-source host."""
+from __future__ import annotations
+
+import base64
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+import copy
+import ctypes
+import json
+import os
+from pathlib import Path
+import sys
+import threading
+import traceback
+from urllib.parse import unquote
+
+from channelHandler.channelUtils import getShortGameId, cmp_game_id
+from envmgr import genv
+from mpay_wasm import MpayWasm, MAX_DB_BYTES
+from secure_write import write_file_restricted
+
+INVALID_SUFFIX = "（已失效，在网页重新登录）"
+SQLITE_PENDING_BYTE = 0x40000000
+
+
+def log_failure(logger, message: str, error: Exception):
+    # Loguru's diagnose=True dumps locals; renewal frames contain credentials.
+    # Keep stack locations and exception type, without frame values or response bodies.
+    logger.error("{} [{}]\n{}", message, type(error).__name__,
+                 "".join(traceback.format_tb(error.__traceback__)))
+
+
+def machine_identifier() -> str:
+    """Match MPay's primary disk serial, falling back to MachineGuid, via OS IO.
+
+    MPay hashes this inside its User::Save token transform. The hash/transform
+    belongs to Wasm; the host only fetches the OS identifier.
+    """
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(r"\\.\PhysicalDrive0", 0, 3, None, 3, 0, None)
+    if handle != wintypes.HANDLE(-1).value:
+        try:
+            query = (ctypes.c_uint32 * 3)(0, 0, 0)  # StorageDeviceProperty / PropertyStandardQuery
+            output = ctypes.create_string_buffer(4096)
+            count = wintypes.DWORD()
+            if kernel.DeviceIoControl(handle, 0x2D1400, query, ctypes.sizeof(query), output,
+                                      len(output), ctypes.byref(count), None):
+                offset = int.from_bytes(output.raw[24:28], "little")
+                if 0 < offset < count.value:
+                    serial = output.raw[offset:count.value].split(b"\0", 1)[0].decode("ascii").strip()
+                    if serial:
+                        return serial
+        finally:
+            kernel.CloseHandle(handle)
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography",
+                        0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+        return winreg.QueryValueEx(key, "MachineGuid")[0]
+
+
+@contextmanager
+def locked_database(path: Path):
+    """Take SQLite's PENDING + RESERVED + SHARED range on the original inode.
+
+    Native SQLite readers/writers cannot acquire their conflicting byte locks.
+    Keep the same file rather than replacing an inode under a cached MPay handle.
+    """
+    with path.open("r+b", buffering=0) as file:
+        file.seek(SQLITE_PENDING_BYTE)
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 512)
+        else:
+            import fcntl
+            fcntl.lockf(file, fcntl.LOCK_EX | fcntl.LOCK_NB, 512, SQLITE_PENDING_BYTE)
+        try:
+            file.seek(0)
+            yield file
+        finally:
+            file.seek(SQLITE_PENDING_BYTE)
+            if sys.platform == "win32":
+                msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 512)
+            else:
+                fcntl.lockf(file, fcntl.LOCK_UN, 512, SQLITE_PENDING_BYTE)
+
+
+def credentials_from_packet(packet: dict, game_id: str) -> tuple[str, dict]:
+    extra = json.loads(packet["extra_unisdk_data"])
+    sauth = json.loads(base64.b64decode(unquote(extra["SAUTH_JSON"])))
+    if not cmp_game_id(sauth["gameid"], game_id):
+        raise ValueError("Refreshed credentials belong to a different game")
+    if str(sauth["sdkuid"]) != str(packet["user_id"]) or sauth["login_channel"] != packet["login_channel"]:
+        raise ValueError("Refreshed credentials have inconsistent channel/UID")
+    if not packet["token"] or not sauth["sessionid"]:
+        raise ValueError("Refreshed credentials contain an empty session")
+    return str(packet["user_id"]), {
+        "token": packet["token"],
+        "pc_ext_info": {
+            "extra_unisdk_data": packet["extra_unisdk_data"],
+            "from_game_id": getShortGameId(game_id), "src_client_type": 1,
+            "src_app_channel": packet["app_channel"], "src_pay_channel": packet["pay_channel"],
+            "src_jf_game_id": packet["jf_game_id"], "src_sdk_version": packet["sdk_version"],
+            "src_udid": packet["udid"], "is_remember": True,
+        },
+    }
+
+
+class MpayDBSync:
+    def __init__(self, manager, artifact: Path):
+        self.manager = manager
+        self.logger = manager.logger
+        self.wasm = MpayWasm(artifact)
+        self.root = Path(os.environ["APPDATA"]) / "Netease" / "Mpay"
+        self.identity = machine_identifier()
+        self.lock = threading.RLock()
+        self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mpay-renew")
+        self.stopping = False
+        # UUID -> game -> MPay UID. SDK UID and MPay UID are not assumed equal
+        # when a real exchange_token response provides the mapping.
+        self.bindings = genv.get("mpay_db_bindings", {})
+
+    def paths(self, game_id: str) -> list[Path]:
+        return sorted(self.root.glob(f"*-g-{getShortGameId(game_id)}-64-mpay.db"))
+
+    def save_bindings(self):
+        genv.set("mpay_db_bindings", self.bindings, True)
+
+    def operate(self, path: Path, operation: str, **args):
+        with self.lock, locked_database(path) as file:
+            original = file.read(MAX_DB_BYTES + 1)
+            if len(original) > MAX_DB_BYTES:
+                raise ValueError("MPay database exceeds the supported size")
+            result = self.wasm.invoke(operation, original, **args)
+            if operation == "list_uids":
+                return set(json.loads(result))
+            # Preserve only an encrypted backup. No plaintext database IO.
+            write_file_restricted(str(path) + ".idv-login.bak", original)
+            try:
+                file.seek(0)
+                file.write(result)
+                file.truncate(len(result))
+                file.flush()
+                os.fsync(file.fileno())
+            except OSError:
+                file.seek(0)
+                file.write(original)
+                file.truncate(len(original))
+                file.flush()
+                os.fsync(file.fileno())
+                raise
+
+    def remember_exchange(self, record, game_id: str, user: dict):
+        """Observe the successful MPay UID; let MPay persist its own response."""
+        with self.lock:
+            self.bindings.setdefault(record.uuid, {})[getShortGameId(game_id)] = str(user["id"])
+            self.save_bindings()
+
+    def adopt_existing_bindings(self):
+        """Migrate the known SDK mapping only when that UID really exists in DB."""
+        for game_id, channels in genv.get("native_channel_accounts", {}).items():
+            paths = self.paths(game_id)
+            if not paths:
+                continue
+            uids = set().union(*(self.operate(p, "list_uids") for p in paths))
+            for identities in channels.values():
+                for uid, uuid in identities.items():
+                    if uid in uids and self.manager.query_channel(uuid) is not None:
+                        self.bindings.setdefault(uuid, {}).setdefault(game_id, uid)
+        for record in self.manager.channels:
+            if record.record_source == "scan" and record.user_info.get("id"):
+                uid = str(record.user_info["id"])
+                game_id = getShortGameId(record.ext_info["from_game_id"])
+                if any(uid in self.operate(path, "list_uids") for path in self.paths(game_id)):
+                    self.bindings.setdefault(record.uuid, {}).setdefault(game_id, uid)
+        self.save_bindings()
+
+    def reconcile_game_deletions(self):
+        """Only remembered, previously synchronized records can be deleted here."""
+        with self.lock:
+            for uuid, games in list(self.bindings.items()):
+                for game_id, uid in list(games.items()):
+                    paths = self.paths(game_id)
+                    if not paths:
+                        # Missing DB is not proof the user removed this account.
+                        continue
+                    uids = set().union(*(self.operate(p, "list_uids") for p in paths))
+                    if uid not in uids:
+                        self.logger.info("[mpay-db] 游戏已删除关联记录，同步删除工具账号")
+                        self.manager.delete(uuid)
+                        break
+
+    def delete_record(self, uuid: str):
+        with self.lock:
+            for game_id, uid in self.bindings.get(uuid, {}).items():
+                for path in self.paths(game_id):
+                    self.operate(path, "delete_uid", uid=uid)
+            self.bindings.pop(uuid, None)
+            accounts = genv.get("native_channel_accounts", {})
+            for channels in accounts.values():
+                for identities in channels.values():
+                    for uid, record_uuid in list(identities.items()):
+                        if record_uuid == uuid:
+                            del identities[uid]
+            genv.set("native_channel_accounts", accounts, True)
+            self.save_bindings()
+
+    def rename_record(self, uuid: str, name: str):
+        with self.lock:
+            for game_id, uid in self.bindings.get(uuid, {}).items():
+                for path in self.paths(game_id):
+                    if uid in self.operate(path, "list_uids"):
+                        self.operate(path, "rename_uid", uid=uid, name=name)
+
+    def write_packet(self, record, game_id: str, packet: dict):
+        sdkuid, credentials = credentials_from_packet(packet, game_id)
+        with self.lock:
+            if self.manager.query_channel(record.uuid) is not record:
+                return  # The user deleted/replaced it during a network renewal.
+            paths = self.paths(game_id)
+            if not paths:
+                raise FileNotFoundError("请先启动该游戏一次，初始化 MPay 数据库")
+            uid = self.bindings.get(record.uuid, {}).get(getShortGameId(game_id), sdkuid)
+            create = {"id": uid, "login_channel": record.channel_name, "login_type": 0,
+                "__user_login_method": 17, "__user_platform_selected": "",
+                "__user_platform_selected_second": "", "__user_platform_selected_third": "",
+                "__user_typed_username": "", "client_username": record.name,
+                "display_username": record.name, "nickname": "", "avatar": "",
+                "ext_access_token": "", "need_mask": False, "pc_ext_info": {},
+                "related_login_status": 0, "mask_related_mobile": ""}
+            for path in paths:
+                self.operate(path, "write_credentials", uid=uid, credentials=credentials,
+                             create=create, machine_identifier=self.identity)
+            self.bindings.setdefault(record.uuid, {})[getShortGameId(game_id)] = uid
+            self.save_bindings()
+            self.manager.remember_native_account(record, packet, game_id)
+            self.logger.info("[mpay-db] 凭证已写入游戏账号库")
+
+    def renew(self, record, game_id: str):
+        # Reuse each channel's one correct signing/SESSION implementation.
+        # Startup renewal must not open a browser if the long-lived token expired.
+        if record.record_source != "manual":
+            self.logger.info("[mpay-db] 扫码导入记录不具备渠道续期凭证，保留其原有登录路径")
+            return
+        if not record.is_token_valid():
+            self.mark_expired(record)
+            return
+        renewed = copy.copy(record)
+        def login_required(*args, **kwargs):
+            raise ValueError("渠道续期需要用户重新登录")
+        renewed.request_user_login = login_required
+        try:
+            packet = renewed.get_uniSdk_data(game_id)
+            if not packet:
+                raise ValueError("渠道没有返回续期凭证")
+            credentials_from_packet(packet, game_id)
+        except Exception as error:
+            log_failure(self.logger, "[mpay-db] 渠道续期失败", error)
+            self.mark_expired(record)
+            return
+        # Keep the refreshed channel state in the normal tool cache.
+        with self.lock:
+            if self.manager.query_channel(record.uuid) is not record:
+                return
+            state = renewed.__dict__.copy()
+            state.pop("request_user_login", None)
+            state["name"] = record.name
+            record.__dict__.update(state)
+            self.manager.save_records()
+            self.write_packet(record, game_id, packet)
+
+    def mark_expired(self, record):
+        with self.lock:
+            if self.manager.query_channel(record.uuid) is not record:
+                return
+            name = record.name if record.name.endswith(INVALID_SUFFIX) else record.name + INVALID_SUFFIX
+            record.name = name
+            self.manager.save_records()
+            self.rename_record(record.uuid, name)
+            self.logger.warning("[mpay-db] 续期失败，关联账号已标记为失效")
+
+    def refresh_startup(self):
+        self.adopt_existing_bindings()
+        # Check first: renewing first would resurrect a game-side deletion.
+        self.reconcile_game_deletions()
+        for record in list(self.manager.channels):
+            if record.record_source != "manual":
+                continue
+            games = {getShortGameId(game) for game in
+                     (record.game_id, *self.bindings.get(record.uuid, {}))}
+            for game_id in games:
+                try:
+                    self.renew(record, game_id)
+                except (OSError, RuntimeError) as error:
+                    log_failure(self.logger, "[mpay-db] 数据库同步失败，账号未删除", error)
+
+    def created(self, record):
+        if not self.stopping:
+            future = self.worker.submit(self.renew, record, record.game_id)
+            def completed(result):
+                try:
+                    result.result()
+                except Exception as error:
+                    log_failure(self.logger, "[mpay-db] 新账号同步失败", error)
+            future.add_done_callback(completed)
+
+    def shutdown(self):
+        self.stopping = True
+        self.worker.shutdown(wait=True)
+        self.reconcile_game_deletions()

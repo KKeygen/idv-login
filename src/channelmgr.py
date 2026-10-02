@@ -157,6 +157,7 @@ class ChannelManager:
     def __init__(self):
         self.logger = setup_logger()
         self.channels = []
+        self.db_sync = None
         self._pending_login_channel = None  # 异步登录期间保持对 channel 的引用，防止 GC
         from channelHandler.miChannelHandler import miChannel
         from channelHandler.huaChannelHandler import huaweiChannel
@@ -342,6 +343,8 @@ class ChannelManager:
             self.logger.exception("删除旧记录时发生错误")
         self.channels.append(tmp_channel)  
         self.save_records()
+        if self.db_sync:
+            self.db_sync.remember_exchange(tmp_channel, game_id, exchange_info["user"])
 
     def manual_import(self, channle_name: str, game_id: str, on_complete=None, login_method: str = ""):
         tmpData = {
@@ -431,6 +434,8 @@ class ChannelManager:
                         tmp_channel.import_nickname = tmp_channel.name
                         self.channels.append(tmp_channel)
                         self.save_records()
+                        if self.db_sync:
+                            self.db_sync.created(tmp_channel)
                         on_complete(True)
                     else:
                         self.logger.error(f"手动导入失败: {tmp_channel.name}")
@@ -518,6 +523,8 @@ class ChannelManager:
                 tmp_channel.import_nickname = tmp_channel.name
                 self.channels.append(tmp_channel)
                 self.save_records()
+                if self.db_sync:
+                    self.db_sync.created(tmp_channel)
                 return True
             else:
                 self.logger.error(f"手动导入失败: {tmp_channel.name}")
@@ -537,6 +544,8 @@ class ChannelManager:
     def rename(self, uuid: str, new_name: str):
         for channel in self.channels:
             if channel.uuid == uuid:
+                if self.db_sync:
+                    self.db_sync.rename_record(uuid, new_name)
                 channel.name = new_name
                 self.save_records()
                 return True
@@ -546,6 +555,8 @@ class ChannelManager:
         """删除渠道账号，如果是 weblogin 账号则同时删除 profile 和 cache 文件夹"""
         for i, channel in enumerate(self.channels):
             if channel.uuid == uuid:
+                if self.db_sync:
+                    self.db_sync.delete_record(uuid)
                 # 删除账号前，如果是 weblogin 账号，清理对应的 profile 和 cache 文件夹
                 self._cleanup_weblogin_data(uuid)
                 

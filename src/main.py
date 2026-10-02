@@ -147,6 +147,13 @@ def handle_exit():
                 logger.exception("停止平台托管登录失败")
         app_state.fever_bridge = None
 
+    if app_state.channels_helper and app_state.channels_helper.db_sync:
+        try:
+            app_state.channels_helper.db_sync.shutdown()
+        except Exception as error:
+            from mpay_db_sync import log_failure
+            log_failure(logger, "[mpay-db] 退出前核对账号库失败；没有据此删除账号", error)
+
     # 停止 mitmproxy 代理
     proxy_mgr = app_state.proxy_mgr
     if proxy_mgr:
@@ -1119,8 +1126,6 @@ def setup_network_proxy(proxy_port):
     from uimgr import UIManager
     ui_mgr = UIManager(game_helper=game_helper, ui_logger=ui_logger)
     app_state.ui_mgr = ui_mgr
-    game_helper.start_fever_auto_import()
-
     # Create the mitmproxy addon
     from mitm_addon import IDVLoginAddon
     addon = IDVLoginAddon(
@@ -1187,6 +1192,16 @@ def setup_network_proxy(proxy_port):
         proxy_mgr.start()
         m_proxy = proxy_mgr
         app_state.proxy_mgr = proxy_mgr
+
+    if sys.platform == "win32":
+        from pathlib import Path
+        from mpay_db_sync import MpayDBSync
+        db_sync = MpayDBSync(app_state.channels_helper, Path(__file__).parent / "resources" / "idv-db.wasm")
+        app_state.channels_helper.db_sync = db_sync
+        # DNS overrides must exist first: compat mode redirects system DNS
+        # to loopback. Complete refresh before any automatic game launch.
+        db_sync.refresh_startup()
+    game_helper.start_fever_auto_import()
 
     # Register the URI scheme so QR code redirects open our Qt window
     from uri_scheme import register_uri_scheme, start_uri_listener

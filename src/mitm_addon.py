@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 """
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -166,10 +167,10 @@ class IDVLoginAddon:
 
         path = flow.request.path.split("?")[0]
 
-        # SAUTH 使用真实身份，只为已关联的手动账号刷新渠道会话。
+        # 会话在启动时写回 MPay 账号库；uni_sauth 保留 SDK 原始请求。
         if host == getattr(self, "auth_status_domain", ""):
             if path.endswith("/sdk/uni_sauth") and flow.request.method == "POST":
-                await self._refresh_native_session(flow)
+                self.logger.info("[native-login] uni_sauth 请求已到达代理")
             return
 
         # ── _idv-login routes: handle locally, do NOT forward upstream ──
@@ -184,6 +185,11 @@ class IDVLoginAddon:
             return
 
         request_role = self._classify_mpay_request(flow)
+        if self.genv.get("DEBUG_MODE", False):
+            self.logger.info(
+                "[native-login] MPay 请求: method={}, cached_login={}, role={}",
+                flow.request.method, bool(self._re_handle_login.match(path)), request_role,
+            )
         if request_role == ROLE_BRIDGED_GAME:
             return
         if request_role == ROLE_HOSTED_FEVER_MPAY:
@@ -233,7 +239,7 @@ class IDVLoginAddon:
             if flow.request.method == "POST":
                 self._modify_post_body_cv(flow)
 
-    def response(self, flow: http.HTTPFlow):
+    async def response(self, flow: http.HTTPFlow):
         host = flow.request.pretty_host.lower()
         if host not in self.target_domains:
             return
@@ -256,6 +262,16 @@ class IDVLoginAddon:
                 return
 
             request_role = self._classify_mpay_request(flow)
+            if flow.response.status_code >= 400:
+                self.logger.warning(
+                    "[native-login] MPay 失败响应: status={}, body={}",
+                    flow.response.status_code, flow.response.get_text(),
+                )
+            if self.genv.get("DEBUG_MODE", False):
+                self.logger.info(
+                    "[native-login] MPay 响应: status={}, cached_login={}, role={}",
+                    flow.response.status_code, bool(self._re_handle_login.match(path)), request_role,
+                )
             if request_role == ROLE_BRIDGED_GAME:
                 # op14 only transfers the one-shot ticket/code to the game.
                 # Login is complete from the game's perspective only after its
@@ -293,7 +309,7 @@ class IDVLoginAddon:
             if self._re_login_methods.match(path):
                 self._modify_login_methods_response(flow)
             elif self._re_handle_login.match(path) and flow.request.method == "GET":
-                self._modify_handle_login_response(flow)
+                await self._modify_handle_login_response(flow)
             elif path == "/mpay/api/qrcode/image":
                 self._modify_qrcode_image_response(flow)
             elif path == "/mpay/games/pc_config":
@@ -310,65 +326,6 @@ class IDVLoginAddon:
         except Exception:
             self.logger.exception(f"处理响应时出错: {path}")
 
-    async def _refresh_native_session(self, flow: http.HTTPFlow):
-        # 现有 postSignedData 与游戏 SAUTH 使用 JSON；其余请求原样透传。
-        try:
-            data = json.loads(flow.request.content)
-        except (ValueError, UnicodeDecodeError):
-            return
-        if not isinstance(data, dict):
-            return
-        game_id = str(data.get("gameid") or "")
-        user_id = str(data.get("sdkuid") or "")
-        login_channel = str(data.get("login_channel") or "")
-        if not game_id or not user_id or not login_channel:
-            return
-        path = flow.request.path.split("?")[0]
-        if path != f"/{getShortGameId(game_id)}/sdk/uni_sauth":
-            return
-
-        try:
-            record = app_state.channels_helper.native_account(login_channel, user_id, game_id)
-            if record is None:
-                return
-            loop = asyncio.get_running_loop()
-            ready = loop.create_future()
-
-            def finish(session=None, error=None):
-                if not ready.done():
-                    if error is not None:
-                        ready.set_exception(error)
-                    else:
-                        ready.set_result(session)
-
-            def refresh():
-                try:
-                    session = record.get_session(user_id, game_id)
-                    app_state.channels_helper.save_records()
-                except Exception as error:
-                    loop.call_soon_threadsafe(finish, None, error)
-                else:
-                    loop.call_soon_threadsafe(finish, session)
-
-            # 复用手动/自动登录的 Qt 主线程入口；不阻塞代理事件循环。
-            app_state.run_on_main_thread(refresh)
-            session = await ready
-            # 保留游戏的身份、设备和 AT/RT；只替换渠道鉴权所需的字段。
-            for key in ("sessionid", "extra_data", "timestamp"):
-                if key in session:
-                    data[key] = session[key]
-            from channelHandler.channelUtils import CustomEncoder, calcSign
-            content = json.dumps(data, cls=CustomEncoder)
-            key = self.cloud_res().get_by_game_id_and_key(getShortGameId(game_id), "log_key")
-            signature = calcSign(flow.request.url, flow.request.method, content, key)
-            flow.request.content = content.encode("utf-8")
-            flow.request.headers["X-Client-Sign"] = signature
-        except Exception:
-            # 已关联账号失败时停止本次请求，不能悄悄发送过期会话。
-            flow.kill()
-            app_state.toast("渠道会话更新失败，请在渠道服管理界面重新登录。", duration=5000)
-            raise
-
     def _check_uni_sauth_response(self, flow: http.HTTPFlow):
         """Notify when the game's short-id uni_sauth check is no longer valid."""
         try:
@@ -377,6 +334,10 @@ class IDVLoginAddon:
             payload = {}
         if payload.get("code") == 200 and payload.get("subcode") == 0:
             return
+        self.logger.warning(
+            "[native-login] uni_sauth 失败响应: status={}, body={}",
+            flow.response.status_code, flow.response.get_text(),
+        )
         self.logger.warning("uni_sauth 校验失败，账号登录已过期")
         app_state.toast(
             "登录已过期，请考虑重新扫码或在渠道服管理界面手动执行本渠道登录以保存更久时间。",
@@ -575,13 +536,19 @@ class IDVLoginAddon:
         except Exception:
             pass
 
-    def _modify_handle_login_response(self, flow: http.HTTPFlow):
-        try:
-            data = json.loads(flow.response.content)
-            data["user"]["pc_ext_info"] = PC_INFO
-            flow.response.content = json.dumps(data).encode()
-        except Exception:
-            pass
+    async def _modify_handle_login_response(self, flow: http.HTTPFlow):
+        if flow.response.status_code != 200:
+            return
+        data = json.loads(flow.response.content)
+        user = data["user"]
+        # Channel credentials are refreshed in the MPay DB before game launch.
+        # Preserve that complete bundle here; a second proxy renewal would mix
+        # native SDK state with a different session/timestamp.
+        if user.get("pc_ext_info", {}).get("extra_unisdk_data"):
+            self.logger.info("[native-login] 保留账号库中的完整渠道登录数据")
+            return
+        user["pc_ext_info"] = PC_INFO
+        flow.response.content = json.dumps(data).encode("utf-8")
 
     def _modify_qrcode_image_response(self, flow: http.HTTPFlow):
         if not self.genv.get("SCAN_RECORD_ENABLED", True):
@@ -876,6 +843,8 @@ class IDVLoginAddon:
                     user["client_data"] = base64.b64encode(
                         json.dumps(cd, ensure_ascii=False).encode()
                     ).decode()
+                    if manual_record is not None and manager.db_sync:
+                        manager.db_sync.remember_exchange(manual_record, game_id, user)
                     modified = True
                     self.logger.info("已更新原生渠道服账号显示名称")
 

@@ -1,0 +1,15 @@
+{
+  "abi": 1,
+  "sha256": "b87956238957233470a6c98885325e23d1748b4ded998f4e8ba068a5a19e0ef4",
+  "source_commit": "c02f6b0ecb4943ff91ff374e3d0084e5b8723997",
+  "protected": true,
+  "imports": [],
+  "exports": [
+    "memory",
+    "alloc",
+    "release",
+    "invoke",
+    "result_ptr",
+    "result_len"
+  ]
+}
