@@ -162,10 +162,15 @@ class IDVLoginAddon:
 
     def request(self, flow: http.HTTPFlow):
         host = flow.request.pretty_host.lower()
-        if host not in self.target_domains:
+        path = flow.request.path.split("?")[0]
+
+        # Local API requests must be answered before upstream host filtering.
+        if path.startswith("/_idv-login/") and (host == "localhost" or host in self.target_domains):
+            self._handle_idv_login_request(flow, path)
             return
 
-        path = flow.request.path.split("?")[0]
+        if host not in self.target_domains:
+            return
 
         if host == getattr(self, "auth_status_domain", ""):
             if path.endswith("/sdk/uni_sauth"):
@@ -185,11 +190,6 @@ class IDVLoginAddon:
             if sync and sync.intercept_mpay_login(match.group(1), match.group(3)):
                 self._cancel_login(flow)
                 return
-
-        # ── _idv-login routes: handle locally, do NOT forward upstream ──
-        if path.startswith("/_idv-login/"):
-            self._handle_idv_login_request(flow, path)
-            return
 
         # Overseas MPay uses a different API namespace.  Keep its
         # requests untouched; only pc/config is intentionally patched
