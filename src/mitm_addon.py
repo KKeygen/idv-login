@@ -821,7 +821,8 @@ class IDVLoginAddon:
                 modified = False
 
                 login_channel = resp_data.get("user", {}).get("login_channel", "")
-                if not login_channel.startswith("netease"):
+                # 光遇(ma75)：不强制 is_remember，关闭 6.3.1 新增的游戏内快捷登录
+                if not login_channel.startswith("netease") and getShortGameId(game_id) != "ma75":
                     ext_info = resp_data.get("ext_info", {})
                     if not ext_info.get("is_remember"):
                         ext_info["is_remember"] = True
