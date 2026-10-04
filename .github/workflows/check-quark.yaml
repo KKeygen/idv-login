@@ -1,4 +1,4 @@
-name: Check Quark Credentials
+name: Check Current Release Quark Files
 
 on:
   workflow_dispatch:
@@ -17,8 +17,48 @@ jobs:
           python-version: "3.12"
       - name: Install dependency
         run: pip install -q requests==2.33.1
-      - name: Check credentials without uploading
+      - name: Read current release file metadata
         env:
           QUARK_COOKIES_B64: ${{ secrets.QUARK_COOKIES_B64 }}
           QUARK_PDIR_FID: ${{ secrets.QUARK_PDIR_FID }}
-        run: python tools/quark_upload.py --check
+        run: |
+          python - <<'PYCODE'
+          import json
+          import sys
+          sys.path.insert(0, "tools")
+          import quark_upload as q
+          q.load_config_from_env()
+          targets = {"最新版-2026-10-04.zip", "MacOSVer（只在苹果电脑上使用，一般人不要下！）.zip"}
+          matches = []
+          page = 1
+          try:
+              while True:
+                  response = q.api_session.get(
+                      "https://drive-pc.quark.cn/1/clouddrive/file/sort",
+                      headers=q.headers, cookies=q.cookies,
+                      params={"pr": "ucpro", "fr": "pc", "uc_param_str": "",
+                              "pdir_fid": q.pdir_fid, "_page": page, "_size": 100},
+                      timeout=(10, 60), allow_redirects=False,
+                  )
+                  if response.status_code != 200:
+                      print("QUERY_FAILED HTTP", response.status_code)
+                      sys.exit(1)
+                  result = response.json()
+                  if result.get("code") != 0 or not isinstance(result.get("data", {}).get("list"), list):
+                      code = result.get("code")
+                      print("QUERY_FAILED code", code if isinstance(code, int) else "unknown")
+                      sys.exit(1)
+                  rows = result["data"]["list"]
+                  for item in rows:
+                      name = item.get("file_name")
+                      if name in targets:
+                          matches.append({"name": name, "size": item.get("size"),
+                                          "status": item.get("status", "listed; no status field")})
+                  if len(rows) < 100:
+                      break
+                  page += 1
+              print("RELEASE_FILE_METADATA " + json.dumps(matches, ensure_ascii=False))
+          except Exception as error:
+              print("QUERY_FAILED", type(error).__name__)
+              sys.exit(1)
+          PYCODE
