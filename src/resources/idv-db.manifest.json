@@ -1,0 +1,32 @@
+{
+  "abi": 4,
+  "sha256": "45ddce2c48ebdf1846090c6fc3c42cc27d95a9aed2ac4a823409f7b21e58454e",
+  "source_commit": "8654c0c7663282c320c291bebe1ad72e4ab816af",
+  "protected": true,
+  "imports": [],
+  "exports": [
+    "memory",
+    "alloc",
+    "release",
+    "invoke",
+    "result_ptr",
+    "result_len"
+  ],
+  "hardening": {
+    "revision": 1,
+    "business_strings": "local-scrubbed",
+    "core": "merged-native-obfuscated",
+    "state": "encoded-digest-and-split-permuted-aes",
+    "coverage": {
+      "codec_strings": 5,
+      "module_strings": 44,
+      "merged_groups": 6,
+      "core_functions": 9,
+      "virtualized_core_functions": 0,
+      "module_functions": 25,
+      "sqlite_functions": 2305,
+      "noio_functions": 8
+    },
+    "sqlite_and_noio": true
+  }
+}

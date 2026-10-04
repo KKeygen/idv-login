@@ -106,64 +106,60 @@ class OppoBrowser(WebBrowser):
         self.page.runJavaScript(script)
 
     def _build_verify_url_from_call_executor(self, param: Dict[str, Any]) -> str:
-        try:
-            session = OppoSecureSession(base_url="https://client-uc.heytapmobi.com/", consts=self.consts)
+        session = OppoSecureSession(base_url="https://client-uc.heytapmobi.com/", consts=self.consts)
 
-            original_build_common_headers = session._build_common_headers
+        original_build_common_headers = session._build_common_headers
 
-            def _patched_headers() -> Dict[str, str]:
-                h = original_build_common_headers()
-                h["X-Sys-TalkBackState"] = "false"
-                h["X-BusinessSystem"] = "other"
-                h["X-Client-package"] = "com.heytap.htms"
-                h["Ext-Mobile"] = "///1/CN"
-                h["X-Client-DUID"] = self.consts.GUID
-                return h
+        def _patched_headers() -> Dict[str, str]:
+            h = original_build_common_headers()
+            h["X-Sys-TalkBackState"] = "false"
+            h["X-BusinessSystem"] = "other"
+            h["X-Client-package"] = "com.heytap.htms"
+            h["Ext-Mobile"] = "///1/CN"
+            h["X-Client-DUID"] = self.consts.GUID
+            return h
 
-            session._build_common_headers = _patched_headers  # type: ignore[method-assign]
+        session._build_common_headers = _patched_headers  # type: ignore[method-assign]
 
-            # CallMethodExecutor 入参固定只消费这几个字段，其余按探索脚本默认行为填充。
-            payload: Dict[str, Any] = {
-                "mspBizK": param.get("bizk") or "",
-                "mspBizSec": param.get("bizs") or "",
-                "appId": param.get("appId") or "3574817",
-                "ssoId": "",
-                "businessId": param.get("businessId") or "",
-                "deviceId": "",
-                "userToken": "",
-                "processToken": param.get("processToken") or "",
-                "captchaCode": "",
-                "envParam": build_env_param_minimal(self.consts),
-                "isBiometricClear": True,
-                "isLockScreenClear": False,
-                "validateSdkVersion": "2.2.1",
-                "duid": self.consts.GUID or "",
-                "source": "app",
-                "bizk": self.consts.BIZK,
-                "timestamp": int(time.time() * 1000),
-            }
-            payload["sign"] = sign_request(payload)
+        payload: Dict[str, Any] = {
+            "mspBizK": param.get("bizk") or "",
+            "mspBizSec": param.get("bizs") or "",
+            "appId": param.get("appId") or "3574817",
+            "ssoId": "",
+            "businessId": param.get("businessId") or "",
+            "deviceId": "",
+            "userToken": "",
+            "processToken": param.get("processToken") or "",
+            "captchaCode": "",
+            "envParam": build_env_param_minimal(self.consts),
+            "isBiometricClear": True,
+            "isLockScreenClear": False,
+            "validateSdkVersion": "2.2.1",
+            "duid": self.consts.GUID or "",
+            "source": "app",
+            "bizk": self.consts.BIZK,
+            "timestamp": int(time.time() * 1000),
+        }
+        payload["sign"] = sign_request(payload)
 
-            resp = session.post_json(
-                "api/v2/business/authentication/auth",
-                payload,
-                allow_plain_fallback=True,
-            )
-            self.logger.debug(f"authentication/auth 响应: {resp}")
-            if isinstance(resp, dict):
-                data = resp.get("data")
-                if not isinstance(data, dict):
-                    data = resp.get("result")
-                if isinstance(data, dict):
-                    verification_url = data.get("verificationUrl") or ""
-                    next_process_token = data.get("nextProcessToken") or ""
-                    if verification_url:
-                        self.logger.info("已通过 authentication/auth 获取 verificationUrl")
-                        if next_process_token:
-                            self.logger.debug(f"authentication/auth nextProcessToken={next_process_token}")
-                        return verification_url
-        except Exception as e:
-            self.logger.warning(f"请求 authentication/auth 获取 verificationUrl 失败: {e}")
+        resp = session.post_json(
+            "api/v2/business/authentication/auth",
+            payload,
+            allow_plain_fallback=True,
+        )
+        self.logger.debug(f"authentication/auth 响应: {resp}")
+        if isinstance(resp, dict):
+            data = resp.get("data")
+            if not isinstance(data, dict):
+                data = resp.get("result")
+            if isinstance(data, dict):
+                verification_url = data.get("verificationUrl") or ""
+                next_process_token = data.get("nextProcessToken") or ""
+                if verification_url:
+                    self.logger.info("已通过 authentication/auth 获取 verificationUrl")
+                    if next_process_token:
+                        self.logger.debug(f"authentication/auth nextProcessToken={next_process_token}")
+                    return verification_url
 
         raise RuntimeError("无法构建有效的 verificationUrl，无法进行后续登录校验。请加群反馈此问题并提供相关日志以便修复。")
 
@@ -223,16 +219,15 @@ class OppoBrowser(WebBrowser):
         method = (data or {}).get("method")
         callback_id = (data or {}).get("callbackid")
         param = json.loads((data or {}).get("param"))
-        #self.logger.debug(f"Oppo console method {method} 不关心，payload: {payload}")
         # 只关心网页登录完成回调（或 setToken 透传 loginResp）
         if method not in ("vip.onFinish", "accountExternalSdk.setToken","vip.makeToast","vip.openAndObserveWebview","account.CallMethodExecutor"):
-            self.logger.debug(f"Oppo console method {method} 不关心，payload: {payload}")
+            self.logger.debug("Oppo console method {} 未处理", method)
             return
         if method == "vip.makeToast":
             content = ""
             if isinstance(param, dict):
                 content = str(param.get("content", "") or "")
-            self.logger.warning(f"网页提示： {content}")
+            self.logger.warning("OPPO 网页显示提示")
             # 在浏览器所在 widget 上显示一个提示（持续 5 秒）
             if content:
                 try:
@@ -275,7 +270,12 @@ class OppoBrowser(WebBrowser):
             if isinstance(param, dict):
                 self._pending_call_executor_callback_id = callback_id or ""
                 self._pending_call_executor_business_id = param.get("businessId") or ""
-                verify_url = self._build_verify_url_from_call_executor(param)
+                try:
+                    verify_url = self._build_verify_url_from_call_executor(param)
+                except Exception as error:
+                    self.result = error
+                    QTimer.singleShot(0, self.cleanup)
+                    return
                 self.logger.info("收到 CallMethodExecutor，打开 OPPO 校验子页面")
                 self._open_observed_webview(verify_url)
             else:
@@ -317,16 +317,20 @@ class OppoLogin:
                     self._active_browser = None  # 登录完成后释放引用
                     try:
                         result = b.result
-                        if isinstance(result, dict) and result:
-                            on_complete(result)
-                        else:
-                            on_complete(None)
-                    except Exception:
-                        self.logger.exception("OPPO异步登录处理失败")
-                        on_complete(None)
+                        if not isinstance(result, Exception) and not (isinstance(result, dict) and result):
+                            result = None if result is None or result == "" else False
+                    except Exception as error:
+                        result = error
+                    on_complete(result)
                 browser._async_completion_callback = _on_async_done
             return None
 
-        if isinstance(resp, dict) and resp:
-            return resp
-        return None
+        if isinstance(resp, Exception):
+            if on_complete is None:
+                raise resp
+            result = resp
+        else:
+            result = resp if isinstance(resp, dict) and resp else (None if resp is None or resp == "" else False)
+        if on_complete is not None:
+            on_complete(result)
+        return result

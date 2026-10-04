@@ -243,7 +243,6 @@ def prefer_device_id_from_login_resp(
     device_id = str(login_resp.get("deviceId") or "").strip()
     if not device_id:
         return base
-    print("Using deviceId from loginResp:", device_id)
     return replace(base, DEVICE_ID=device_id)
 
 

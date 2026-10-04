@@ -89,42 +89,47 @@ class huaweiChannel(channelmgr.channel):
     # ── 登录（qr 扫码 / web 浏览器） ─────────────────────────
 
     def request_user_login(self, on_complete=None, login_method="qr"):
-        """请求用户登录。
-
-        - login_method="qr"（默认）：web UI 展示二维码，手机扫码；阻塞式，需在后台线程调用。
-        - login_method="web"：内嵌浏览器打开华为登录页，URL 变 loginSuccess.html 即成功。
-        """
         genv.set("GLOB_LOGIN_UUID", self.uuid)
-
-        def _apply_nick_name():
+        def _apply(success):
+            if isinstance(success, Exception):
+                raise success
+            if success is not True:
+                return success
+            if not self.huaweiLogin.serviceToken:
+                return False
+            if self.serviceToken != self.huaweiLogin.serviceToken:
+                # A new account-level credential has no verified game playerId yet.
+                self.active_sdkuid = ""
+                self.unisdk_cache.clear()
+                self.expires_at = None
+            self.serviceToken = self.huaweiLogin.serviceToken
             nick = self.huaweiLogin.nickName
             if nick:
                 self.name = nick
                 self.user_info["name"] = nick
-
-        if login_method == "qr":
-            # 扫码登录：阻塞式，由 manual_import 在后台线程调用
-            self.huaweiLogin.qrLogin()
-            self.serviceToken = self.huaweiLogin.serviceToken
-            if self.serviceToken:
-                _apply_nick_name()
-            return self.serviceToken is not None
-
-        # 网页登录
-        if on_complete is not None:
-            def _on_done(_success):
-                self.serviceToken = self.huaweiLogin.serviceToken
-                if self.serviceToken:
-                    _apply_nick_name()
-                on_complete(self.serviceToken is not None)
-            self.huaweiLogin.webLogin(on_complete=_on_done)
-            return
-
-        self.huaweiLogin.webLogin()
-        self.serviceToken = self.huaweiLogin.serviceToken
-        if self.serviceToken:
-            _apply_nick_name()
-        return self.serviceToken is not None
+            self.mark_manual_login_success()
+            return True
+        def _on_browser_done(success):
+            try:
+                result = _apply(success)
+            except Exception as error:
+                result = error
+            on_complete(result)
+        try:
+            if login_method == "qr":
+                result = _apply(self.huaweiLogin.qrLogin())
+                if on_complete is not None:
+                    on_complete(result)
+                return result
+            if on_complete is not None:
+                self.huaweiLogin.webLogin(on_complete=_on_browser_done)
+                return None
+            return _apply(self.huaweiLogin.webLogin())
+        except Exception as error:
+            if on_complete is not None:
+                on_complete(error)
+                return None
+            raise
 
     def is_token_valid(self):
         if not self.serviceToken:
@@ -162,19 +167,12 @@ class huaweiChannel(channelmgr.channel):
     def _ensure_session(self, game_cfg, short_gid):
         """确保获得指定游戏的 session（accessToken → gameAuthSign）。"""
         if not self.huaweiLogin.ensure_game_token(game_cfg, short_gid):
-            # ST 可能已失效，清空以便下次重新扫码
-            self.serviceToken = None
-            self.huaweiLogin.serviceToken = None
             return None
-        try:
-            data = self.huaweiLogin.initAccountData(game_cfg)
-        except Exception as e:
-            self.logger.error(f"{e}")
-            self.logger.error("Failed to get session data")
-            data = None
-        if data is None:
+        data = self.huaweiLogin.initAccountData(game_cfg)
+        if not isinstance(data, dict) or not all(data.get(key) for key in ("playerId", "gameAuthSign", "ts")):
             return None
         self.session = huaweiLoginResponse(data)
+        self.observe_sdkuid(self.session.playerId, short_gid)
         return self.session
 
     # ── UniSDK 数据（cross：目标游戏按需签发 token） ────────
@@ -226,19 +224,7 @@ class huaweiChannel(channelmgr.channel):
 
         return str(self.session.playerLevel)
 
-    def get_session(self, user_id: str, game_id: str):
-        game_cfg, short_gid = self._resolve_game_cfg(game_id)
-        if game_cfg is None:
-            raise ValueError("该游戏尚未配置华为渠道")
-        session = self._ensure_session(game_cfg, short_gid)
-        if session is None:
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(
-            user_id, session.playerId, session.gameAuthSign,
-            extra_data=self._get_extra_data(short_gid), timestamp=str(session.ts),
-        )
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         """获取 UniSDK 登录数据（cross 渠道：可为任意已配置游戏签发）。
 
         Args:
@@ -254,22 +240,35 @@ class huaweiChannel(channelmgr.channel):
         if game_cfg is None:
             self.logger.error(f"游戏{short_gid}-渠道{self.channel_name}暂不支持，请参照教程联系开发者发起添加请求。")
             if on_complete is not None:
-                on_complete(None)
-            return None
+                on_complete(False)
+            return False
 
         if not self.is_token_valid():
+            if not interactive:
+                if on_complete is not None:
+                    on_complete(False)
+                    return None
+                return False
             # 无 ST，需要重新登录
             if on_complete is not None:
                 def _on_login_done(success):
-                    if success and self.is_token_valid():
-                        on_complete(self._build(game_cfg, short_gid))
-                    else:
-                        on_complete(None)
+                    try:
+                        result = self._build(game_cfg, short_gid) if success is True and self.is_token_valid() else success
+                    except Exception as error:
+                        result = error
+                    on_complete(result)
                 self.request_user_login(on_complete=_on_login_done, login_method="web")
                 return None
-            self.request_user_login()
+            success = self.request_user_login()
+            if success is not True:
+                return success
 
-        result = self._build(game_cfg, short_gid)
+        try:
+            result = self._build(game_cfg, short_gid)
+        except Exception as error:
+            if on_complete is None:
+                raise
+            result = error
         if on_complete is not None:
             on_complete(result)
             return None
@@ -277,12 +276,8 @@ class huaweiChannel(channelmgr.channel):
 
     def _build(self, game_cfg, short_gid):
         if self._ensure_session(game_cfg, short_gid) is None:
-            return None
-        try:
-            return self._build_unisdk_data(short_gid)
-        except Exception as e:
-            self.logger.error(f"构建 UniSDK 数据失败: {e}")
-            return None
+            return False
+        return self._build_unisdk_data(short_gid)
 
     def _build_unisdk_data(self, short_gid: str):
         import channelHandler.channelUtils as channelUtils

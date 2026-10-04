@@ -108,6 +108,12 @@ class DynamicGameCatalogTests(unittest.TestCase):
             DynamicGameCatalog.HOMEPAGE_URL: [
                 FakeResponse(homepage_payload(), headers=headers)
             ],
+            DynamicGameCatalog.PAY_HOMEPAGE_URL: [
+                FakeResponse({"code": 0, "result": {"configs": []}}, headers=headers)
+            ],
+            DynamicGameCatalog.OVERSEA_RECOMMEND_URL: [
+                FakeResponse({"code": 200, "data": []}, headers=headers)
+            ],
             DynamicGameCatalog.APP_DETAIL_URL.format(73): [
                 FakeResponse(app_detail_payload())
             ],
@@ -186,13 +192,15 @@ class DynamicGameCatalogTests(unittest.TestCase):
             second_session = FakeSession({
                 DynamicGameCatalog.GAME_CONFIG_URL: [FakeResponse(status_code=304)],
                 DynamicGameCatalog.HOMEPAGE_URL: [FakeResponse(status_code=304)],
+                DynamicGameCatalog.PAY_HOMEPAGE_URL: [FakeResponse(status_code=304)],
+                DynamicGameCatalog.OVERSEA_RECOMMEND_URL: [FakeResponse(status_code=304)],
             })
             second = DynamicGameCatalog(
                 temp_dir, session=second_session, refresh_interval=0
             )
 
             self.assertFalse(second.refresh(force=True))
-            self.assertEqual(len(second_session.calls), 2)
+            self.assertEqual(len(second_session.calls), 4)
             for _, kwargs in second_session.calls:
                 self.assertEqual(kwargs["headers"]["If-None-Match"], '"catalog-v1"')
                 self.assertEqual(
@@ -221,13 +229,19 @@ class DynamicGameCatalogTests(unittest.TestCase):
             second_session = FakeSession({
                 DynamicGameCatalog.GAME_CONFIG_URL: [FakeResponse(second_config)],
                 DynamicGameCatalog.HOMEPAGE_URL: [FakeResponse(homepage_payload())],
+                DynamicGameCatalog.PAY_HOMEPAGE_URL: [
+                    FakeResponse({"code": 0, "result": {"configs": []}})
+                ],
+                DynamicGameCatalog.OVERSEA_RECOMMEND_URL: [
+                    FakeResponse({"code": 200, "data": []})
+                ],
             })
             second = DynamicGameCatalog(
                 temp_dir, session=second_session, refresh_interval=0
             )
 
             self.assertFalse(second.refresh(force=True))
-            self.assertEqual(len(second_session.calls), 2)
+            self.assertEqual(len(second_session.calls), 4)
 
 
 if __name__ == "__main__":

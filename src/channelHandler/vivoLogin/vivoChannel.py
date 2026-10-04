@@ -126,7 +126,7 @@ class VivoLogin:
         self.cookies = {}
         self._active_browser: VivoBrowser = None  # 异步模式下保持强引用
 
-    def webLogin(self, cookies=None, on_complete=None):
+    def webLogin(self, cookies=None, on_complete=None, *, interactive=True, on_browser_login=None):
         u = f"https://joint.vivo.com.cn/h5/union/get?gamePackage={self.gamePackage}"
         self.cookies = cookies or {}
 
@@ -136,14 +136,25 @@ class VivoLogin:
                 r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
                 j = r.json()
                 if j.get("code") == 0:
-                    result = j.get("data")
+                    result = j.get("data") or False
                     if on_complete is not None:
                         on_complete(result)
                         return
                     return result
+                if not interactive:
+                    if on_complete is not None:
+                        on_complete(False)
+                    return False
                 self.logger.warning("本地cookies登录失败，拉起浏览器重新登录")
-            except Exception as e:
-                self.logger.warning(f"本地cookies请求异常，拉起浏览器重新登录: {e}")
+            except Exception:
+                if not interactive:
+                    raise
+
+        if not interactive:
+            if on_complete is not None:
+                on_complete(False)
+                return None
+            return False
 
         login_url = f"https://passport.vivo.com.cn/#/login?client_id=67&redirect_uri=https%3A%2F%2Fjoint.vivo.com.cn%2Fgame-subaccount-login%3Ffrom%3Dlogin"
         miBrowser = VivoBrowser(self.gamePackage)
@@ -165,15 +176,25 @@ class VivoLogin:
                             r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
                             j = r.json()
                             if j.get("code") == 0:
-                                on_complete(j.get("data"))
-                                return
-                        on_complete(None)
-                    except Exception:
-                        self.logger.exception("Vivo异步登录处理失败")
-                        on_complete(None)
+                                if j.get("data") and on_browser_login:
+                                    on_browser_login()
+                                data = j.get("data") or False
+                            else:
+                                data = False
+                        else:
+                            data = None if result is None or result == "" else False
+                    except Exception as error:
+                        data = error
+                    on_complete(data)
                 miBrowser._async_completion_callback = _on_async_done
             return None
 
+        def _complete(result):
+            if on_complete is not None:
+                on_complete(result)
+            return result
+        if not resp:
+            return _complete(None)
         try:
             if resp.get("code") == 0:
                 # 浏览器退出后再读取Cookies数据库，显著降低Windows文件锁概率
@@ -182,15 +203,18 @@ class VivoLogin:
                 r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
                 j = r.json()
                 if j.get("code") == 0:
-                    return j.get("data")
-                self.logger.error(j.get("msg"))
-                return None
+                    if j.get("data") and on_browser_login:
+                        on_browser_login()
+                    result = j.get("data") or False
+                else:
+                    result = False
             else:
-                self.logger.error(resp.get("msg"))
-                return None
-        except:
-            self.logger.error(f"登录失败，原始响应{resp}")
-            return None
+                result = False
+        except Exception as error:
+            if on_complete is None:
+                raise
+            result = error
+        return _complete(result)
 
     def loginSubAccount(self, subOpenId):
         data = {
@@ -202,13 +226,9 @@ class VivoLogin:
             "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36 Edg/105.0.1343.27"
         }
         r = requests.post("https://joint.vivo.com.cn/h5/union/use",data=data,cookies=self.cookies,headers=header,verify=should_verify_ssl())
-        try:
-            resp=r.json()
-            if resp.get("code") == 0:
-                return resp.get("data")
-            else:
-                self.logger.error(resp.get("msg"))
-                return None
-        except:
-            self.logger.exception(f"登录失败")
+        resp=r.json()
+        if resp.get("code") == 0:
+            return resp.get("data")
+        else:
+            self.logger.error(resp.get("msg"))
             return None

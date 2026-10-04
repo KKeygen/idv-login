@@ -46,7 +46,7 @@ def _show_account_selector(accounts: list) -> str:
         accounts: vivoSubAccount 列表
     
     Returns:
-        选中的 subOpenId，或取消时返回第一个账号的 ID
+        选中的 subOpenId，或取消时返回 None
     """
     app_inst = QApplication.instance()
     if app_inst is None:
@@ -78,9 +78,8 @@ def _show_account_selector(accounts: list) -> str:
 
     # exec() 会启动嵌套事件循环，不会阻塞 UI
     if dialog.exec() != QDialog.DialogCode.Accepted:
-        # 用户取消，使用第一个账号
         parent.deleteLater()
-        return accounts[0].subOpenId if accounts else ""
+        return None
 
     row = lst.currentRow()
     if row < 0 or row >= len(accounts):
@@ -165,88 +164,81 @@ class vivoChannel(channelmgr.channel):
 
     def _refresh_open_token(self) -> bool:
         if self.activeAccount is None:
-            self.logger.error("Vivo登录失败：未找到选中的小号")
             return False
         open_token = self.vivoLogin.loginSubAccount(self.activeAccount.subOpenId)
         if not open_token:
-            self.activeAccount.openToken = ""
-            self.logger.error("Vivo登录失败：未获取到新的登录凭证")
             return False
         self.activeAccount.openToken = open_token
         return True
 
 
-    def request_user_login(self, on_complete=None, user_id: str = ""):
+    def request_user_login(self, on_complete=None, user_id: str = "", game_id=""):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
+        def _accept(resp):
+            result = self._apply_login_data(resp, user_id, game_id=game_id or self.game_id)
+            if result is True:
+                self.mark_manual_login_success(game_id or self.game_id)
+            return result
 
-        def _finalize_login():
-            """完成登录的最后步骤：登录选中的小号"""
-            for i in range(len(self.session.subAccounts)):
-                if self.session.subAccounts[i].subOpenId == self.chosenAccount:
-                    self.activeAccount = self.session.subAccounts[i]
-                    break
-            if not self._refresh_open_token():
+        def _on_browser_done(resp):
+            try:
+                result = _accept(resp)
+            except Exception as error:
+                result = error
+            on_complete(result)
+        try:
+            if on_complete is not None:
+                self.vivoLogin.webLogin(self.cookies, on_complete=_on_browser_done,
+                                        on_browser_login=lambda: self.unisdk_cache.clear())
+                return None
+            return _accept(self.vivoLogin.webLogin(self.cookies,
+                           on_browser_login=lambda: self.unisdk_cache.clear()))
+        except Exception as error:
+            if on_complete is not None:
+                on_complete(error)
+                return None
+            raise
+
+    def _apply_login_data(self, resp, user_id="", *, interactive=True, game_id=""):
+        if isinstance(resp, Exception):
+            raise resp
+        if resp is None or resp is False:
+            return resp
+        if not isinstance(resp, dict) or not resp.get("openId"):
+            return False
+        candidate = vivoLoginResp(resp)
+        if not candidate.subAccounts or any(not account.subOpenId for account in candidate.subAccounts):
+            return False
+        chosen_id = user_id or self.chosenAccount
+        selected = next((account for account in candidate.subAccounts if account.subOpenId == chosen_id), None)
+        if user_id and selected is None:
+            return False
+        if selected is None and len(candidate.subAccounts) == 1:
+            selected = candidate.subAccounts[0]
+        if selected is None:
+            if not interactive:
                 return False
-            if self.name == self.uuid:
-                self.name = f"{self.session.nickName}-{self.activeAccount.nickName}"
-            return True
-
-        def _process_login_data(resp):
-            """处理登录数据，多账号时弹出 Qt 对话框选择。"""
-            if resp is None:
-                self.session = None
+            choice = _show_account_selector(candidate.subAccounts)
+            if choice is None:
+                return None
+            chosen_id = choice[0] if isinstance(choice, tuple) else choice
+            selected = next((account for account in candidate.subAccounts if account.subOpenId == chosen_id), None)
+            if selected is None:
                 return False
-            self.cookies = self.vivoLogin.cookies
-            self.session = vivoLoginResp(resp)
-
-            if user_id:
-                if not any(account.subOpenId == user_id for account in self.session.subAccounts):
-                    raise ValueError("vivo 未返回本次登录指定的小号")
-                self.chosenAccount = user_id
-                return _finalize_login()
-            if len(self.session.subAccounts) == 0:
-                return False
-            elif len(self.session.subAccounts) == 1:
-                self.chosenAccount = self.session.subAccounts[0].subOpenId
-            else:
-                # 多账号情况
-                if self.chosenAccount != "":
-                    # 检查已保存的账号是否存在
-                    found = False
-                    for i in range(len(self.session.subAccounts)):
-                        if self.session.subAccounts[i].subOpenId == self.chosenAccount:
-                            self.logger.info("尝试登录指定账号")
-                            found = True
-                            break
-                    if not found:
-                        self.chosenAccount = ""  # 不存在，需要重新选择
-                
-                if self.chosenAccount == "":
-                    # 需要用户选择账号 - 弹出 Qt 对话框
-                    # exec() 使用嵌套事件循环，不会阻塞 UI
-                    result = _show_account_selector(self.session.subAccounts)
-                    if isinstance(result, tuple):
-                        selected_id, should_remember = result
-                        self.chosenAccount = selected_id
-                        # should_remember 可用于持久化，但 chosenAccount 已经会被保存到 channel_records.json
-                    else:
-                        self.chosenAccount = result
-
-            return _finalize_login()
-
-        if on_complete is not None:
-            def _on_done(resp):
-                try:
-                    success = _process_login_data(resp)
-                except Exception:
-                    self.logger.exception("Vivo异步登录处理失败")
-                    success = False
-                on_complete(success)
-            self.vivoLogin.webLogin(self.cookies, on_complete=_on_done)
-            return
-
-        resp = self.vivoLogin.webLogin(self.cookies)
-        return _process_login_data(resp)
+        token = self.vivoLogin.loginSubAccount(selected.subOpenId)
+        if not token:
+            return False
+        selected.openToken = token
+        if self.session is not None and getattr(self.session, 'openId', None) != candidate.openId:
+            self.unisdk_cache.clear()
+        self.session = candidate
+        self.activeAccount = selected
+        self.chosenAccount = selected.subOpenId
+        self.observe_sdkuid(selected.subOpenId, game_id or self.game_id)
+        self.cookies = self.vivoLogin.cookies
+        if self.name == self.uuid:
+            self.name = f"{candidate.nickName}-{selected.nickName}"
+        return True
 
     def is_token_valid(self):
         return bool(
@@ -297,21 +289,7 @@ class vivoChannel(channelmgr.channel):
         res["SAUTH_JSON"] = base64.b64encode(json.dumps(json_data).encode()).decode()
         return json.dumps(res)
 
-    def get_session(self, user_id: str, game_id: str):
-        account = None
-        if self.session is not None:
-            account = next((item for item in self.session.subAccounts if item.subOpenId == user_id), None)
-        if account is not None:
-            self.activeAccount = account
-            if not self._refresh_open_token():
-                raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        elif not self.request_user_login(user_id=user_id):
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(
-            user_id, self.activeAccount.subOpenId, self.activeAccount.openToken,
-        )
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
         should_refresh_open_token = self.is_token_valid()
         if game_id == "":
@@ -355,31 +333,41 @@ class vivoChannel(channelmgr.channel):
             return res
 
         if not self.is_token_valid():
-            if on_complete is not None:
+            if not interactive:
+                restored = self._apply_login_data(self.vivoLogin.webLogin(self.cookies, interactive=False), interactive=False, game_id=game_id)
+                if restored is not True:
+                    if on_complete is not None:
+                        on_complete(False)
+                    return False
+            elif on_complete is not None:
                 def _on_login_done(success):
-                    if success and self.is_token_valid():
-                        try:
+                    try:
+                        if success is True and self.is_token_valid():
                             result = _build_unisdk_data()
-                            on_complete(result)
-                        except Exception as e:
-                            self.logger.error(f"构建 UniSDK 数据失败: {e}")
-                            on_complete(None)
-                    else:
-                        on_complete(None)
-                self.request_user_login(on_complete=_on_login_done)
+                        else:
+                            result = success
+                    except Exception as error:
+                        result = error
+                    on_complete(result)
+                self.request_user_login(on_complete=_on_login_done, game_id=game_id)
                 return None
             else:
-                self.request_user_login()
-                if not self.is_token_valid():
-                    return None
+                success = self.request_user_login(game_id=game_id)
+                if success is not True:
+                    return success
 
         if should_refresh_open_token:
             if not self._refresh_open_token():
                 if on_complete is not None:
-                    on_complete(None)
-                return None
+                    on_complete(False)
+                return False
 
-        result = _build_unisdk_data()
+        try:
+            result = _build_unisdk_data()
+        except Exception as error:
+            if on_complete is None:
+                raise
+            result = error
         if on_complete is not None:
             on_complete(result)
             return None

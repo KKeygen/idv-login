@@ -170,6 +170,10 @@ class CloudRes:
             return dynamic_feature
         if not dynamic_feature:
             return manual_feature
+        if dynamic_feature.get('platform_type') == 'native':
+            # Public visual metadata never grants a Fever distribution or
+            # download capability, even if a manual feature has old defaults.
+            return {**manual_feature, **dynamic_feature}
 
         # Keep hand-maintained behavior authoritative, but append distributions
         # discovered from LoadingBay (including the international catalog).

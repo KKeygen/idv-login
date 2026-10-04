@@ -30,6 +30,7 @@ def parse_command_line_args():
     arg_parser.add_argument('--uri', type=str, default="", help='处理 idvlogin:// URI Scheme 调用')
     arg_parser.add_argument('--open-ui', action='store_true', help='启动后直接打开渠道服管理界面')
     arg_parser.add_argument('--proxy-port', type=int, default=10717, help='mitmproxy 监听端口 (默认 10717)')
+    arg_parser.add_argument('--debug', action='store_true', help='开发调试：使用 mitmweb 打开 Web 代理界面 (默认 http://127.0.0.1:8081/)')
     return arg_parser.parse_args()
 
 
@@ -146,6 +147,13 @@ def handle_exit():
             if logger:
                 logger.exception("停止平台托管登录失败")
         app_state.fever_bridge = None
+
+    if app_state.channels_helper and app_state.channels_helper.db_sync:
+        try:
+            app_state.channels_helper.db_sync.shutdown()
+        except Exception as error:
+            from mpay_db_sync import log_failure
+            log_failure(logger, "[mpay-db] 退出前核对账号库失败；没有据此删除账号", error)
 
     # 停止 mitmproxy 代理
     proxy_mgr = app_state.proxy_mgr
@@ -1119,8 +1127,6 @@ def setup_network_proxy(proxy_port):
     from uimgr import UIManager
     ui_mgr = UIManager(game_helper=game_helper, ui_logger=ui_logger)
     app_state.ui_mgr = ui_mgr
-    game_helper.start_fever_auto_import()
-
     # Create the mitmproxy addon
     from mitm_addon import IDVLoginAddon
     addon = IDVLoginAddon(
@@ -1176,17 +1182,37 @@ def setup_network_proxy(proxy_port):
             # 回退到常规模式（不持久化，下次启动仍尝试兼容模式）
             proxy_mode = "process" if auto_games else "global"
             from mitm_proxy import MitmProxyManager
-            proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular")
+            proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
             proxy_mgr.start()
             m_proxy = proxy_mgr
             app_state.proxy_mgr = proxy_mgr
     else:
         # 常规代理模式（global 或 process）
         from mitm_proxy import MitmProxyManager
-        proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular")
+        proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
         proxy_mgr.start()
         m_proxy = proxy_mgr
         app_state.proxy_mgr = proxy_mgr
+
+    if sys.platform == "win32":
+        from pathlib import Path
+        from mpay_db_sync import MpayDBSync
+        try:
+            db_sync = MpayDBSync(app_state.channels_helper, Path(__file__).parent / "resources" / "idv-db.wasm", game_helper=game_helper)
+        except Exception as error:
+            from mpay_db_sync import log_failure
+            log_failure(logger, "游戏内账号列表工件不可用；保留原渠道登录功能，等待匹配的工件", error)
+        else:
+            app_state.channels_helper.db_sync = db_sync
+            from prefetch_context import install_request_deadline
+            install_request_deadline()
+            # DNS overrides must exist before any automatic game launch.
+            try:
+                db_sync.refresh_startup()
+            except Exception as error:
+                from mpay_db_sync import log_failure
+                log_failure(logger, "游戏内账号列表启动更新未完成；保留退出清理和原登录功能", error)
+    game_helper.start_fever_auto_import()
 
     # Register the URI scheme so QR code redirects open our Qt window
     from uri_scheme import register_uri_scheme, start_uri_listener
@@ -1227,6 +1253,9 @@ def setup_network_proxy(proxy_port):
         ui_mgr.open_for_game(startup_game_id, uri_initial_view)
         genv.set("URI_STARTUP_OPEN_UI", "")
         genv.set("URI_STARTUP_VIEW", "")
+
+    from run_once import run_once_after_qt
+    run_once_after_qt(ui_mgr)
 
     # 根据模式执行不同的启动逻辑
     if proxy_mode == "compat":
@@ -1369,7 +1398,7 @@ def _setup_compat_mode(addon):
 
     # 4. 启动 mitmproxy 反向代理
     from mitm_proxy import MitmProxyManager
-    proxy_mgr = MitmProxyManager(addon=addon, mode="compat")
+    proxy_mgr = MitmProxyManager(addon=addon, mode="compat", debug=bool(CLI_ARGS.debug))
     proxy_mgr.start()
     m_proxy = proxy_mgr
     app_state.proxy_mgr = proxy_mgr

@@ -168,6 +168,9 @@ def toast(text: str, duration: int = 2500):
     """
     可以在任何线程安全调用的全局函数。
     """
+    from prefetch_context import in_prefetch
+    if in_prefetch():
+        return
     def _create():
         t = ModernToast(text, duration)
         _active_toasts.append(t) # 保持引用防止被GC

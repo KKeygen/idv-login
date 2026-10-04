@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import threading
 import unittest
 import logging
 import types
@@ -15,6 +16,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 app_state = types.ModuleType("app_state")
 app_state.toast = lambda *args, **kwargs: None
 app_state.fever_bridge = None
+app_state.channels_helper = None
 sys.modules["app_state"] = app_state
 
 envmgr = types.ModuleType("envmgr")
@@ -70,6 +72,7 @@ class GameInstallationModelTests(unittest.TestCase):
     def _manager(self, game=None):
         manager = GameManager.__new__(GameManager)
         manager.games = {game.game_id: game} if game else {}
+        manager._save_lock = threading.RLock()
         manager._save_games = lambda: None
         manager.logger = getattr(game, "logger", None)
         return manager

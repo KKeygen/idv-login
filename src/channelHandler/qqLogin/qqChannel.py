@@ -134,7 +134,7 @@ class QQLogin:
         self.logger.info(f"QQ verify response: {rjson}")
         if r.status_code != 200 or rjson.get("ret") != 0:
             self.logger.error(f"QQ YSDK 验证失败: {rjson}")
-            return None
+            return False
         self.logger.info("QQ YSDK 验证成功")
         # YSDK qq_verify_login 不返回 atk/openid/atk_expire，需用 QQ 原始 token 补全
         if "atk" not in rjson:
@@ -200,12 +200,12 @@ class QQLogin:
 
         if rjson.get("code") != 0:
             self.logger.error(f"QQCodeLogin 失败: {rjson}")
-            return None
+            return False
 
         data = rjson.get("data", {})
         if data.get("ret") != 0:
             self.logger.error(f"QQCodeLogin data error: {data}")
-            return None
+            return False
 
         # 构建与 myappVeriftResp 兼容的结果
         result = {
@@ -225,8 +225,10 @@ class QQLogin:
 
     def _process_browser_result(self, result):
         """处理浏览器结果，支持 code flow 和 implicit flow"""
-        if not result or not isinstance(result, dict):
+        if result == "" or result is None:
             return None
+        if not isinstance(result, dict):
+            return False
 
         flow = result.get("flow", "implicit")
 
@@ -262,10 +264,11 @@ class QQLogin:
                 def _on_async_done(b):
                     self._active_browser = None
                     try:
-                        on_complete(self._process_browser_result(b.result))
+                        processed = self._process_browser_result(b.result)
                     except Exception:
-                        self.logger.exception("QQ异步登录处理失败")
-                        on_complete(None)
+                        self.logger.error("QQ异步登录处理失败")
+                        processed = False
+                    on_complete(processed)
                 browser._async_completion_callback = _on_async_done
             return None
 

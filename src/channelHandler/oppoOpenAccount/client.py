@@ -68,10 +68,7 @@ class OppoSecureSession:
         if isinstance(new_ticket, str) and new_ticket:
             self.session_ticket = new_ticket
 
-        try:
-            return r.json()
-        except Exception:
-            return {"success": False, "http": r.status_code, "raw": r.text}
+        return r.json()
 
     def post_json(self, path: str, payload_obj: Dict[str, Any], *, allow_plain_fallback: bool = True) -> Dict[str, Any]:
         """发送请求。

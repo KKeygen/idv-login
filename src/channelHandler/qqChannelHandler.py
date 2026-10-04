@@ -46,6 +46,7 @@ class qqChannel(channelmgr.channel):
         game_id: str = "",
         session: myappVeriftResp = None,
         uuid: str = "",
+        token_issued_at: int | None = None,
     ) -> None:
         super().__init__(
             login_info,
@@ -57,6 +58,7 @@ class qqChannel(channelmgr.channel):
             name,
             uuid,
         )
+        self.token_issued_at = last_login_time if token_issued_at is None else token_issued_at
         self.logger = setup_logger()
         self.crossGames = False
         cloudRes = CloudRes()
@@ -77,48 +79,37 @@ class qqChannel(channelmgr.channel):
         self.session: myappVeriftResp = myappVeriftResp(session) if session is not None else None
 
     def request_user_login(self, on_complete=None):
-        """请求用户登录，支持异步模式。"""
-        def _do_login():
-            if self.session is None:
-                genv.set("GLOB_LOGIN_UUID", self.uuid)
-                resp = self.qqLogin.webLogin()
-                if resp is None:
-                    self.session = None
-                    return False
-                self.session = myappVeriftResp(resp)
-                self._fetch_nickname()
-            else:
-                # QQ token 过期，YSDK 无 QQ refresh 接口，重新登录
-                self.logger.info("QQ token 过期，重新唤起登录")
-                self.session = None
-                return _do_login()
-            if self.session is not None:
-                self.last_login_time = int(time.time())
-                return True
-            return False
+        """本次浏览器登录：True 成功，False 失败，None 用户关闭。"""
+        genv.set("GLOB_LOGIN_UUID", self.uuid)
+
+        def _accept(resp):
+            if resp is None or resp is False:
+                return resp
+            if not isinstance(resp, dict) or not all(
+                resp.get(key) for key in ("atk", "openid", "atk_expire")
+            ):
+                return False
+            self.session = myappVeriftResp(resp)
+            self._fetch_nickname()
+            self.token_issued_at = int(time.time())
+            self.mark_manual_login_success()
+            return True
 
         if on_complete is not None:
-            # 异步模式
-            genv.set("GLOB_LOGIN_UUID", self.uuid)
-            if self.session is not None:
-                # token 过期，清空后重新登录
-                self.session = None
             def _on_browser_done(resp):
                 try:
-                    if resp is None:
-                        on_complete(False)
-                        return
-                    self.session = myappVeriftResp(resp)
-                    self._fetch_nickname()
-                    self.last_login_time = int(time.time())
-                    on_complete(True)
+                    result = _accept(resp)
                 except Exception:
-                    self.logger.exception("QQ异步登录回调处理失败")
-                    on_complete(False)
+                    self.logger.error("QQ登录结果处理失败")
+                    result = False
+                on_complete(result)
             self.qqLogin.webLogin(on_complete=_on_browser_done)
             return None
-        else:
-            return _do_login()
+        try:
+            return _accept(self.qqLogin.webLogin())
+        except Exception:
+            self.logger.error("QQ登录失败")
+            return False
 
     def _fetch_nickname(self):
         """尝试获取QQ昵称"""
@@ -139,7 +130,7 @@ class qqChannel(channelmgr.channel):
 
     def is_token_valid(self):
         if self.session is not None and self.session.atk_expire:
-            return self.last_login_time + self.session.atk_expire > int(time.time())
+            return self.token_issued_at + self.session.atk_expire > int(time.time())
         return False
 
     def before_save(self):
@@ -159,6 +150,7 @@ class qqChannel(channelmgr.channel):
             game_id=data.get("game_id", ""),
             session=data.get("session_json", None),
             uuid=data.get("uuid", ""),
+            token_issued_at=data.get("token_issued_at", data.get("last_login_time", 0)),
         )
 
     def _get_extra_data(self):
@@ -204,17 +196,7 @@ class qqChannel(channelmgr.channel):
 
         return json.dumps(res)
 
-    def get_session(self, user_id: str, game_id: str):
-        if not self.is_token_valid():
-            self.request_user_login()
-        if self.session is None:
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(
-            user_id, self.session.openid, self.session.atk,
-            extra_data=self._get_extra_data(),
-        )
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         """获取 UniSDK 登录数据，支持异步模式。"""
         genv.set("GLOB_LOGIN_UUID", self.uuid)
         if game_id == "":
@@ -273,26 +255,32 @@ class qqChannel(channelmgr.channel):
                     on_complete(result)
                 return result
             except Exception as e:
-                self.logger.error(f"构建 UniSDK 数据失败: {e}")
+                self.logger.error("构建 UniSDK 数据失败")
                 if on_complete:
-                    on_complete(None)
-                return None
+                    on_complete(False)
+                return False
 
-        # 检查 token 是否有效
-        if not self.is_token_valid():
+        try:
+            valid = self.is_token_valid()
+        except Exception:
+            if not interactive:
+                raise
+            valid = False
+        if not valid:
+            if not interactive:
+                if on_complete is not None:
+                    on_complete(False)
+                    return None
+                return False
             if on_complete is not None:
                 def _on_login_done(success):
-                    if success:
+                    if success is True:
                         _on_login_ready()
                     else:
-                        on_complete(None)
+                        on_complete(success)
                 self.request_user_login(on_complete=_on_login_done)
                 return None
-            else:
-                self.request_user_login()
-                if not self.is_token_valid():
-                    return None
-
-        if on_complete is not None:
-            return _on_login_ready()
-        return _build_unisdk_data()
+            result = self.request_user_login()
+            if result is not True:
+                return result
+        return _on_login_ready()

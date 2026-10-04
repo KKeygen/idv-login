@@ -82,19 +82,26 @@ class honorChannel(channelmgr.channel):
 
     def request_user_login(self, on_complete=None):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
-
-        if on_complete is not None:
-            def _on_done(success):
-                self.unionToken = self.honorLogin.unionToken
-                self._update_name()
-                on_complete(self.unionToken is not None)
-            self.honorLogin.newOAuthLogin(on_complete=_on_done)
-            return
-
-        self.honorLogin.newOAuthLogin()
-        self.unionToken = self.honorLogin.unionToken
-        self._update_name()
-        return self.unionToken is not None
+        def _apply(success):
+            if success is not True:
+                return success
+            token = self.honorLogin.unionToken
+            if not isinstance(token, dict) or not token.get("openId") or not token.get("token"):
+                return False
+            self.unionToken = token
+            self._update_name()
+            self.mark_manual_login_success()
+            return True
+        try:
+            if on_complete is not None:
+                self.honorLogin.newOAuthLogin(on_complete=lambda success: on_complete(_apply(success)))
+                return None
+            return _apply(self.honorLogin.newOAuthLogin())
+        except Exception:
+            self.logger.error("渠道登录未完成")
+            if on_complete is not None:
+                on_complete(False)
+            return False
 
     def is_token_valid(self) -> bool:
         if self.unionToken is None:
@@ -109,6 +116,7 @@ class honorChannel(channelmgr.channel):
         success = self.honorLogin.configLogin()
         if success:
             self.unionToken = self.honorLogin.unionToken
+            self.observe_sdkuid(self.unionToken.get("openId"))
             self._update_name()
         return success
 
@@ -120,18 +128,7 @@ class honorChannel(channelmgr.channel):
 
     # ── UniSDK 数据 ──────────────────────────────────────────
 
-    def get_session(self, user_id: str, game_id: str):
-        if not self.is_token_valid():
-            self.request_user_login()
-        if self.honorLogin.is_token_expired() and not self._refresh_session():
-            self.request_user_login()
-        if not self.unionToken:
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(
-            user_id, self.unionToken.get("openId"), self.unionToken.get("token"),
-        )
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
         if not game_id:
             game_id = self.game_id
@@ -198,47 +195,62 @@ class honorChannel(channelmgr.channel):
 
         # 检查 token 是否有效
         if not self.is_token_valid():
+            if not interactive:
+                if on_complete is not None:
+                    on_complete(False)
+                    return None
+                return False
             if on_complete is not None:
                 def _on_login_done(success):
-                    if success and self.is_token_valid():
+                    if success is True and self.is_token_valid():
                         try:
                             result = _build_result()
                             on_complete(result)
                         except Exception as e:
                             self.logger.error(f"Honor UniSDK error: {e}")
-                            on_complete(None)
+                            on_complete(False)
                     else:
-                        on_complete(None)
+                        on_complete(success)
                 self.request_user_login(on_complete=_on_login_done)
                 return None
             else:
-                self.request_user_login()
-                if not self.is_token_valid():
-                    return None
+                success = self.request_user_login()
+                if success is not True:
+                    return success
 
         # 尝试 configLogin 刷新
         if self.honorLogin.is_token_expired():
             if not self._refresh_session():
+                if not interactive:
+                    if on_complete is not None:
+                        on_complete(False)
+                    return False
                 # 刷新失败，需要重新 OAuth
                 if on_complete is not None:
                     def _on_relogin_done(success):
-                        if success and self.is_token_valid():
+                        if success is True and self.is_token_valid():
                             try:
                                 result = _build_result()
                                 on_complete(result)
                             except Exception as e:
                                 self.logger.error(f"Honor UniSDK error after re-login: {e}")
-                                on_complete(None)
+                                on_complete(False)
                         else:
-                            on_complete(None)
+                            on_complete(success)
                     self.request_user_login(on_complete=_on_relogin_done)
                     return None
                 else:
-                    self.request_user_login()
-                    if not self.is_token_valid():
-                        return None
+                    success = self.request_user_login()
+                    if success is not True:
+                        return success
 
-        result = _build_result()
+        try:
+            result = _build_result()
+        except Exception:
+            self.logger.error("构建渠道登录数据失败")
+            if on_complete is not None:
+                on_complete(False)
+            return False
         if on_complete is not None:
             on_complete(result)
             return None

@@ -51,7 +51,7 @@ class WechatLogin:
         r=requests.get(f"https://ysdk.qq.com/auth/wx_scan_code_login",params=qrcodeData,verify=should_verify_ssl())
         if not r.status_code==200 or not r.json()['ret']==0:
             self.logger.error(f"微信扫码请求创建失败, status={r.status_code}, ret={r.json().get('ret')}")
-            return None
+            return False
         #删除响应json里的msg字段
         rjson=r.json()
         rjson.pop("msg")
@@ -70,7 +70,18 @@ class WechatLogin:
 
         while True:
             r=requests.get(f"https://long.open.weixin.qq.com/connect/l/qrconnect?f=json&uuid={uuid}",verify=should_verify_ssl())
-            if r.json().get("wx_code") != "":
+            poll = r.json()
+            status = str(poll.get("wx_errcode", ""))
+            if status == "403":
+                self._update_qrcode_cache("cancelled", uuid=uuid)
+                return None
+            if status == "402":
+                self._update_qrcode_cache("failed", uuid=uuid)
+                return False
+            if r.status_code != 200:
+                self._update_qrcode_cache("failed", uuid=uuid)
+                return False
+            if poll.get("wx_code"):
                 self.logger.info("微信扫码成功")
                 self._update_qrcode_cache("scanned", uuid=uuid)
                 break
@@ -93,7 +104,7 @@ class WechatLogin:
         if not r.status_code==200 or not r.json()['ret']==0:
             self.logger.error(f"扫码校验失败, status={r.status_code}, ret={r.json().get('ret')}")
             self._update_qrcode_cache("failed", uuid=uuid)
-            return None
+            return False
         self._update_qrcode_cache("verified", uuid=uuid)
         return r.json()
 

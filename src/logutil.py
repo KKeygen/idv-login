@@ -36,8 +36,9 @@ def _get_console_sink():
 
 try:
     logger.remove(0)
-    logger.add(_get_console_sink(), level="INFO")
-    logger.add("log.txt",rotation="10MB", encoding="utf-8", diagnose=True)
+    from prefetch_context import in_prefetch
+    logger.add(_get_console_sink(), level="INFO", filter=lambda record: not in_prefetch())
+    logger.add("log.txt",rotation="10MB", encoding="utf-8", diagnose=False)
 except Exception as e:
     print(e)
     from logging import getLogger

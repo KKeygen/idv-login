@@ -226,7 +226,7 @@ class QihooLogin:
         }
 
     # ── Web 登录（主入口） ──────────────────────────────────
-    def web_login(self, qt_cookie: str = "", on_complete=None):
+    def web_login(self, qt_cookie: str = "", on_complete=None, *, interactive=True):
         """优先用已有 cookie 验证；失败则拉起浏览器登录。
 
         on_complete 非空时走异步（浏览器显示后立即返回，登录完成回调）。
@@ -238,10 +238,21 @@ class QihooLogin:
                     on_complete(result)
                     return None
                 return result
+            if not interactive:
+                if on_complete is not None:
+                    on_complete(False)
+                    return None
+                return False
             self.logger.warning(f"{TAG} 登录状态已失效，重新打开登录窗口")
             self.logger.debug(
                 f"{TAG} cookie 复验失败 errno={result.get('errno')}"
             )
+
+        if not interactive:
+            if on_complete is not None:
+                on_complete(False)
+                return None
+            return False
 
         browser = QihooBrowser()
         browser.set_url(C.LOGIN_URL)
@@ -261,10 +272,10 @@ class QihooLogin:
                             on_complete(None)
                             return
                         result = self.login_by_qt(cookie)
-                        on_complete(result if result["ok"] else None)
+                        on_complete(result if result["ok"] else False)
                     except Exception:
                         self.logger.exception(f"{TAG} 异步登录处理失败")
-                        on_complete(None)
+                        on_complete(False)
 
                 browser._async_completion_callback = _on_done
             return None
@@ -279,6 +290,6 @@ class QihooLogin:
 
         result = self.login_by_qt(cookie)
         if on_complete is not None:
-            on_complete(result if result["ok"] else None)
+            on_complete(result if result["ok"] else False)
             return None
         return result

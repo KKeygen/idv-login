@@ -83,6 +83,7 @@ class wechatChannel(channelmgr.channel):
         game_id: str = "",
         session: myappVeriftResp = None,
         uuid: str = "",
+        token_issued_at: int | None = None,
     ) -> None:
         super().__init__(
             login_info,
@@ -94,6 +95,7 @@ class wechatChannel(channelmgr.channel):
             name,
             uuid,
         )
+        self.token_issued_at = last_login_time if token_issued_at is None else token_issued_at
         self.logger = setup_logger()
         self.crossGames = False
         cloudRes = CloudRes()
@@ -115,64 +117,70 @@ class wechatChannel(channelmgr.channel):
         self.session: myappVeriftResp = myappVeriftResp(session) if session != None else None
 
     def request_user_login(self, on_complete=None):
-        """请求用户登录，支持异步模式。
-        
-        Args:
-            on_complete: 异步回调函数，接收登录结果 (True/False)
-        """
+        """本次扫码登录：True 成功，False 失败，None 用户取消。"""
         def _do_login():
-            if self.session == None:
+            try:
                 genv.set("GLOB_LOGIN_UUID", self.uuid)
                 resp = self.wechatLogin.webLogin()
-                if resp == None:
-                    self.session = None
+                if resp is None or resp is False:
+                    return resp
+                if not isinstance(resp, dict) or not all(
+                    resp.get(key) for key in ("atk", "openid", "atk_expire")
+                ):
                     return False
                 self.session = myappVeriftResp(resp)
-                #get user info
-                #https://api.weixin.qq.com/sns/userinfo?access_token=ACCESS_TOKEN&openid=OPENID
+                self.token_issued_at = int(time.time())
+                self.mark_manual_login_success()
                 try:
                     r = requests.get(
                         f"https://api.weixin.qq.com/sns/userinfo?access_token={self.session.atk}&openid={self.session.openid}",
                         verify=should_verify_ssl()
                     )
-                    r.encoding="utf-8"
-                    self.name=r.json().get("nickname")
-                except:
+                    nickname = r.json().get("nickname")
+                    if nickname:
+                        self.name = nickname
+                except Exception:
                     pass
-            else:
-                self.logger.info(f"刷新 ac-token，当前时间: {int(time.time())}，过期时间: {self.last_login_time+self.session.atk_expire}")
-                r = requests.get(
-                    f"https://api.weixin.qq.com/sns/oauth2/refresh_token?appid={self.wx_appid}&grant_type=refresh_token&refresh_token={self.session.rtk}",
-                    verify=should_verify_ssl()
-                )
-                if not r.status_code == 200:
-                    self.logger.error(f"Refresh token 过期，疑似被顶号，重新唤起扫码登录。status={r.status_code}")
-                    self.session = None
-                    return _do_login()  # 递归调用内部函数
-                self.session.rtk = r.json().get("refresh_token")
-                self.session.atk = r.json().get("access_token")
-                self.logger.info("微信 ac-token 刷新成功")
-            if self.session!=None:
-                self.last_login_time=int(time.time())
                 return True
-            return False
+            except Exception:
+                self.logger.error("微信扫码登录失败")
+                return False
 
         if on_complete is not None:
-            # 异步模式：在线程中执行登录
             import threading
-            def _async_login():
-                result = _do_login()
-                on_complete(result)
-            thread = threading.Thread(target=_async_login)
-            thread.start()
+            threading.Thread(target=lambda: on_complete(_do_login())).start()
             return None
-        else:
-            # 同步模式
-            return _do_login()
+        return _do_login()
+
+    def _refresh_session(self):
+        """仅用已有凭证续期；失败时保留原凭证。"""
+        if self.session is None or not self.session.rtk:
+            return False
+        try:
+            r = requests.get(
+                "https://api.weixin.qq.com/sns/oauth2/refresh_token",
+                params={"appid": self.wx_appid, "grant_type": "refresh_token",
+                        "refresh_token": self.session.rtk},
+                verify=should_verify_ssl()
+            )
+            data = r.json()
+            if r.status_code != 200 or not all(
+                data.get(key) for key in ("access_token", "refresh_token", "expires_in")
+            ) or data.get("errcode"):
+                return False
+            renewed = self.session.__json__()
+            renewed.update(atk=data["access_token"], rtk=data["refresh_token"],
+                           atk_expire=int(data["expires_in"]))
+            self.session = myappVeriftResp(renewed)
+            self.token_issued_at = int(time.time())
+            return True
+        except Exception:
+            self.logger.error("微信凭证续期失败")
+            return False
 
     def is_token_valid(self):
         #	/sns/auth
-        if self.session != None and self.last_login_time+self.session.atk_expire > int(time.time()):
+        if self.session != None and self.token_issued_at+self.session.atk_expire > int(time.time()):
             r = requests.get(
                     f"https://api.weixin.qq.com/sns/auth?access_token={self.session.atk}&openid={self.session.openid}",
                     verify=should_verify_ssl()
@@ -199,6 +207,7 @@ class wechatChannel(channelmgr.channel):
             game_id=data.get("game_id", ""),
             session=data.get("session_json", None),
             uuid=data.get("uuid", ""),
+            token_issued_at=data.get("token_issued_at", data.get("last_login_time", 0)),
         )
 
     def _get_extra_data(self):
@@ -246,17 +255,7 @@ class wechatChannel(channelmgr.channel):
 
         return json.dumps(res)
 
-    def get_session(self, user_id: str, game_id: str):
-        if not self.is_token_valid():
-            self.request_user_login()
-        if self.session is None:
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(
-            user_id, self.session.openid, self.session.atk,
-            extra_data=self._get_extra_data(),
-        )
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         """获取 UniSDK 登录数据，支持异步模式。
         
         当 token 过期需要重新登录时，可异步执行登录流程。
@@ -318,29 +317,34 @@ class wechatChannel(channelmgr.channel):
                     on_complete(result)
                 return result
             except Exception as e:
-                self.logger.error(f"构建 UniSDK 数据失败: {e}")
+                self.logger.error("构建 UniSDK 数据失败")
                 if on_complete:
-                    on_complete(None)
-                return None
+                    on_complete(False)
+                return False
 
-        # 检查 token 是否有效
-        if not self.is_token_valid():
+        try:
+            valid = self.is_token_valid()
+        except Exception:
+            if not interactive:
+                raise
+            valid = False
+        if not valid:
+            if self._refresh_session():
+                return _on_login_ready()
+            if not interactive:
+                if on_complete is not None:
+                    on_complete(False)
+                    return None
+                return False
             if on_complete is not None:
-                # 异步模式：先完成登录
                 def _on_login_done(success):
-                    if success:
+                    if success is True:
                         _on_login_ready()
                     else:
-                        on_complete(None)
+                        on_complete(success)
                 self.request_user_login(on_complete=_on_login_done)
                 return None
-            else:
-                # 同步模式
-                self.request_user_login()
-                if not self.is_token_valid():
-                    return None
-
-        # 同步模式或 token 有效时直接构建数据
-        if on_complete is not None:
-            return _on_login_ready()
-        return _build_unisdk_data()
+            result = self.request_user_login()
+            if result is not True:
+                return result
+        return _on_login_ready()

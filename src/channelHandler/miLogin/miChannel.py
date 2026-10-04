@@ -145,8 +145,8 @@ class MiLogin:
             write_json_restricted(DEVICE_RECORD, self.device)
 
     def initAccountData(self) -> object:
-        if self.oauthData == None:
-            self.webLogin()
+        if not isinstance(self.oauthData, dict) or not self.oauthData.get("uuid") or not self.oauthData.get("st"):
+            raise ValueError("小米缺少现有登录凭证")
         params = {
             "fuid": self.oauthData["uuid"],  # 用户ID
             "devAppId": self.appId,  # apk中的appid
@@ -166,12 +166,13 @@ class MiLogin:
             headers=headers,
             verify=should_verify_ssl()
         )
+        response.raise_for_status()
         res = utils.decrypt_response(response.text, AES_KEY)
         if res["retCode"] == 200:
             return res
         else:
-            self.logger.error(f"InitAccountData 失败, retCode={res.get('retCode')}")
-            raise Exception("Init account data failed")
+            code = res.get('retCode')
+            raise RuntimeError(f"channel=xiaomi step=account_fetch code={code if isinstance(code, int) else 'invalid'}")
 
     def getSTbyQQResp(self,qAuthResp):
         params = {
@@ -195,13 +196,12 @@ class MiLogin:
             verify=should_verify_ssl()
         )
         res = utils.decrypt_response(response.text, AES_KEY)
-        if res["code"] == 0:
+        if res.get("code") == 0 and res.get("uuid") and res.get("st"):
             self.oauthData = res
             return res
         else:
             self.logger.error(f"小米QQ登录失败, code={res.get('code')}")
-            self.oauthData=None
-            return None
+            return False
 
     def getSTbyCode(self, code) -> None:
         params = {
@@ -225,13 +225,12 @@ class MiLogin:
             verify=should_verify_ssl()
         )
         res = utils.decrypt_response(response.text, AES_KEY)
-        if res["code"] == 0:
+        if res.get("code") == 0 and res.get("uuid") and res.get("st"):
             self.oauthData = res
             return res
         else:
             self.logger.error(f"小米Code登录失败, code={res.get('code')}")
-            self.oauthData=None
-            return None
+            return False
 
     def webLogin(self, on_complete=None):
         login_url = "http://account.xiaomi.com/fe/service/login/password?sid=newgamecenterweb&qs=%253Fsid%253Dnewgamecenterweb%2526callback%253Dhttps%25253A%25252F%25252Fgame.xiaomi.com%25252Fauth%25252Fmi_login&callback=https%3A%2F%2Fgame.xiaomi.com%2Fauth%2Fmi_login&_sign=GDzEamQvXougqttdJc8mC0nEyRA%3D&serviceParam=%7B%22checkSafePhone%22%3Afalse%2C%22checkSafeAddress%22%3Afalse%2C%22lsrp_score%22%3A0.0%7D&showActiveX=false&theme=&needTheme=false&bizDeviceType=&_locale=zh_CN"
@@ -249,27 +248,36 @@ class MiLogin:
                     self._active_browser = None  # 登录完成后释放引用
                     try:
                         if not browser.result or not isinstance(browser.result, tuple):
-                            self.oauthData = None
-                            on_complete(None)
+                            on_complete(None if browser.result is None or browser.result == "" else False)
                             return
                         resp, isQQ = browser.result
                         if isQQ:
                             self.account_type = 2
-                            on_complete(self.getSTbyQQResp(resp))
+                            data = self.getSTbyQQResp(resp)
                         else:
-                            on_complete(self.getSTbyCode(resp))
-                    except Exception:
-                        self.logger.exception("小米异步登录处理失败")
-                        self.oauthData = None
-                        on_complete(None)
+                            data = self.getSTbyCode(resp)
+                    except Exception as error:
+                        data = error
+                    on_complete(data)
                 miBrowser._async_completion_callback = _on_async_done
             return None
 
-        resp, isQQ=result
-        if isQQ:
-            self.account_type=2
-            return self.getSTbyQQResp(resp)
-        return self.getSTbyCode(resp)
+        data = None
+        if result:
+            try:
+                resp, isQQ = result
+                if isQQ:
+                    self.account_type = 2
+                    data = self.getSTbyQQResp(resp)
+                else:
+                    data = self.getSTbyCode(resp)
+            except Exception as error:
+                if on_complete is None:
+                    raise
+                data = error
+        if on_complete is not None:
+            on_complete(data)
+        return data
 
     def makeFakeDevice(self):
         device = DEVICE.copy()

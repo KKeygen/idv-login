@@ -130,21 +130,23 @@ def migrate_channel_records():
         return
     import json
     from channelmgr import legacy_record_source
+    from channel_cache import exception_summary
     from secure_write import write_json_restricted
 
     target = genv.get("FP_CHANNEL_RECORD")
     legacy = os.path.join(genv.get("FP_WORKDIR"), "channels.json")
-    if os.path.exists(target):
-        with open(target, "r", encoding="utf-8") as file:
-            records = json.load(file)
-    elif os.path.exists(legacy):
+    source_path = target if os.path.exists(target) else legacy
+    if os.path.exists(source_path):
         try:
-            with open(legacy, "r", encoding="utf-8") as file:
+            with open(source_path, "r", encoding="utf-8") as file:
                 records = json.load(file)
-        except (ValueError, UnicodeDecodeError):
-            # 沿用旧版读取损坏记录后清空的行为，但回退用的旧文件不改动。
-            setup_logger().exception("读取渠道服登录信息失败。已经清空渠道服信息。")
-            records = []
+            if not isinstance(records, list):
+                raise ValueError('账号文件顶层必须是JSON数组')
+        except (OSError, ValueError, UnicodeDecodeError) as error:
+            genv.set('CHANNEL_RECORDS_LOAD_FAILED', True)
+            setup_logger().error('file={} stage=records.migrate.read 读取失败；保留原文件，不创建空替代文件\n{}',
+                                 os.path.basename(source_path), exception_summary(error))
+            return
     else:
         records = []
 
@@ -153,15 +155,18 @@ def migrate_channel_records():
     for index, item in enumerate(records, 1):
         try:
             source = legacy_record_source(item)
-        except ValueError as error:
-            setup_logger().error(f"跳过第 {index} 条不支持的渠道账号记录：{error}")
-            continue
-        item["record_source"] = source
-        if source == "manual":
-            old_uuid = item["uuid"]
-            item["uuid"] = "idv-" + old_uuid.removeprefix("idv-")
-            renamed[old_uuid.removeprefix("idv-")] = item["uuid"]
-        migrated.append(item)
+            if source == "manual" and not item.get('uuid'):
+                raise ValueError('手动账号缺少uuid')
+            item["record_source"] = source
+            if source == "manual":
+                old_uuid = item["uuid"]
+                item["uuid"] = "idv-" + old_uuid.removeprefix("idv-")
+                renamed[old_uuid.removeprefix("idv-")] = item["uuid"]
+            migrated.append(item)
+        except (ValueError, KeyError, TypeError) as error:
+            setup_logger().error('file={} record_index={} stage=records.migrate.item 迁移失败；原条目保留，继续其余账号\n{}',
+                                 os.path.basename(source_path), index, exception_summary(error))
+            migrated.append(item)
     write_json_restricted(target, migrated)
 
     # auto-* 保存的是 UUID。昵称、远端渠道名以及旧 channels.json 均不修改。
@@ -248,3 +253,15 @@ def run_once():
                 logger.error(f"清理残留 NRPT 规则失败: {e}")
             _cleanup_residual_proxy_registry(logger)
             genv.set("nrpt_env_cleanup_v603_done", True, True)
+
+
+def run_once_after_qt(ui_manager):
+    """Offer the 6.3.2 feature once after Qt and the WebUI manager are ready."""
+    import re
+    version = tuple(int(part) for part in re.findall(r'\d+', genv.get('VERSION', ''))[:3])
+    if version < (6, 3, 2) or genv.get('account_switching_wizard_632_offered', False):
+        return
+    # Opening the guide is not consent. Projection remains off until Save.
+    ui_manager.open_for_game('', 'account-switching')
+    genv.set('account_switching_wizard_632_offered', True, True)
+    setup_logger().info('[mpay-db] 已打开游戏内切换账号向导；等待用户明确选择后才启用')

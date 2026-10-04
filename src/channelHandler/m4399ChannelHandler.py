@@ -222,9 +222,10 @@ class m4399Channel(channelmgr.channel):
         if not isinstance(resp, dict) or not isinstance(resp.get("result"), dict):
             return False
         result = resp["result"]
-        if not result.get("uid") or not result.get("state"):
+        if not result.get("uid") or not result.get("state") or not result.get("access_token"):
             return False
         self.loginResp = resp
+        self.observe_sdkuid(result["uid"])
         self._update_name()
         return self.is_token_valid()
 
@@ -336,52 +337,34 @@ class m4399Channel(channelmgr.channel):
     def request_user_login(self, on_complete=None):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
 
-        if on_complete is not None:
-
-            def _on_done(resp):
+        def _on_done(resp):
+            result = resp.get("result") if isinstance(resp, dict) else None
+            if resp is None:
+                success = None
+            elif not self.m4399Login._successful_login_response(resp) or not isinstance(result, dict) or not all(result.get(key) for key in ("uid", "state", "access_token")):
+                success = False
+            else:
+                self.loginResp = resp
                 self._sync_web_snapshot()
-                if resp and isinstance(resp.get("result"), dict):
-                    self.loginResp = resp
-                    self._update_name()
-                    self.lastWebLoginTime = int(time.time())
-                    self._persist_recovery_state()
-                    self._warn_recovery_timeline(
-                        "Web 登录成功，已保存 callback JSON/cookies/refresh_token"
-                    )
-                    on_complete(True)
-                else:
-                    self._warn_recovery_timeline("Web 登录未完成或失败")
-                    on_complete(False)
+                self._update_name()
+                self.lastWebLoginTime = int(time.time())
+                self._persist_recovery_state()
+                self._warn_recovery_timeline("Web 登录成功，已保存 callback JSON/cookies/refresh_token")
+                self.mark_manual_login_success()
+                success = True
+            if on_complete is not None:
+                on_complete(success)
+                return None
+            return success
 
+        if on_complete is not None:
             self.m4399Login.web_login(on_complete=_on_done)
-            return
-
-        resp = self.m4399Login.web_login()
-        self._sync_web_snapshot()
-        if resp and isinstance(resp.get("result"), dict):
-            self.loginResp = resp
-            self._update_name()
-            self.lastWebLoginTime = int(time.time())
-            self._persist_recovery_state()
-            self._warn_recovery_timeline(
-                "Web 登录成功，已保存 callback JSON/cookies/refresh_token"
-            )
-            return True
-
-        self._warn_recovery_timeline("Web 登录未完成或失败")
-        return False
+            return None
+        return _on_done(self.m4399Login.web_login())
 
     # ── UniSDK ────────────────────────────────────────────────
 
-    def get_session(self, user_id: str, game_id: str):
-        if not self._recover_existing_credential():
-            self.request_user_login()
-        data = self._get_login_data()
-        if not data or not data.get("access_token"):
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(user_id, data.get("uid"), data.get("state"))
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
         if not game_id:
             game_id = self.game_id
@@ -458,38 +441,30 @@ class m4399Channel(channelmgr.channel):
                 "cv": "a1.5.0",
             }
 
-        if self._recover_existing_credential():
-            try:
-                result = _build_result()
-            except Exception as exc:
-                self.logger.error(f"4399 UniSDK error: {exc}")
-                result = None
+        def _deliver(result):
             if on_complete is not None:
                 on_complete(result)
                 return None
             return result
 
-        # All non-interactive recovery paths failed: interactive Web fallback.
+        def _build():
+            try:
+                return _build_result()
+            except Exception:
+                self.logger.exception("4399 UniSDK 生成失败")
+                return False
+
+        if self._recover_existing_credential():
+            return _deliver(_build())
+        if not interactive:
+            return _deliver(False)
+
+        def _on_login_done(success):
+            if success is not True:
+                return _deliver(None if success is None else False)
+            return _deliver(_build() if self.is_token_valid() else False)
+
         if on_complete is not None:
-
-            def _on_login_done(success):
-                if success and self.is_token_valid():
-                    try:
-                        on_complete(_build_result())
-                    except Exception as exc:
-                        self.logger.error(f"4399 UniSDK error: {exc}")
-                        on_complete(None)
-                else:
-                    on_complete(None)
-
             self.request_user_login(on_complete=_on_login_done)
             return None
-
-        self.request_user_login()
-        if not self.is_token_valid():
-            return None
-        try:
-            return _build_result()
-        except Exception as exc:
-            self.logger.error(f"4399 UniSDK error: {exc}")
-            return None
+        return _on_login_done(self.request_user_login())

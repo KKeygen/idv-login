@@ -132,16 +132,19 @@ class ucChannel(channelmgr.channel):
 
     def _store_session(self, session_data: Optional[Dict[str, Any]]) -> bool:
         """保存登录结果并提取 refreshToken，计算 sid 过期时间。"""
-        if not session_data:
-            self.ucSession = None
+        if not isinstance(session_data, dict):
             return False
+        data = session_data.get("data", session_data)
+        if not isinstance(data, dict) or not data.get("sid") or not (data.get("accountId") or data.get("ucid")):
+            return False
+        timeout = int(session_data.get("timeout", 86400))
         self.ucSession = session_data
+        self.observe_sdkuid(data.get("accountId") or data.get("ucid"))
         # 提取 refreshToken
         rt = session_data.get("refreshToken", "")
         if rt:
             self.refreshToken = rt
         # 计算 sid 过期时间（timeout 是持续秒数，默认 86400 = 24h）
-        timeout = session_data.get("timeout", 86400)
         self.sid_expire_time = int(time.time()) + int(timeout)
         data = self._get_session_data()
         if data:
@@ -164,7 +167,8 @@ class ucChannel(channelmgr.channel):
         try:
             new_data = self.ucLogin.do_refresh(old_sid, self.refreshToken)
             if new_data and isinstance(new_data, dict) and new_data.get("sid"):
-                self._store_session(new_data)
+                if not self._store_session(new_data):
+                    return False
                 self.logger.debug("UC session 自动续期成功")
                 return True
         except Exception:
@@ -182,9 +186,11 @@ class ucChannel(channelmgr.channel):
                 if on_complete is not None:
                     on_complete(None)
                     return
-                return False
+                return None
             try:
                 success = self._store_session(session_data)
+                if success is True:
+                    self.mark_manual_login_success()
             except Exception:
                 self.logger.exception("UC 异步登录处理失败")
                 success = False
@@ -197,59 +203,48 @@ class ucChannel(channelmgr.channel):
             self.ucLogin.sms_login_dialog(on_complete=_on_done)
             return
         session_data = self.ucLogin.sms_login_dialog()
-        return self._store_session(session_data)
+        return _on_done(session_data)
 
     # ── UniSDK 数据 ──────────────────────────────────────────
 
-    def get_session(self, user_id: str, game_id: str):
-        if not self._has_valid_sid() and self.refreshToken:
-            self._try_refresh()
-        if not self._has_valid_sid():
-            self.request_user_login()
-        data = self._get_session_data()
-        if not data:
-            raise ValueError("登录已过期，请在渠道服管理界面重新登录")
-        return self._session_result(
-            user_id, data.get("accountId") or data.get("ucid"), data.get("sid"),
-        )
-
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
+        game_id = game_id or self.game_id
         if not game_id:
-            game_id = self.game_id
-        if not game_id:
-            raise RuntimeError("uc_platform 缺少 game_id")
-
+            if on_complete is not None:
+                on_complete(False)
+                return None
+            return False
         short_game_id = getShortGameId(game_id)
 
-        # 尝试 refreshToken 续期（如有）
-        if not self._has_valid_sid() and self.refreshToken:
-            self._try_refresh()
-
-        if not self._has_valid_sid():
-            # 需要重新登录
+        def _deliver(result):
             if on_complete is not None:
-                def _on_login_done(success):
-                    if success and self._has_valid_sid():
-                        try:
-                            result = self._build_unisdk_result(short_game_id)
-                            on_complete(result)
-                        except Exception as e:
-                            self.logger.error(f"UC 生成登录数据失败: {e}")
-                            on_complete(None)
-                    else:
-                        on_complete(None)
-
-                self.request_user_login(on_complete=_on_login_done)
+                on_complete(result)
                 return None
-            else:
-                self.request_user_login()
+            return result
 
-        result = self._build_unisdk_result(short_game_id)
+        def _build():
+            try:
+                return self._build_unisdk_result(short_game_id)
+            except Exception:
+                self.logger.exception("生成渠道登录数据失败")
+                return False
+
+        def _on_login_done(success):
+            if success is not True:
+                return _deliver(None if success is None else False)
+            return _deliver(_build() if self._has_valid_sid() else False)
+
+        if self._has_valid_sid():
+            return _deliver(_build())
+        if bool(self.refreshToken) and self._try_refresh():
+            return _deliver(_build() if self._has_valid_sid() else False)
+        if not interactive:
+            return _deliver(False)
         if on_complete is not None:
-            on_complete(result)
+            self.request_user_login(on_complete=_on_login_done)
             return None
-        return result
+        return _on_login_done(self.request_user_login())
 
     def _has_valid_sid(self) -> bool:
         """检查 ucSession 是否有有效的 sid + accountId，且未过期。"""

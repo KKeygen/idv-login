@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -16,7 +17,7 @@ logger = setup_logger()
 
 
 class DynamicGameCatalog:
-    """Load the public Fever catalog and map it to cloud game IDs.
+    """Merge public game directories and map them to cloud game IDs.
 
     The generated data is kept separate from ``cache.json``.  Callers can use
     it to fill gaps in the hand-maintained cloud configuration without ever
@@ -26,6 +27,9 @@ class DynamicGameCatalog:
     GAME_CONFIG_URL = (
         "https://gamepay.163.com/common_api/internal/game_config"
         "?appChannel=netease.allysdk3rd"
+    )
+    PAY_HOMEPAGE_URL = (
+        "https://pay-api.ds.163.com/api/home-page-info/home_page_info"
     )
     HOMEPAGE_URL = (
         "https://loadingbaycn.webapp.163.com/app/v1/game_store/homepage_info"
@@ -41,7 +45,7 @@ class DynamicGameCatalog:
         "https://api.loadingbay.com/app/v1/game_library/app"
         "?force=1&app_id={}"
     )
-    CACHE_SCHEMA_VERSION = 5
+    CACHE_SCHEMA_VERSION = 6
     DEFAULT_REFRESH_INTERVAL = 24 * 60 * 60
 
     _MODIFIED = "modified"
@@ -75,7 +79,13 @@ class DynamicGameCatalog:
         try:
             with open(self.cache_file, "r", encoding="utf-8") as cache_handle:
                 data = json.load(cache_handle)
-            if data.get("schema_version") == self.CACHE_SCHEMA_VERSION:
+            if data.get("schema_version") in (5, self.CACHE_SCHEMA_VERSION):
+                if data.get("schema_version") != self.CACHE_SCHEMA_VERSION:
+                    # Keep the last usable Fever catalog while fetching the
+                    # additional source and newly retained visual fields.
+                    data["schema_version"] = self.CACHE_SCHEMA_VERSION
+                    data["checked_at"] = 0
+                    data["sources"] = {}
                 return data
         except FileNotFoundError:
             pass
@@ -86,6 +96,7 @@ class DynamicGameCatalog:
             "checked_at": 0,
             "sources": {},
             "game_configs": {},
+            "pay_configs": {},
             "homepage_apps_cn": [],
             "homepage_apps_oversea": [],
             "homepage_apps": [],
@@ -111,8 +122,11 @@ class DynamicGameCatalog:
             platform_type = str(item.get("platform_type") or "fever")
             if not short_id or not isinstance(distributions, list):
                 continue
-            # fever = 可下载托管游戏；fever_display = 模拟器移动游戏（仅展示，不可下载）
-            if platform_type not in ("fever", "fever_display") or not distributions:
+            # Native directory entries only supply visuals and manual location.
+            if platform_type == "native":
+                if distributions:
+                    continue
+            elif platform_type not in ("fever", "fever_display") or not distributions:
                 continue
             normalized_games.append(dict(item))
             games_by_short_id.setdefault(short_id, dict(item))
@@ -141,6 +155,8 @@ class DynamicGameCatalog:
         if source_key == "game_config":
             data = payload.get("data", {})
             return data.get("gameConfigList", []) if isinstance(data, dict) else []
+        if source_key == "pay_homepage":
+            return payload.get("result", {}).get("configs", [])
         if source_key in ("homepage_info", "oversea_recommend"):
             return payload.get("data", {})
         return payload
@@ -166,6 +182,13 @@ class DynamicGameCatalog:
                 return self._NOT_MODIFIED, None, dict(previous_meta)
             response.raise_for_status()
             payload = response.json()
+            if source_key == "pay_homepage" and (
+                not isinstance(payload, dict)
+                or payload.get("code") != 0
+                or not isinstance(payload.get("result"), dict)
+                or not isinstance(payload["result"].get("configs"), list)
+            ):
+                raise ValueError("Invalid public payment directory response")
             payload_hash = self._json_hash(
                 self._content_for_hash(source_key, payload)
             )
@@ -204,7 +227,33 @@ class DynamicGameCatalog:
                 "mpay_appid": cloud_game_id,
                 "name": str(item.get("app_name") or "").strip(),
                 "icon": str(item.get("iconimg") or "").strip(),
+                "main_image": str(
+                    item.get("pcBannerImg") or item.get("headerimg") or ""
+                ).strip(),
                 "log_key": str(item.get("client_log_key") or "").strip(),
+            })
+        return result
+
+    @staticmethod
+    def _normalize_pay_configs(payload: dict) -> Dict[str, dict]:
+        result = {}
+        for item in payload.get("result", {}).get("configs", []):
+            if not isinstance(item, dict) or item.get("chargeType") != "game":
+                continue
+            short_id = str(item.get("appKey") or "").strip()
+            target = urlparse(str(item.get("url") or ""))
+            if (
+                not short_id
+                or target.hostname != "pay.ds.163.com"
+                or target.path.rstrip("/") != f"/activity/{short_id}"
+            ):
+                continue
+            result.setdefault(short_id, {
+                "name": str(item.get("gameName") or "").strip(),
+                "icon": str(item.get("gameUrl") or "").strip(),
+                "main_image": str(
+                    item.get("pcUrl") or item.get("mobileUrl") or ""
+                ).strip(),
             })
         return result
 
@@ -277,7 +326,8 @@ class DynamicGameCatalog:
 
     @staticmethod
     def _build_games(
-        homepage_apps: List[dict], app_details: Dict[str, dict], configs: Dict[str, dict]
+        homepage_apps: List[dict], app_details: Dict[str, dict], configs: Dict[str, dict],
+        pay_configs: Optional[Dict[str, dict]] = None,
     ) -> List[dict]:
         games = []
         games_by_short_id = {}
@@ -337,6 +387,45 @@ class DynamicGameCatalog:
             }
             games.append(record)
             games_by_short_id[short_id] = record
+        pay_configs = pay_configs or {}
+        for short_id in dict.fromkeys(list(configs) + list(pay_configs)):
+            # a53 is the 手游宝 payment wallet, not a launchable game.
+            if short_id == "a53":
+                continue
+            if short_id in games_by_short_id:
+                continue
+            config = configs.get(short_id, {})
+            pay_config = pay_configs.get(short_id, {})
+            name = config.get("name") or pay_config.get("name") or short_id
+            icon = config.get("icon") or pay_config.get("icon") or ""
+            main_image = (
+                pay_config.get("main_image") or config.get("main_image") or icon
+            )
+            cloud_game_id = str(config.get("cloud_game_id") or "").strip()
+            catalog_sources = (
+                (["game_config"] if config else [])
+                + (["pay_homepage"] if pay_config else [])
+            )
+            games.append({
+                # Keep the directory ID: payment and SDK suffixes can differ.
+                "game_id": short_id,
+                "short_game_id": short_id,
+                "cloud_game_id": cloud_game_id,
+                "name": name,
+                "icon": icon,
+                "platform_type": "native",
+                "catalog_source": catalog_sources[0],
+                "catalog_sources": catalog_sources,
+                "download_distributions": [],
+                "distribution_sources": {},
+                "launcher": {
+                    "display_name": name,
+                    "icon": icon,
+                    "logo": icon,
+                    "main_image": main_image,
+                    "background_image": main_image,
+                },
+            })
         return games
 
     def _cache_is_fresh(self) -> bool:
@@ -370,6 +459,17 @@ class DynamicGameCatalog:
                     )
                     if normalized_configs != self._cache.get("game_configs", {}):
                         self._cache["game_configs"] = normalized_configs
+                        changed = True
+
+            pay_status, pay_payload, pay_meta = self._request_json(
+                "pay_homepage", self.PAY_HOMEPAGE_URL
+            )
+            sources["pay_homepage"] = pay_meta
+            if pay_status == self._MODIFIED or not self._cache.get("pay_configs"):
+                if pay_payload is not None:
+                    normalized_pay = self._normalize_pay_configs(pay_payload)
+                    if normalized_pay != self._cache.get("pay_configs", {}):
+                        self._cache["pay_configs"] = normalized_pay
                         changed = True
 
             homepage_status, homepage_payload, homepage_meta = self._request_json(
@@ -451,6 +551,7 @@ class DynamicGameCatalog:
                 homepage_apps,
                 app_details,
                 self._cache.get("game_configs", {}),
+                self._cache.get("pay_configs", {}),
             )
             if games != self._cache.get("games", []):
                 self._cache["games"] = games
@@ -459,6 +560,7 @@ class DynamicGameCatalog:
             self._cache["app_details"] = app_details
             if (
                 config_status != self._ERROR
+                and pay_status != self._ERROR
                 and homepage_status != self._ERROR
                 and oversea_status != self._ERROR
             ):

@@ -122,17 +122,19 @@ class HonorLogin:
                     try:
                         if not b.result or b.result == "":
                             self.logger.warning("荣耀登录未完成（用户取消或窗口关闭）")
-                            on_complete(False)
+                            on_complete(None)
                             return
-                        self._handle_redirect(b.result)
-                        on_complete(self.unionToken is not None)
+                        on_complete(self._handle_redirect(b.result))
                     except Exception:
                         self.logger.exception("荣耀异步登录处理失败")
                         on_complete(False)
                 browser._async_completion_callback = _on_async_done
             return
 
-        self._handle_redirect(res)
+        result = None if not res else self._handle_redirect(res)
+        if on_complete is not None:
+            on_complete(result)
+        return result
 
     def _handle_redirect(self, url: str):
         """从 honorid://redirect_url?code=XXX 提取 code，直接传给 Game Center login。"""
@@ -142,13 +144,13 @@ class HonorLogin:
         code_list = params.get("code")
         if not code_list:
             self.logger.error(f"荣耀 OAuth redirect 未包含 code: {url}")
-            return
+            return False
 
         auth_code = code_list[0]
         self.logger.info(f"荣耀 OAuth code 提取成功: {auth_code[:8]}...")
 
         # 荣耀 Game Center 直接接受 oauthCode（服务端自行换 token），不需要客户端先 exchange
-        self._game_center_login(auth_code)
+        return self._game_center_login(auth_code)
 
     def _game_center_login(self, oauth_code: str):
         """调用荣耀游戏中心 aggregate/login 获取 unionToken。"""
@@ -180,22 +182,23 @@ class HonorLogin:
             login_wrapper = data.get("loginData") or data.get("data") or {}
             if isinstance(login_wrapper, dict) and login_wrapper.get("errorCode") not in (0, None):
                 self.logger.error(f"荣耀 Game Center login 错误: {login_wrapper.get('errorMessage')}")
-                self.unionToken = None
-                return
+                return False
             login_data = login_wrapper.get("data") or login_wrapper
             ut = login_data.get("unionToken")
-            if ut and ut.get("openId"):
+            if isinstance(ut, dict) and ut.get("openId") and ut.get("token"):
+                expires = int(time.time()) + int(ut.get("expireTimeout", 3600))
                 self.unionToken = ut
                 self.displayName = str(login_data.get("displayName", ""))
                 self.lastLoginTime = int(time.time())
-                self.expiredTime = self.lastLoginTime + ut.get("expireTimeout", 3600)
-                self.logger.info(f"荣耀登录成功: openId={ut['openId'][:8]}..., displayName={self.displayName}")
+                self.expiredTime = expires
+                self.logger.info("荣耀登录成功")
+                return True
             else:
                 self.logger.error(f"荣耀 Game Center login 未返回有效 unionToken: {data}")
-                self.unionToken = None
+                return False
         except Exception:
             self.logger.exception("荣耀 Game Center login 请求失败")
-            self.unionToken = None
+            return False
 
     def _build_terminal_info(self, open_id: str = "", access_token: str = "") -> dict:
         pkg = self.channelConfig.get("package_name", "com.netease.dwrg.honor")
@@ -250,13 +253,14 @@ class HonorLogin:
             login_wrapper = data.get("loginData") or data.get("data") or {}
             login_data = login_wrapper.get("data") or login_wrapper
             ut = login_data.get("unionToken")
-            if ut and ut.get("openId"):
+            if isinstance(ut, dict) and ut.get("openId") and ut.get("token"):
+                expires = int(time.time()) + int(ut.get("expireTimeout", 3600))
                 self.unionToken = ut
                 dn = str(login_data.get("displayName", ""))
                 if dn:
                     self.displayName = dn
                 self.lastLoginTime = int(time.time())
-                self.expiredTime = self.lastLoginTime + ut.get("expireTimeout", 3600)
+                self.expiredTime = expires
                 self.logger.info("荣耀 configLogin 刷新成功")
                 return True
             else:

@@ -773,7 +773,7 @@ class UCLogin:
         def _show_dialog():
             dlg = UCSmsLoginDialog(parent, game_data=self._game_data)
             if dlg.exec() == QDialog.DialogCode.Accepted:
-                return dlg.get_session_data()
+                return dlg.get_session_data() or False
             return None
 
         if on_complete is not None:

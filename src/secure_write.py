@@ -43,25 +43,26 @@ def _atomic_write(filepath: str, data: bytes, *, restrict_unix: bool = True):
         if sys.platform != "win32" and restrict_unix:
             fd = tempfile.mkstemp(dir=dirpath, prefix=".tmp_", suffix=".json")
             tmp_path = fd[1]
-            os.write(fd[0], data)
-            os.close(fd[0])
-            fd = None
+            with os.fdopen(fd[0], 'wb') as tmp:
+                fd = None
+                tmp.write(data)
+                tmp.flush()
+                os.fsync(tmp.fileno())
             os.chmod(tmp_path, 0o600)
         else:
             with tempfile.NamedTemporaryFile(
                 dir=dirpath, prefix=".tmp_", suffix=".json",
                 delete=False, mode="wb",
             ) as tmp:
+                tmp_path = tmp.name
                 tmp.write(data)
                 tmp.flush()
                 os.fsync(tmp.fileno())
-                tmp_path = tmp.name
-
-        os.replace(tmp_path, filepath)
-        tmp_path = None  # rename succeeded, nothing to clean up
 
         if sys.platform == "win32":
-            _win_restrict_acl(filepath)
+            _win_restrict_acl(tmp_path)
+        os.replace(tmp_path, filepath)
+        tmp_path = None  # rename succeeded, nothing to clean up
     finally:
         if fd is not None:
             try:
@@ -92,22 +93,25 @@ def write_file_restricted(filepath: str, data: bytes):
             pass
 
 
-def write_json_restricted(filepath: str, obj):
-    """Serialize *obj* as JSON and write atomically with restricted permissions."""
+def write_json_restricted(filepath: str, obj, *, atomic_required=False):
+    """Write JSON; strict callers never fall back to truncating the live file."""
     text = json.dumps(obj, ensure_ascii=False)
     data = text.encode("utf-8")
     lock = _get_lock(filepath)
-    lock.acquire(timeout=5)
+    acquired = lock.acquire(timeout=5)
+    if not acquired and atomic_required:
+        raise TimeoutError('Configuration write lock timed out')
     try:
         _atomic_write(filepath, data)
     except Exception:
+        if atomic_required:
+            raise
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False)
     finally:
-        try:
+        if acquired:
             lock.release()
-        except RuntimeError:
-            pass
+
 
 def _win_restrict_acl(filepath: str):
     """Restrict ACL to Administrators + SYSTEM on Windows."""

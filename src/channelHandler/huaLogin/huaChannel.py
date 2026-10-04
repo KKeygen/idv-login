@@ -53,11 +53,8 @@ def parse_xml_text(xml_content, tag: str) -> str:
     """
     import xml.etree.ElementTree as ET
 
-    try:
-        root = ET.fromstring(xml_content or "")
-        return (root.findtext(".//" + tag) or "").strip()
-    except Exception:
-        return ""
+    root = ET.fromstring(xml_content or "")
+    return (root.findtext(".//" + tag) or "").strip()
 
 
 def render_qr_base64(content: str) -> str:
@@ -100,6 +97,7 @@ class HwQrSession:
             timeout=30,
             verify=should_verify_ssl(),
         )
+        r.raise_for_status()
         return r.status_code, r.text
 
     def get_qr_info(self):
@@ -117,17 +115,13 @@ class HwQrSession:
             "version=53000&appID=com.huawei.hwid&loginChannel=7000700"
             "&reqClientType=701&confirmFlag=1&lang=zh_CN"
         )
-        try:
-            st, content = self.post(url, body, "application/x-www-form-urlencoded; charset=UTF-8")
-            if st != 200:
-                self.logger.error(f"getqrInfo HTTP {st}: {content[:300]}")
-                return None
-            data = json.loads(content)
-            self._last_qr_code = str(data.get("qrCode", ""))
-            return data
-        except Exception as e:
-            self.logger.error(f"getqrInfo 请求异常: {e}")
+        st, content = self.post(url, body, "application/x-www-form-urlencoded; charset=UTF-8")
+        if st != 200:
+            self.logger.error("channel=huawei step=qr_info http_status={}", st)
             return None
+        data = json.loads(content)
+        self._last_qr_code = str(data.get("qrCode", ""))
+        return data
 
     def poll(self, qr_token: str):
         """单次轮询扫码状态。
@@ -140,17 +134,11 @@ class HwQrSession:
             f"{QR_HOST}/DimensionalCode/async?Version={VER}"
             f"&cVersion=1&blackScreen=0&appBrand=HUAWEI"
         )
-        try:
-            st, content = self.post(url, f"qrToken={qr_token}", "application/x-www-form-urlencoded; charset=UTF-8")
-            if st != 200:
-                self.logger.warning(f"poll HTTP {st}: {content[:300]}")
-                return None
-            return json.loads(content)
-        except json.JSONDecodeError:
-            self.logger.warning(f"poll 响应解析失败: {content[:300]}")
+        st, content = self.post(url, f"qrToken={qr_token}", "application/x-www-form-urlencoded; charset=UTF-8")
+        if st != 200:
+            self.logger.warning("channel=huawei step=qr_poll http_status={}", st)
             return None
-        except Exception:
-            return None
+        return json.loads(content)
 
     def login_by_qrcode(self, scan_result: dict, device_uuid: str):
         """用扫码结果换取 ST。
@@ -202,19 +190,15 @@ class HwQrSession:
             f"{AS_HOST}/AccountServer/IDM/loginByQrCode?Version={VER}"
             f"&cVersion=1&blackScreen=0&appBrand=HUAWEI"
         )
-        try:
-            st, content = self.post(url, xml, "text/html; charset=UTF-8")
-            if st != 200:
-                self.logger.error(f"loginByQrCode HTTP {st}: {content[:300]}")
-                return "", content
-            service_token = parse_xml_text(content, "serviceToken")
-            if not service_token:
-                self.logger.error(f"loginByQrCode 未返回 serviceToken: {content[:300]}")
-                return "", content
-            return service_token, content
-        except Exception as e:
-            self.logger.error(f"loginByQrCode 请求异常: {e}")
-            return "", ""
+        st, content = self.post(url, xml, "text/html; charset=UTF-8")
+        if st != 200:
+            self.logger.error("channel=huawei step=qr_exchange http_status={}", st)
+            return "", content
+        service_token = parse_xml_text(content, "serviceToken")
+        if not service_token:
+            self.logger.error("channel=huawei step=qr_exchange field=serviceToken missing")
+            return "", content
+        return service_token, content
 
 
 def transform_service_token(st: str, package_name: str) -> str:
@@ -255,18 +239,14 @@ def silent_token(st: str, package_name: str, client_id: str, device_id: str):
         "Authorization": str(int(time.time() * 1000)),
         "User-Agent": UA,
     }
-    try:
-        r = requests.post(
-            url + "&ctrID=" + _ctr_id(),
-            data=body.encode("utf-8"),
-            headers=headers,
-            timeout=30,
-            verify=should_verify_ssl(),
-        )
-        return r.json()
-    except Exception as e:
-        setup_logger().error(f"silent_token 请求异常: {e}")
-        return {}
+    r = requests.post(
+        url + "&ctrID=" + _ctr_id(),
+        data=body.encode("utf-8"),
+        headers=headers,
+        timeout=30,
+        verify=should_verify_ssl(),
+    )
+    return r.json()
 
 
 class HuaweiLoginBrowser(WebBrowser):
@@ -481,6 +461,7 @@ class HuaweiLogin:
             if self._qr_cancelled:
                 self.logger.info("华为扫码登录已取消")
                 self._update_qrcode_cache("cancelled")
+                return None
             else:
                 self.logger.warning("华为扫码登录超时")
                 self._update_qrcode_cache("expired")
@@ -538,18 +519,18 @@ class HuaweiLogin:
                 def _on_async_done(b):
                     self._active_browser = None
                     try:
-                        self._exchange_st(qr_session, qr_token)
-                        success = self.serviceToken is not None
-                    except Exception:
-                        self.logger.exception("华为异步登录回调失败")
-                        success = False
+                        success = self._exchange_st(qr_session, qr_token) if b.result else None
+                    except Exception as error:
+                        success = error
                     on_complete(success)
                 browser._async_completion_callback = _on_async_done
             return None
 
         # 同步模式：run() 已阻塞至登录完成
-        self._exchange_st(qr_session, qr_token)
-        return self.serviceToken is not None
+        result = None if not resp else self._exchange_st(qr_session, qr_token)
+        if on_complete is not None:
+            on_complete(result)
+        return result
 
     def _exchange_st(self, qr_session, qr_token):
         """URL 已跳转 loginSuccess，poll（最多5次）驱动状态机取结果并换 ST。"""
@@ -560,15 +541,16 @@ class HuaweiLogin:
                 break
             time.sleep(0.5)
         if not (isinstance(r, dict) and r.get("userID")):
-            self.logger.error(f"登录成功后轮询未取到扫码结果: {r}")
-            return
+            self.logger.error(f"登录成功后轮询未取到扫码结果")
+            return False
         st, _resp = qr_session.login_by_qrcode(r, self._device_uuid())
         if not st:
             self.logger.error("华为登录换 ST 失败")
-            return
+            return False
         self.serviceToken = st
         self.nickName = self._extract_nick_name(_resp)
         self.logger.info("华为登录成功，已获取 ST")
+        return True
 
     def _extract_nick_name(self, xml_content) -> str:
         return parse_xml_text(xml_content, "nickName")
@@ -594,11 +576,11 @@ class HuaweiLogin:
         package_name = str(game_cfg.get("package_name") or "").strip()
         client_id = str(game_cfg.get("app_id") or "").strip()
         if not package_name or not client_id:
-            self.logger.error(f"华为渠道配置缺失 package_name/app_id: {game_cfg}")
+            self.logger.error("channel=huawei step=silent_token field=package_name/app_id missing")
             return False
         resp = silent_token(self.serviceToken, package_name, client_id, self._device_id())
         if not isinstance(resp, dict) or "access_token" not in resp:
-            self.logger.error(f"silent_token 签发失败: {resp}")
+            self.logger.error("channel=huawei step=silent_token field=access_token missing")
             self.accessToken = None
             return False
         self.accessToken = resp["access_token"]
@@ -627,12 +609,8 @@ class HuaweiLogin:
         body["method"] = "client.hms.gs.getGameAuthSign"
         body["extraBody"] = f'json={{"appId":"{game_cfg.get("app_id")}"}}'
         body["accessToken"] = self.accessToken
-        try:
-            r = requests.post(url, headers=headers, data=body, verify=should_verify_ssl())
-            return r.json()
-        except Exception as e:
-            self.logger.error(f"getGameAuthSign 请求异常: {e}")
-            return None
+        r = requests.post(url, headers=headers, data=body, verify=should_verify_ssl())
+        return r.json()
 
     def is_token_expired(self) -> bool:
         if self.accessToken is None:

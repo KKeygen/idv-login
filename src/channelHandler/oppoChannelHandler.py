@@ -142,7 +142,6 @@ class oppoChannel(channelmgr.channel):
         """
 
         if not isinstance(self.loginResp, dict):
-            self.logger.error(f"loginResp 数据结构异常，预期 dict 实际 {type(self.loginResp)}，内容: {self.loginResp}")
             raise TypeError("oppo loginResp 必须为 dict. 请检查是否处于境外环境导致登录失败！")
 
         lr = self.loginResp
@@ -285,39 +284,55 @@ class oppoChannel(channelmgr.channel):
 
         return resp
 
-    def request_user_login(self, on_complete=None):
+    def request_user_login(self, on_complete=None, game_id=""):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
-
-        # deviceId 初始留空；若旧 loginResp.deviceId 非空，则本次注入优先使用旧值。
         consts = prefer_device_id_from_login_resp(self.loginResp, DEFAULT_CONSTS)
-
         def _process_resp(resp):
-            if not resp:
-                self.loginResp = None
+            if isinstance(resp, Exception):
+                raise resp
+            if resp is None or resp is False:
+                return resp
+            if not isinstance(resp, dict):
                 return False
-            old_device_id = ""
-            if isinstance(self.loginResp, dict):
-                old_device_id = str(self.loginResp.get("deviceId") or "").strip()
-            new_device_id = str(resp.get("deviceId") or "").strip()
-            if not new_device_id and old_device_id:
-                resp["deviceId"] = old_device_id
-            self.loginResp = resp
-            self._ensure_authorized()
+            account_token = resp.get("accountToken")
+            if not isinstance(account_token, dict) or not all(account_token.get(k) for k in ("idToken", "accessToken", "refreshToken")):
+                return False
+            if not all(resp.get(k) for k in ("ssoid", "primaryToken", "refreshTicket")):
+                return False
+            previous_resp, previous_open_account = self.loginResp, self.oppo_open_account
+            candidate = dict(resp)
+            if not candidate.get("deviceId") and isinstance(previous_resp, dict):
+                candidate["deviceId"] = previous_resp.get("deviceId", "")
+            self.loginResp = candidate
+            self.oppo_open_account = {}
+            try:
+                authorized = self._ensure_authorized()
+            except Exception:
+                self.loginResp, self.oppo_open_account = previous_resp, previous_open_account
+                raise
+            if not authorized:
+                self.loginResp, self.oppo_open_account = previous_resp, previous_open_account
+                return False
+            if not isinstance(previous_resp, dict) or previous_resp.get('ssoid') != candidate.get('ssoid'):
+                self.unisdk_cache.clear()  # A different parent account owns no old game's packets.
+            self.mark_manual_login_success(game_id or self.game_id)
             return True
-
-        if on_complete is not None:
-            def _on_done(resp):
-                try:
-                    success = _process_resp(resp)
-                except Exception:
-                    self.logger.exception("OPPO异步登录处理失败")
-                    success = False
-                on_complete(success)
-            self.oppoLogin.webLogin(consts=consts, on_complete=_on_done)
-            return
-
-        resp = self.oppoLogin.webLogin(consts=consts)
-        return _process_resp(resp)
+        def _on_browser_done(resp):
+            try:
+                result = _process_resp(resp)
+            except Exception as error:
+                result = error
+            on_complete(result)
+        try:
+            if on_complete is not None:
+                self.oppoLogin.webLogin(consts=consts, on_complete=_on_browser_done)
+                return None
+            return _process_resp(self.oppoLogin.webLogin(consts=consts))
+        except Exception as error:
+            if on_complete is not None:
+                on_complete(error)
+                return None
+            raise
 
     def _pick_gamesdk_pkg_name(self, short_game_id: str) -> str:
         cloud = CloudRes()
@@ -403,12 +418,16 @@ class oppoChannel(channelmgr.channel):
         res["SAUTH_JSON"] = base64.b64encode(json.dumps(json_data).encode()).decode()
         return json.dumps(res)
 
-    def get_session(self, user_id: str, game_id: str):
+    def _get_session(self, user_id: str, game_id: str, *, interactive=True):
         short_game_id = getShortGameId(game_id or self.game_id)
         if not short_game_id:
             raise ValueError("OPPO 缺少 game_id")
         if not self.is_token_valid():
-            self.request_user_login()
+            if not interactive:
+                return False
+            success = self.request_user_login(game_id=game_id)
+            if success is not True:
+                return success
 
         # 使用前 refresh 一次，尽量拿到最新 secondaryTokenMap（失败直接抛出）
         self.refresh_before_use()
@@ -509,6 +528,8 @@ class oppoChannel(channelmgr.channel):
             raise ValueError("OPPO 未返回本次登录指定的账号")
 
         if chosen is None and len(accounts) > 1:
+            if not interactive:
+                return False
             # 多账号且未指定默认：弹 Qt 菜单让用户选 accountName；是否记住由勾选框决定
             def _label_for(a: Dict[str, Any], default_idx: int) -> str:
                 name = str(a.get("account_name") or "").strip()
@@ -573,7 +594,7 @@ class oppoChannel(channelmgr.channel):
             layout.addWidget(buttons)
 
             if dialog.exec() != QDialog.DialogCode.Accepted:
-                raise RuntimeError("用户取消选择账号")
+                return None
 
             row = lst.currentRow()
             if row < 0:
@@ -613,12 +634,14 @@ class oppoChannel(channelmgr.channel):
         extra_data = json.dumps({"adv_channel": "0", "adid": "0"}, ensure_ascii=False)
         realname = json.dumps({"realname_type": 0, "age": age}, ensure_ascii=False)
 
-        return self._session_result(
-            user_id, account_id, ticket, sdk_version=str(profile.sdkversion),
-            extra_data=extra_data, realname=realname,
-        )
+        if user_id and account_id != str(user_id):
+            raise ValueError("OPPO 返回的账号与请求不一致")
+        self.observe_sdkuid(account_id, game_id)
+        return {"sdkuid": account_id, "sessionid": ticket,
+                "sdk_version": str(profile.sdkversion),
+                "extra_data": extra_data, "realname": realname}
 
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None):
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
         """按“其他渠道范式”返回用于 confirm_login 的 unisdk 数据。
 
         关键：
@@ -632,77 +655,90 @@ class oppoChannel(channelmgr.channel):
         if not game_id:
             raise RuntimeError("oppo 缺少 game_id")
 
-        short_game_id = getShortGameId(game_id)
+        try:
+            short_game_id = getShortGameId(game_id)
 
-        if not self.is_token_valid():
-            if on_complete is not None:
-                def _on_login_done(success):
-                    if success and self.is_token_valid():
+            if not self.is_token_valid():
+                if not interactive:
+                    if on_complete is not None:
+                        on_complete(False)
+                        return None
+                    return False
+                if on_complete is not None:
+                    def _on_login_done(success):
                         try:
-                            result = self._build_oppo_unisdk_result(short_game_id)
-                            on_complete(result)
-                        except Exception as e:
-                            self.logger.error(f"OPPO UniSDK error: {e}")
-                            on_complete(None)
-                    else:
-                        on_complete(None)
-                self.request_user_login(on_complete=_on_login_done)
-                return None
-            else:
-                self.request_user_login()
+                            if success is True and self.is_token_valid():
+                                result = self.get_uniSdk_data(short_game_id, interactive=interactive)
+                            else:
+                                result = success
+                        except Exception as error:
+                            result = error
+                        on_complete(result)
+                    self.request_user_login(on_complete=_on_login_done, game_id=game_id)
+                    return None
+                else:
+                    success = self.request_user_login(game_id=game_id)
+                    if success is not True:
+                        return success
 
-        session = self.get_session("", short_game_id)
-        account_id = session["sdkuid"]
-        ticket = session["sessionid"]
-        import channelHandler.channelUtils as channelUtils
+            session = self._get_session("", short_game_id, interactive=interactive)
+            if session is None or session is False:
+                if on_complete is not None:
+                    on_complete(session)
+                return session
+            account_id = session["sdkuid"]
+            ticket = session["sessionid"]
+            import channelHandler.channelUtils as channelUtils
 
-        self.uniBody = channelUtils.buildSAUTH(
-            self.channel_name,
-            self.channel_name,
-            account_id,
-            ticket,
-            short_game_id,
-            session["sdk_version"],
-            {
-                "get_access_token": "1",
-                "extra_data": session["extra_data"],
-                "realname": session["realname"],
-            },
-        )
+            self.uniBody = channelUtils.buildSAUTH(
+                self.channel_name,
+                self.channel_name,
+                account_id,
+                ticket,
+                short_game_id,
+                session["sdk_version"],
+                {
+                    "get_access_token": "1",
+                    "extra_data": session["extra_data"],
+                    "realname": session["realname"],
+                },
+            )
 
-        self.uniData = channelUtils.postSignedData(self.uniBody, short_game_id, True)
-        self.uniSDKJSON = json.loads(base64.b64decode(self.uniData["unisdk_login_json"]).decode())
+            self.uniData = channelUtils.postSignedData(self.uniBody, short_game_id, True)
+            self.uniSDKJSON = json.loads(base64.b64decode(self.uniData["unisdk_login_json"]).decode())
 
-        fd2 = app_state.fake_device
-        udid2 = fd2["udid"]
+            fd2 = app_state.fake_device
+            udid2 = fd2["udid"]
 
-        result = {
-            "user_id": account_id,
-            "token": base64.b64encode(ticket.encode()).decode(),
-            "login_channel": self.channel_name,
-            "udid": udid2,
-            "app_channel": self.channel_name,
-            "sdk_version": session["sdk_version"],
-            "jf_game_id": short_game_id,
-            "pay_channel": self.channel_name,
-            "extra_data": "",
-            "extra_unisdk_data": self._build_extra_unisdk_data(short_game_id),
-            "gv": "157",
-            "gvn": "1.5.80",
-            "cv": "a1.5.0",
-        }
-        
+            result = {
+                "user_id": account_id,
+                "token": base64.b64encode(ticket.encode()).decode(),
+                "login_channel": self.channel_name,
+                "udid": udid2,
+                "app_channel": self.channel_name,
+                "sdk_version": session["sdk_version"],
+                "jf_game_id": short_game_id,
+                "pay_channel": self.channel_name,
+                "extra_data": "",
+                "extra_unisdk_data": self._build_extra_unisdk_data(short_game_id),
+                "gv": "157",
+                "gvn": "1.5.80",
+                "cv": "a1.5.0",
+            }
+
+        except Exception as error:
+            if on_complete is None:
+                raise
+            result = error
         if on_complete is not None:
             on_complete(result)
             return None
         return result
 
-    def _build_oppo_unisdk_result(self, short_game_id: str):
-        """构建 OPPO UniSDK 数据（用于异步回调时调用）"""
-        return self.get_uniSdk_data(game_id=short_game_id)
-
     def is_token_valid(self):
-        return isinstance(self.loginResp, dict) and bool(self.loginResp)
+        return (isinstance(self.loginResp, dict)
+                and isinstance(self.loginResp.get("accountToken"), dict)
+                and bool(self.loginResp["accountToken"].get("idToken")))
 
     @classmethod
     def from_dict(cls, data: dict):

@@ -111,6 +111,7 @@ class LocalRequestHandler:
             "/_idv-login/health": self._health,
             "/_idv-login/manualChannels": self._manual_channels,
             "/_idv-login/list": self._list_channels,
+            "/_idv-login/account-list-config": self._account_list_config,
             "/_idv-login/qrcode": self._channel_qrcode,
             "/_idv-login/cancel-qr": self._cancel_qr,
             "/_idv-login/switch": self._switch_channel,
@@ -148,6 +149,7 @@ class LocalRequestHandler:
             "/_idv-login/cloud-sync/access-logs": self._cloud_sync_access_logs,
             "/_idv-login/index": self._serve_index,
             "/_idv-login/export-logs": self._export_logs,
+            "/_idv-login/restart": self._restart_tool,
             "/_idv-login/diagnostics/terminal": self._diagnostics_terminal,
             "/_idv-login/diagnostics/reset-state": self._diagnostics_reset_state,
             "/_idv-login/open-external-url": self._open_external_url,
@@ -335,16 +337,61 @@ class LocalRequestHandler:
             game_id = args.get("game_id", "")
             if game_id:
                 data = CloudRes().get_all_by_game_id(getShortGameId(game_id))
+                supported = {item['channel'] for item in const.manual_login_channels}
+                data = [item for item in data if (item.get('channel') or item.get('app_channel')) in supported]
                 return self._json_response(200, data)
         except Exception:
             pass
         return self._json_response(200, const.manual_login_channels)
 
+    def _account_list_config(self, args, body, method):
+        if method not in ('GET', 'POST'):
+            return self._json_response(405, {'success': False, 'error': 'Method not allowed'})
+        from account_list_policy import AccountListPolicy
+        policy = AccountListPolicy(app_state.channels_helper, self.game_helper)
+        try:
+            if method == 'POST':
+                if not isinstance(body, dict):
+                    raise ValueError('游戏内切换设置必须是 JSON 对象')
+                settings = policy.set_settings(body.get('config'))
+                # The wizard saves intent only. Credentials/DB writes belong to actual use.
+                return self._json_response(200, {'success': True, 'config': settings})
+            return self._json_response(200, {'success': True, **policy.catalog()})
+        except (TypeError, ValueError) as exc:
+            return self._json_response(400, {'success': False, 'error': str(exc)})
+        except Exception as error:
+            from mpay_db_sync import log_failure
+            stage = 'settings.save' if method == 'POST' else 'settings.read'
+            log_failure(self.logger, f'[account-list] stage={stage} 操作未完成', error)
+            return self._json_response(500, {'success': False,
+                'error': '账号选择未保存，请检查配置文件及目录权限后重试' if method == 'POST' else
+                         '账号选择暂时无法读取，请重试；仍失败时反馈日志'})
+
     def _list_channels(self, args, body, method):
         try:
-            result = app_state.channels_helper.list_channels(args.get("game_id", ""))
-        except Exception as e:
-            result = {"error": str(e)}
+            manager = app_state.channels_helper
+            game_id = str(args.get("game_id") or "")
+            sync = getattr(manager, 'db_sync', None)
+            if sync:
+                sync.reconcile_game_changes()
+            result = manager.list_channels(game_id)
+            if game_id:
+                from account_list_policy import AccountListPolicy
+                policy = AccountListPolicy(manager, self.game_helper)
+                selected = policy.select().get(getShortGameId(game_id), [])
+                planned = {record.uuid for record in selected}
+                sync = getattr(manager, "db_sync", None)
+                included = sync.imported_uuids(game_id) if sync else set()
+                for item in result:
+                    uuid = item["uuid"]
+                    record = manager.query_channel(uuid)
+                    identity_uuid = policy.canonical_uuid(record, getShortGameId(game_id))
+                    item["included"] = uuid in included or identity_uuid in included
+                    item["will_include"] = identity_uuid in planned
+        except Exception as error:
+            from mpay_db_sync import log_failure
+            log_failure(self.logger, f'[channel] game={args.get("game_id", "")} stage=list 账号列表读取失败', error)
+            return self._json_response(500, {'success': False, 'error': '账号列表未能读取，请刷新；仍失败时反馈日志'})
         return self._json_response(200, result)
 
     def _channel_qrcode(self, args, body, method):
@@ -394,7 +441,10 @@ class LocalRequestHandler:
             app = None
 
         scanner_uuid = data["uuid"] if data else "Kinich"
-        scan_game_id = data["game_id"] if data else "aecfrt3rmaaaaajl-g-g37"
+        record = app_state.channels_helper.query_channel(uuid)
+        scan_game_id = data["game_id"] if data else game_id or (record.game_id if record else '')
+        if not scan_game_id:
+            return self._json_response(400, {'success': False, 'error': '缺少目标游戏'})
 
         if app and app.property("_main_loop_running"):
             # 异步模式
@@ -404,28 +454,32 @@ class LocalRequestHandler:
 
             def do_switch():
                 def on_done(result):
-                    LocalRequestHandler._pending_switch[task_id] = {
-                        "status": "done", "result": result
-                    }
+                    LocalRequestHandler._pending_switch[task_id].update({
+                        "status": "done", "result": False if result is None else result,
+                        "cancelled": result is None,
+                    })
 
                 try:
                     app_state.channels_helper.simulate_scan(
-                        uuid, scanner_uuid, scan_game_id, on_complete=on_done
+                        uuid, scanner_uuid, scan_game_id, on_complete=on_done,
+                        on_error=lambda message: LocalRequestHandler._pending_switch[task_id].update(error=message),
                     )
-                except Exception:
-                    self.logger.exception("异步切换渠道失败")
-                    LocalRequestHandler._pending_switch[task_id] = {
-                        "status": "done", "result": False
-                    }
+                except Exception as error:
+                    from mpay_db_sync import log_failure
+                    log_failure(self.logger, f'[channel] account={uuid} game={scan_game_id} stage=switch.dispatch 切换失败', error)
+                    LocalRequestHandler._pending_switch[task_id].update({
+                        "status": "done", "result": False, "error": "登录未完成，请重试；仍失败时反馈日志"
+                    })
 
             app_state.run_on_main_thread(do_switch)
             return self._json_response(200, {"status": "pending", "task_id": task_id})
         else:
             # 同步模式
-            if data:
-                app_state.channels_helper.simulate_scan(uuid, data["uuid"], data["game_id"])
-            else:
-                app_state.channels_helper.simulate_scan(uuid, "Kinich", "aecfrt3rmaaaaajl-g-g37")
+            failure = {}
+            result = app_state.channels_helper.simulate_scan(uuid, scanner_uuid, scan_game_id,
+                on_error=lambda message: failure.update(error=message))
+            if result is None or result is False:
+                return self._json_response(200, {'success': False, 'cancelled': result is None, **failure})
             return self._json_response(200, {"current": genv.get("CHANNEL_ACCOUNT_SELECTED")})
 
     def _switch_status(self, args, body, method):
@@ -440,14 +494,31 @@ class LocalRequestHandler:
         return self._json_response(200, result)
 
     def _del_channel(self, args, body, method):
-        success = app_state.channels_helper.delete(args.get("uuid", ""))
-        return self._json_response(200, {"success": success})
+        manager = app_state.channels_helper
+        record = manager.query_channel(args.get('uuid', ''))
+        try:
+            success = manager.delete(args.get('uuid', ''))
+            return self._json_response(200, {'success': success})
+        except Exception as error:
+            message = ('此账号身份数据不可用，请重新登录后重试删除；工具记录仍保留' if isinstance(error, ValueError) else
+                       '删除未全部完成，部分游戏库可能已更新。请关闭游戏后重试；账号仍保留在工具中')
+            if record:
+                record.report_login_failure(record.game_id, 'delete', message, error)
+            return self._json_response(500, {'success': False, 'error': message})
 
     def _rename_channel(self, args, body, method):
-        success = app_state.channels_helper.rename(
-            args.get("uuid", ""), args.get("new_name", "")
-        )
-        return self._json_response(200, {"success": success})
+        manager = app_state.channels_helper
+        record = manager.query_channel(args.get('uuid', ''))
+        try:
+            success = manager.rename(args.get('uuid', ''), args.get('new_name', ''))
+            return self._json_response(200, {'success': success})
+        except Exception as error:
+            cause = error.__cause__ or error
+            message = ('此账号身份数据不可用，请重新登录后重试改名' if isinstance(cause, ValueError) else
+                       '改名未全部完成，部分游戏库可能已更新。请关闭游戏后重试')
+            if record:
+                record.report_login_failure(record.game_id, 'rename', message, error)
+            return self._json_response(500, {'success': False, 'error': message})
 
     def _import_channel(self, args, body, method):
         try:
@@ -469,33 +540,39 @@ class LocalRequestHandler:
             def do_import():
                 def on_done(success):
                     if success is None:
-                        LocalRequestHandler._pending_imports[task_id] = {
+                        LocalRequestHandler._pending_imports[task_id].update({
                             "status": "done", "success": False, "cancelled": True
-                        }
+                        })
                     else:
-                        LocalRequestHandler._pending_imports[task_id] = {
+                        LocalRequestHandler._pending_imports[task_id].update({
                             "status": "done", "success": success
-                        }
+                        })
 
                 try:
                     app_state.channels_helper.manual_import(
                         channel, game_id, on_complete=on_done,
                         login_method=login_method,
+                        on_error=lambda message: LocalRequestHandler._pending_imports[task_id].update(error=message),
                     )
-                except Exception:
-                    self.logger.exception("异步导入失败")
-                    LocalRequestHandler._pending_imports[task_id] = {
-                        "status": "done", "success": False
-                    }
+                except Exception as error:
+                    from mpay_db_sync import log_failure
+                    log_failure(self.logger, f'[channel] game={game_id} channel={channel} stage=import.dispatch 导入失败', error)
+                    LocalRequestHandler._pending_imports[task_id].update({
+                        "status": "done", "success": False, "error": "账号未导入，请重试；仍失败时反馈日志"
+                    })
 
             app_state.run_on_main_thread(do_import)
             return self._json_response(200, {"status": "pending", "task_id": task_id})
         else:
             # 同步模式（旧 HTTP 路径）
+            failure = {}
             success = app_state.channels_helper.manual_import(
-                args.get("channel", ""), args.get("game_id", "")
+                args.get("channel", ""), args.get("game_id", ""),
+                on_error=lambda message: failure.update(error=message),
             )
-            return self._json_response(200, {"success": success})
+            return self._json_response(200, {
+                "success": success is True, "cancelled": success is None, **failure
+            })
 
     def _import_status(self, args, body, method):
         task_id = args.get("task_id", "")
@@ -784,8 +861,11 @@ class LocalRequestHandler:
                 game.last_used_time = int(time.time())
                 self.game_helper._save_games()
             return self._json_response(200, {"success": True, "game_id": gid})
-        except Exception as e:
-            return self._json_response(200, {"success": False, "error": str(e)})
+        except Exception as error:
+            from mpay_db_sync import log_failure
+            log_failure(self.logger, f'[game] game={args.get("game_id", "")} installation={args.get("installation_id", "")} stage=launch 启动操作未完整完成', error)
+            return self._json_response(200, {"success": False,
+                "error": "启动操作未完整完成，请检查游戏是否已打开；仍失败时反馈日志"})
 
     def _list_games(self, args, body, method):
         try:
@@ -953,10 +1033,13 @@ class LocalRequestHandler:
             return self._json_response(200, {
                 "success": True, "game_id": gid,
                 "installation_model_version": 1,
-                "platform_type": catalog_item.get("platform_type", "fever"),
+                "platform_type": catalog_item.get("platform_type") or ("fever" if distributions else "native"),
                 "catalog_app_id": catalog_item.get("catalog_app_id"),
+                "launcher": self._pick_launcher_fields(catalog_item.get("launcher")),
                 "game": {
                     "default_distribution": game.get_default_distribution() if game else -1,
+                    "installation": game.get_installation().get_non_sensitive_data()
+                    if game and game.get_installation() else None,
                 },
                 "distributions": distributions,
             })
@@ -1731,7 +1814,12 @@ class LocalRequestHandler:
     def _refresh_channels_helper(self):
         try:
             from channelmgr import ChannelManager
-            app_state.channels_helper = ChannelManager()
+            sync = getattr(app_state.channels_helper, 'db_sync', None)
+            manager = ChannelManager()
+            manager.db_sync = sync
+            if sync:
+                sync.manager = manager
+            app_state.channels_helper = manager
         except Exception:
             self.logger.exception("云同步拉取后刷新账号管理器失败")
 
@@ -2009,6 +2097,16 @@ class LocalRequestHandler:
         result = read_console_output(args.get("cursor", 0))
         result["success"] = True
         return self._json_response(200, result)
+
+    def _restart_tool(self, args, body, method):
+        if method != 'POST':
+            return self._json_response(405, {'success': False, 'error': 'Method not allowed'})
+        import hotfixmgr
+        # Reuse the existing cleanup + relaunch procedure after the reply is sent.
+        restart = threading.Timer(0.5, hotfixmgr.restart_self, args=('应用账号切换设置',))
+        restart.daemon = True
+        restart.start()
+        return self._json_response(202, {'success': True, 'restarting': True})
 
     def _diagnostics_reset_state(self, args, body, method):
         if method != "POST":

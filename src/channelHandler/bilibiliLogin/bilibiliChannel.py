@@ -461,13 +461,17 @@ class BilibiliLogin:
                         if isinstance(result, dict) and result:
                             on_complete(result)
                         else:
-                            on_complete(None)
+                            on_complete(None if not result else False)
                     except Exception:
                         self.logger.exception("Bilibili 异步登录回调失败")
-                        on_complete(None)
+                        on_complete(False)
 
                 browser._async_completion_callback = _on_async_done
             return None
 
         # 同步模式
-        return resp if isinstance(resp, dict) else None
+        result = resp if isinstance(resp, dict) else (None if not resp else False)
+        if on_complete is not None:
+            on_complete(result)
+            return None
+        return result
