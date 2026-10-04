@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 
 # 必要 Cookie，从环境变量中读取
 cookies = {}
+api_session = requests.Session()
 pdir_fid = ""
 file_path = ""
 
@@ -135,7 +136,7 @@ def get_file_hash(file_path):
             sha1.update(data)
     return md5.hexdigest(), sha1.hexdigest()
 
-def make_request(url, method="POST", data=None, extra_headers=None, max_retries=3, retry_backoff=1.0):
+def make_request(url, method="POST", data=None, extra_headers=None, max_retries=5, retry_backoff=2.0):
     """统一的请求方法（带重试）"""
     req_headers = headers.copy()
     if extra_headers:
@@ -147,9 +148,9 @@ def make_request(url, method="POST", data=None, extra_headers=None, max_retries=
     for attempt in range(1, max_retries + 1):
         try:
             if method == "GET":
-                response = requests.get(url, headers=req_headers, cookies=cookies, params=params, timeout=20)
+                response = api_session.get(url, headers=req_headers, cookies=cookies, params=params, timeout=(10, 60))
             else:
-                response = requests.post(url, headers=req_headers, cookies=cookies, params=params, json=data, timeout=20)
+                response = api_session.post(url, headers=req_headers, cookies=cookies, params=params, json=data, timeout=(10, 60))
 
             if response.status_code != 200:
                 raise QuarkUploadError(f"API HTTP {response.status_code}")
