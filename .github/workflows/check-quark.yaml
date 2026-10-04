@@ -51,7 +51,10 @@ jobs:
                   rows = result["data"]["list"]
                   for item in rows:
                       name = item.get("file_name")
-                      if name in targets:
+                      if name in targets or (
+                          isinstance(name, str) and name.startswith("MacOSVer")
+                          and item.get("size") == 197760449
+                      ):
                           matches.append({"name": name, "size": item.get("size"),
                                           "status": item.get("status", "listed; no status field")})
                   if len(rows) < 100:
