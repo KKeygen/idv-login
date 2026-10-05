@@ -34,22 +34,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-        - name: Refresh Gitea pull mirror
+        - uses: actions/checkout@v4
+          with:
+            fetch-depth: 0
+            ref: main
+
+        - name: Sync to Gitea over SSH
           env:
-            GITEA_API_TOKEN: ${{ secrets.GITEA_API_TOKEN }}
+            GITEA_SSH_URL: ${{ secrets.GITEA_SSH_URL }}
+            GITEA_SSH_KEY: ${{ secrets.GITEA_SSH_KEY }}
+            GITEA_SSH_KNOWN_HOSTS: ${{ secrets.GITEA_SSH_KNOWN_HOSTS }}
           run: |
-            curl --fail-with-body --silent --show-error --max-time 30 \
-              --request POST \
-              --header "Authorization: token $GITEA_API_TOKEN" \
-              --output "$RUNNER_TEMP/gitea-sync-response" \
-              https://git.keygen.eu.org/api/v1/repos/keygen/idv-login/mirror-sync || {
-                python3 - "$RUNNER_TEMP/gitea-sync-response" <<'PYERROR'
-            import json, pathlib, sys
-            body = pathlib.Path(sys.argv[1]).read_text()
-            try:
-                print("Gitea error:", json.loads(body).get("message", "Unknown API error"))
-            except json.JSONDecodeError:
-                print("Non-JSON error:", body.strip() if body.strip().startswith("error code:") else "HTML or upstream error response")
-            PYERROR
-                exit 1
-              }
+            # Keep the SSH endpoint and its resolved origin addresses out of logs.
+            python3 - <<'PYMASK'
+            import os, socket, urllib.parse
+            host = urllib.parse.urlparse(os.environ["GITEA_SSH_URL"]).hostname
+            print(f"::add-mask::{host}")
+            for address in {entry[4][0] for entry in socket.getaddrinfo(host, None)}:
+                print(f"::add-mask::{address}")
+            PYMASK
+            umask 077
+            printf '%s\n' "$GITEA_SSH_KEY" > "$RUNNER_TEMP/gitea-key"
+            printf '%s\n' "$GITEA_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/gitea-known-hosts"
+            trap 'rm -f "$RUNNER_TEMP/gitea-key" "$RUNNER_TEMP/gitea-known-hosts"' EXIT
+            export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/gitea-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/gitea-known-hosts -o ConnectTimeout=15"
+            git push "$GITEA_SSH_URL" HEAD:refs/heads/main --tags
