@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791137111,
+  "lastModified": 1791176409,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -1311,14 +1311,6 @@
       },
       "channel": "myapp",
       "name": "应用宝（微信）"
-    },
-    {
-      "package_name": "com.netease.sky.nearme.gamecenter",
-      "app_channel": "oppo",
-      "log_key": "lM8jwFDFbrbKABNJr3IAKZHyavfDQfHu",
-      "game_id": "ma75",
-      "oppo": "com.netease.sky.nearme.gamecenter",
-      "channel": "oppo"
     },
     {
       "package_name": "com.tencent.tmgp.stzb",
