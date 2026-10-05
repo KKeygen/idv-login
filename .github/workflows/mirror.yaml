@@ -34,17 +34,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-        - uses: actions/checkout@v4
-          with:
-            fetch-depth: 0
-            ref: main
-
-        - name: Mirror main to Gitea
-          uses: yesolutions/mirror-action@662fce0eced8996f64d7fa264d76cddd84827f33
-          with:
-            REMOTE: 'https://git.keygen.eu.org/keygen/idv-login.git'
-            GIT_USERNAME: keygen
-            GIT_PASSWORD: ${{ secrets.GITEA_API_TOKEN }}
-            PUSH_ALL_REFS: 'false'
-            GIT_REF: 'refs/heads/main'
-            GIT_PUSH_ARGS: '--verbose'
+        - name: Refresh Gitea pull mirror
+          env:
+            GITEA_API_TOKEN: ${{ secrets.GITEA_API_TOKEN }}
+          run: |
+            curl --fail --silent --show-error --max-time 30 \
+              --request POST \
+              --header "Authorization: token $GITEA_API_TOKEN" \
+              --output /dev/null \
+              https://git.keygen.eu.org/api/v1/repos/keygen/idv-login/mirror-sync
