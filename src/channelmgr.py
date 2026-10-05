@@ -1100,9 +1100,11 @@ class ChannelManager:
             channel_data = error
         return _do_confirm(channel_data)
 
-    def simulate_scan(self, uuid: str, scanner_uuid: str, game_id: str, on_complete=None, on_error=None):
-        for channel in self.channels:
-            if channel.uuid == uuid:
+    def simulate_scan(self, uuid: str | channel, scanner_uuid: str, game_id: str, on_complete=None, on_error=None):
+        # A hosted MPay callback can supply credentials without a tool record.
+        records = self.channels if isinstance(uuid, str) else (uuid,)
+        for channel in records:
+            if channel is uuid or channel.uuid == uuid:
                 data = {
                     "uuid": scanner_uuid,
                     "login_channel": channel.channel_name,

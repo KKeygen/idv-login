@@ -9,6 +9,9 @@ import os
 import re
 import sys
 import threading
+import time
+
+import requests
 
 if sys.platform == "win32":
     import ctypes.wintypes
@@ -992,44 +995,109 @@ class FeverBridge:
             return
         try:
             info = ctypes.cast(args[2], ctypes.POINTER(ctypes.c_char_p))
+            ext_info = {}
             if info[8]:
                 ext_info = json.loads(info[8].decode("utf-8"))
                 src_app_channel = ext_info.get("src_app_channel")
                 if src_app_channel:
                     self._login_channel = str(src_app_channel)
-            direct_ticket = (
-                info[2].decode("utf-8", errors="replace")
-                if self._login_channel != "netease" and info[2]
-                else ""
-            )
             with self._lock:
                 if self._state != self.STATE_LOGIN_PENDING or not self._active_session:
                     return
+                session = self._active_session
                 if self._login_channel == "netease":
                     self._state = self.STATE_AUTHENTICATED
-                elif direct_ticket:
-                    self._state = self.STATE_READY
-                    self._ticket = direct_ticket
-                    session = self._active_session
-                    session["destroy_host_on_send"] = True
                 else:
-                    self._state = self.STATE_IDLE
+                    self._state = self.STATE_TICKET_PENDING
             if self._login_channel == "netease":
                 self._request_user_ticket()
-            elif direct_ticket:
-                self._flush_active_ticket()
             else:
-                self.logger.error(
-                    "渠道服登录成功但未返回可用 ticket: "
-                    f"src_app_channel={self._login_channel}"
+                from channelmgr import channel
+
+                # Saved channel accounts return SESSION, not a one-shot QR code.
+                # Copy the callback data before native MPay releases its storage.
+                record = channel(
+                    {"login_channel": self._login_channel, "code": ""},
+                    user_info={"id": info[0].decode("utf-8"),
+                               "token": info[2].decode("utf-8")},
+                    ext_info=ext_info,
                 )
+                device_id = info[1].decode("utf-8")
+                threading.Thread(
+                    target=self._request_channel_qrcode_ticket,
+                    args=(record, device_id, session),
+                    name="fever-channel-qrcode", daemon=True,
+                ).start()
         except Exception:
             with self._lock:
                 self._state = self.STATE_IDLE
             self.logger.exception("处理平台登录结果失败")
 
+    def _request_channel_qrcode_ticket(self, record, device_id, session):
+        """Confirm a fresh QR session; only the target game exchanges its code."""
+        from channel_cache import exception_summary
+        from ssl_utils import should_verify_ssl
+
+        params = {
+            "game_id": session["long_game_id"], "device_id": device_id,
+            "app_channel": self.MPAY_APP_CHANNEL.decode("ascii"),
+            "app_mode": "2", "app_type": "games", "arch": "win_x64",
+            "cv": "c4.10.0", "qrcode_channel_type": "2", "is_remember": "2",
+            "is_outer_browser_open": "1", "process_id": str(os.getpid()),
+        }
+        api = "https://service.mkey.163.com/mpay/api/qrcode/"
+        try:
+            with requests.Session() as client:
+                client.trust_env = False  # Direct upstream; use the existing DNS cache.
+                response = client.get(api + "create_login", params=params,
+                                      timeout=15, verify=should_verify_ssl())
+                response.raise_for_status()
+                created = response.json()
+                query = dict(params, uuid=created["uuid"])
+                self.logger.info("保存渠道账号二维码已创建: game={} channel={}",
+                                 session["short_game_id"], record.channel_name)
+                result = app_state.channels_helper.simulate_scan(
+                    record, created["uuid"], session["long_game_id"]
+                )
+                if result is None or result is False:
+                    raise RuntimeError("Channel QR confirmation did not complete")
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    with self._lock:
+                        if self._active_session is not session:
+                            return
+                    response = client.get(api + "query", params=query,
+                                          timeout=15, verify=should_verify_ssl())
+                    response.raise_for_status()
+                    data = response.json()
+                    status = data["qrcode"]["status"]
+                    if status == 2:
+                        login = data["login_info"]
+                        target_process_id = self.accept_channel_qrcode_ticket(
+                            login["login_channel"], login["code"],
+                            expected_session=session,
+                        )
+                        if target_process_id is not None:
+                            self.logger.info("保存渠道账号二维码 code 已转交游戏: game={} channel={}",
+                                             session["short_game_id"], login["login_channel"])
+                        return
+                    if status not in (0, 1):
+                        raise RuntimeError("Channel QR session ended before confirmation")
+                    query["curr_status"] = status
+                    time.sleep(created["query_interval"])
+                raise TimeoutError("Channel QR confirmation timed out")
+        except Exception as error:
+            with self._lock:
+                if self._active_session is not session:
+                    return
+                self._state = self.STATE_IDLE
+            self.logger.error("保存渠道账号二维码交接失败: game={}\n{}",
+                              session["short_game_id"], exception_summary(error))
+            app_state.toast("保存账号登录未完成，请重新选择账号或扫码登录", duration=6000)
+            self._schedule_active_login()
+
     def accept_channel_qrcode_ticket(
-        self, login_channel: str, ticket: str
+        self, login_channel: str, ticket: str, *, expected_session=None
     ) -> int | None:
         """Consume a hosted channel QR code and return its target game PID."""
         login_channel = str(login_channel or "")
@@ -1037,7 +1105,10 @@ class FeverBridge:
         if not login_channel or login_channel == "netease" or not ticket:
             return None
         with self._lock:
-            if self._state != self.STATE_LOGIN_PENDING or not self._active_session:
+            pending_state = self.STATE_TICKET_PENDING if expected_session is not None else self.STATE_LOGIN_PENDING
+            if self._state != pending_state or not self._active_session:
+                return None
+            if expected_session is not None and self._active_session is not expected_session:
                 return None
             target_process_id = int(self._active_session["process_id"])
             self._login_channel = login_channel
