@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791137111,
+  "lastModified": 1791185163,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -584,6 +584,22 @@
       "target_module": "mitm_addon",
       "target_commit": "3ff15ebe2a394b7531e6ca4ed85ad6ab69479762",
       "note": "修复国际服登录的时候提示cv参数错误的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "fever_bridge",
+      "target_commit": "2dae34813b8244557374ac887a9bd252e2f2cf88",
+      "note": "修复发烧平台游戏使用已保存渠道账号登录时，将 SESSION 误作二维码 code 导致登录失败的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "channelmgr",
+      "target_commit": "2dae34813b8244557374ac887a9bd252e2f2cf88",
+      "note": "修复发烧平台游戏使用已保存渠道账号登录时，将 SESSION 误作二维码 code 导致登录失败的问题。"
     }
   ],
   "shortcuts": [
