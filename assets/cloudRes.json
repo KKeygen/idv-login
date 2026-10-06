@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791292136,
+  "lastModified": 1791292146,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -622,7 +622,7 @@
         "v6.3.2-stable"
       ],
       "target_module": "mitm_addon",
-      "target_commit": "31ba891",
+      "target_commit": "31ba891dddbb5806ee4146434534031ae690e4c0",
       "note": "修复登录成功后工具未自动关闭的问题"
     }
   ],
