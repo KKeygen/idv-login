@@ -905,10 +905,9 @@ class IDVLoginAddon:
                 parsed = parse_qs(raw, keep_blank_values=True)
                 form_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
 
-            # data/upload is the legacy completion signal.  Do not let the
-            # optional uni_sauth bookkeeping block this established fallback.
             game_id = form_data.get("game_id", "")
-            if self.game_helper.get_auto_close_setting(game_id):
+            pending_game = any(key[0] == getShortGameId(game_id) for key in self._pending_tool_auth)
+            if not pending_game and self.game_helper.get_auto_close_setting(game_id):
                 self._trigger_auto_close()
         except Exception:
             self.logger.exception("处理 data/upload 响应失败")
