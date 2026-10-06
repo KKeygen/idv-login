@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791292955,
+  "lastModified": 1791307225,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -613,17 +613,17 @@
       "need_hotfix_version": [
         "v6.3.2-stable"
       ],
-      "target_module": "mpay_db_sync",
-      "target_commit": "cd5c5ac3a7347cf03504e5648bc7c38a1cbc73da",
-      "note": "解决了华为账号在一定时间间隔内打开游戏登录会失败的问题，请注意，游戏中切换账号如果还是失败，则必须从渠道服管理界面登录"
+      "target_module": "mitm_addon",
+      "target_commit": "3ff08ba670ba075a3f8baa80753265f98395e1ca",
+      "note": "撤回本次自动关闭相关改动，恢复原有登录行为，保留华为登录修复"
     },
     {
       "need_hotfix_version": [
         "v6.3.2-stable"
       ],
-      "target_module": "mitm_addon",
-      "target_commit": "3ff08ba670ba075a3f8baa80753265f98395e1ca",
-      "note": "撤回本次自动关闭相关改动，恢复原有登录行为，保留华为登录修复"
+      "target_module": "mpay_db_sync",
+      "target_commit": "8bfcbffe59c0a156af5a31dd9efd313b95d4a1ed",
+      "note": "解决了华为、VIVO、OPPO、小米在下拉菜单登录容易过期的问题"
     }
   ],
   "shortcuts": [
