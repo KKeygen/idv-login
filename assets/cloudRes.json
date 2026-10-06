@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791292146,
+  "lastModified": 1791292955,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -622,8 +622,8 @@
         "v6.3.2-stable"
       ],
       "target_module": "mitm_addon",
-      "target_commit": "31ba891dddbb5806ee4146434534031ae690e4c0",
-      "note": "修复登录成功后工具未自动关闭的问题"
+      "target_commit": "3ff08ba670ba075a3f8baa80753265f98395e1ca",
+      "note": "撤回本次自动关闭相关改动，恢复原有登录行为，保留华为登录修复"
     }
   ],
   "shortcuts": [
