@@ -26,7 +26,7 @@ from envmgr import genv
 from logutil import setup_logger
 from const import manual_login_channels
 from channelHandler.channelUtils import cmp_game_id, getShortGameId
-from channel_cache import packet_identity, credential_expires_at, exception_summary
+from channel_cache import packet_identity, credential_expires_at, exception_summary, unisdk_expires_at
 from ssl_utils import should_verify_ssl
 
 
@@ -270,6 +270,7 @@ class channel:
                 raise ValueError(f'field=packet.{field}: missing value')
         self.observe_sdkuid(sdkuid, game)
         self.unisdk_cache[game] = {'packet': copy.deepcopy(packet), 'expires_at': expires_at}
+        self.unisdk_cache[game]['expires_at'] = unisdk_expires_at(self.unisdk_cache[game])
         self.expires_at = None
         return packet
 
@@ -284,7 +285,7 @@ class channel:
                 return None
         except ValueError:
             return None
-        expiry = entry.get('expires_at')
+        expiry = unisdk_expires_at(entry)
         if expiry is not None and expiry <= time.time():
             return None
         return copy.deepcopy(packet)
@@ -293,7 +294,7 @@ class channel:
         """Read existing expiry only; this does not refresh or validate a login."""
         if self.record_source == 'manual':
             entry = self.unisdk_cache.get(getShortGameId(game_id))
-            deadlines = [entry.get('expires_at') if entry else self.expires_at]
+            deadlines = [unisdk_expires_at(entry) if entry else self.expires_at]
         else:
             if not cmp_game_id(self.game_id, game_id):
                 return False

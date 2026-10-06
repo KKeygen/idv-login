@@ -71,6 +71,17 @@ def exception_summary(error):
     return '\nCaused by: '.join(lines)
 
 
+def unisdk_expires_at(entry):
+    """Huawei gameAuthSign is bound to ts and expires five minutes after issuance."""
+    deadlines = [entry.get('expires_at')]
+    packet = entry['packet']
+    if packet['login_channel'] == 'huawei':
+        extra = json.loads(packet['extra_unisdk_data'])
+        auth = json.loads(base64.b64decode(unquote(extra['SAUTH_JSON'])))
+        deadlines.append(int(auth['timestamp']) / 1000 + 300)
+    return min((value for value in deadlines if value is not None), default=None)
+
+
 def credential_expires_at(record):
     """Only consult local credential fields; never invoke a login accessor."""
     attrs = vars(record)

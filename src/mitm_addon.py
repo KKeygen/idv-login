@@ -381,6 +381,14 @@ class IDVLoginAddon:
                 self._trigger_auto_close()
         elif matched:
             self.logger.debug('game={} channel={} stage=sauth.result 登录未成功，关联账号已标记过期', key[0], key[1])
+            if key[1] == 'huawei' and isinstance(payload, dict) and payload.get('code') == 401:
+                try:
+                    debug = json.loads(base64.b64decode(payload.get('debug_message', '')))
+                except (ValueError, TypeError, UnicodeError):
+                    debug = {}
+                if (isinstance(debug, dict) and debug.get('rtnCode') == 3001
+                        and re.fullmatch(r'param \[ts:\d+\] should between \[\d+,\d+\] \.', str(debug.get('errMsg', '')))):
+                    app_state.toast('华为账号须在工具启动后的 5 分钟内登录。若需中途切换华为账号，请在渠道服管理界面选择该账号，通过二维码重新登录后再试。', duration=10000)
 
     def error(self, flow: http.HTTPFlow):
         if (flow.request.pretty_host.lower() == getattr(self, "auth_status_domain", "")
