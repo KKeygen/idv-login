@@ -897,10 +897,17 @@ class IDVLoginAddon:
 
     def _handle_data_upload_response(self, flow: http.HTTPFlow):
         try:
-            # data/upload is the legacy completion signal.  Some clients send
-            # JSON while older clients use form encoding; accept both through
-            # the same request parser used by the other MPay routes.
-            game_id = _request_values(flow.request).get("game_id", "")
+            form_data = {}
+            content_type = flow.request.headers.get("content-type", "")
+            if "application/x-www-form-urlencoded" in content_type:
+                from urllib.parse import parse_qs
+                raw = flow.request.content.decode("utf-8", errors="replace")
+                parsed = parse_qs(raw, keep_blank_values=True)
+                form_data = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+
+            # data/upload is the legacy completion signal.  Do not let the
+            # optional uni_sauth bookkeeping block this established fallback.
+            game_id = form_data.get("game_id", "")
             if self.game_helper.get_auto_close_setting(game_id):
                 self._trigger_auto_close()
         except Exception:
