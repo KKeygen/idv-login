@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791260277,
+  "lastModified": 1791284235,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -622,8 +622,8 @@
         "v6.3.2-stable"
       ],
       "target_module": "mitm_addon",
-      "target_commit": "cd5c5ac3a7347cf03504e5648bc7c38a1cbc73da",
-      "note": "解决了华为账号在一定时间间隔内打开游戏登录会失败的问题，请注意，游戏中切换账号如果还是失败，则必须从渠道服管理界面登录"
+      "target_commit": "a41bd8d5a9dab40fe978f48c86a05a25ea737021",
+      "note": "修复登录成功后工具未自动关闭的问题"
     }
   ],
   "shortcuts": [
