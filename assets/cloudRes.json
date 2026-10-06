@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791185163,
+  "lastModified": 1791260277,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -597,9 +597,33 @@
       "need_hotfix_version": [
         "v6.3.2-stable"
       ],
+      "target_module": "channel_cache",
+      "target_commit": "cd5c5ac3a7347cf03504e5648bc7c38a1cbc73da",
+      "note": "解决了华为账号在一定时间间隔内打开游戏登录会失败的问题，请注意，游戏中切换账号如果还是失败，则必须从渠道服管理界面登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
       "target_module": "channelmgr",
-      "target_commit": "2dae34813b8244557374ac887a9bd252e2f2cf88",
-      "note": "修复发烧平台游戏使用已保存渠道账号登录时，将 SESSION 误作二维码 code 导致登录失败的问题。"
+      "target_commit": "cd5c5ac3a7347cf03504e5648bc7c38a1cbc73da",
+      "note": "解决了华为账号在一定时间间隔内打开游戏登录会失败的问题，请注意，游戏中切换账号如果还是失败，则必须从渠道服管理界面登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "mpay_db_sync",
+      "target_commit": "cd5c5ac3a7347cf03504e5648bc7c38a1cbc73da",
+      "note": "解决了华为账号在一定时间间隔内打开游戏登录会失败的问题，请注意，游戏中切换账号如果还是失败，则必须从渠道服管理界面登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "cd5c5ac3a7347cf03504e5648bc7c38a1cbc73da",
+      "note": "解决了华为账号在一定时间间隔内打开游戏登录会失败的问题，请注意，游戏中切换账号如果还是失败，则必须从渠道服管理界面登录"
     }
   ],
   "shortcuts": [
