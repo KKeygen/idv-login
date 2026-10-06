@@ -262,7 +262,7 @@ class MpayDBSync:
                 self._clear_projection(game)
         for game, records in selected.items():
             try:
-                self._prepare_selected({game: records}, force_huawei=True)
+                self._prepare_selected({game: records}, force_game_token=True)
                 self._project_game(game, records)
             except Exception as error:
                 log_failure(self.logger, f'[mpay-db] game={game} stage=refresh 本游戏更新失败，继续其余游戏', error)
@@ -294,13 +294,14 @@ class MpayDBSync:
             setattr(clone, key, getattr(record, key))
         return clone
 
-    def _prepare_selected(self, selected, *, force_huawei=False):
+    def _prepare_selected(self, selected, *, force_game_token=False):
         from prefetch_context import prefetch_scope
         jobs = []
         for game, records in selected.items():
             for record in records:
                 try:
-                    force = force_huawei and record.record_source == 'manual' and record.channel_name == 'huawei'
+                    # These channels exchange durable login state for a fresh game token at startup.
+                    force = force_game_token and record.record_source == 'manual' and record.channel_name in ('huawei', 'nearme_vivo', 'oppo', 'xiaomi_app')
                     if force:
                         record.expire_unisdk(game)
                     if not force and self._packet(record, game):
