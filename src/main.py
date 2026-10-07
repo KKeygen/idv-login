@@ -18,33 +18,26 @@
 
 import sys
 import argparse
-import shutil
-import glob
-import base64
 import subprocess
 import time
-import importlib.util
-import py_compile
-from typing import Optional, Tuple, List, Dict, Any
+import base64
 
 
 def parse_command_line_args():
     """解析命令行参数"""
     arg_parser = argparse.ArgumentParser(description="第五人格登陆助手")
-    arg_parser.add_argument('--mitm', action='store_true', help='直接使用备用模式 (mitmproxy)')
     arg_parser.add_argument('--download', type=str, default="", help='下载任务文件绝对路径')
+    arg_parser.add_argument('--uri', type=str, default="", help='处理 idvlogin:// URI Scheme 调用')
+    arg_parser.add_argument('--open-ui', action='store_true', help='启动后直接打开渠道服管理界面')
+    arg_parser.add_argument('--proxy-port', type=int, default=10717, help='mitmproxy 监听端口 (默认 10717)')
     return arg_parser.parse_args()
 
 
 CLI_ARGS = parse_command_line_args()
-if not CLI_ARGS.download:
-    from gevent import monkey
-    monkey.patch_all()
 
 
 import socket
 import os
-import sys
 import ctypes
 import atexit
 import requests
@@ -56,514 +49,52 @@ import string
 script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(script_dir)
 from envmgr import genv
+import hotfixmgr
+import app_state
+from proxy_env import set_proxy as _set_proxy, unset_proxy as _unset_proxy
 
 
 # Global variable declarations
 m_certmgr = None
-m_hostmgr = None 
 m_proxy = None
 m_cloudres=None
 logger = None # Will be initialized in __main__
 _console_ctrl_handler = None
 
-# hotfix prompt state (used by exit hook to persist “skip” when user quits within countdown)
-_hotfix_prompt_active = False
-_hotfix_prompt_items = []
+# Compat mode globals
+_dns_policy_mgr = None  # DnsPolicyManager instance for compat mode
+_dns_server = None      # LocalDnsServer instance for compat mode
 
 
-def _hotfix_probe_cache_write_once() -> bool:
-    """探测 genv.set(cached=True) 是否真的写入成功。
-
-    由于 genv.set 在写入失败时只打印错误并吞掉异常，我们用 get_from_file 直接读文件校验。
-    若探测失败，则必须跳过所有 hotfix 相关逻辑，以避免“写入失败导致状态无法落盘 -> 无限重启”。
-
-    注意：此探测只应在“决定是否进入 hotfix 逻辑前”执行一次。
-    """
-    try:
-        genv.set("hotfix_probed", True, True)
-        return bool(genv.get_from_file("hotfix_probed", False))
-    except Exception:
-        return False
-
-
-def _hotfix_make_id(item: dict) -> str:
-    module_name = (item or {}).get("target_module", "")
-    commit = (item or {}).get("target_commit", "")
-    version = genv.get("VERSION", "")
-    return (f"{version}|{module_name}@{commit}" if version else f"{module_name}@{commit}").strip("@")
-
-
-def _hotfix_get_records() -> dict:
-    records = genv.get("hotfix_records", {})
-    return records if isinstance(records, dict) else {}
-
-
-def _hotfix_set_records(records: dict):
-    if not isinstance(records, dict):
-        records = {}
-    genv.set("hotfix_records", records, True)
-
-
-def _hotfix_record_update(hotfix_id: str, patch: dict):
-    records = _hotfix_get_records()
-    rec = records.get(hotfix_id, {})
-    if not isinstance(rec, dict):
-        rec = {}
-    rec.update(patch or {})
-    records[hotfix_id] = rec
-    _hotfix_set_records(records)
-
-
-def _hotfix_get_pending_ids() -> List[str]:
-    pending = genv.get("hotfix_pending_validate", [])
-    if isinstance(pending, list):
-        return [str(x) for x in pending if str(x)]
-    if isinstance(pending, str) and pending:
-        return [pending]
-    return []
-
-
-def _hotfix_set_pending_ids(pending_ids: List[str]):
-    pending_ids = [str(x) for x in (pending_ids or []) if str(x)]
-    genv.set("hotfix_pending_validate", pending_ids, True)
-
-
-def _hotfix_get_skipped_ids() -> List[str]:
-    skipped = genv.get("hotfix_skipped", [])
-    if isinstance(skipped, list):
-        return [str(x) for x in skipped if str(x)]
-    if isinstance(skipped, str) and skipped:
-        return [skipped]
-    return []
-
-
-def _hotfix_add_skipped(hotfix_ids: List[str]):
-    existing = set(_hotfix_get_skipped_ids())
-    for hid in hotfix_ids or []:
-        if hid:
-            existing.add(str(hid))
-    genv.set("hotfix_skipped", sorted(existing), True)
-
-
-def _hotfix_add_applied(hotfix_ids: List[str]):
-    applied = genv.get("hotfix_applied", [])
-    if not isinstance(applied, list):
-        applied = []
-    s = set(str(x) for x in applied if str(x))
-    for hid in hotfix_ids or []:
-        if hid:
-            s.add(str(hid))
-    genv.set("hotfix_applied", sorted(s), True)
-
-
-def _hotfix_resolve_module_target_path(module_name: str) -> Tuple[Optional[str], str]:
-    """返回 (target_path, kind)。kind ∈ {'py','pyc',''}。
-
-    兼容两种运行环境：
-    - 源码运行：src 里存在 .py
-    - 嵌入解释器打包运行：pack.yaml 会把 .py 全部编译成同目录 .pyc 并删除 .py
-    """
-    if not module_name:
-        return None, ""
-
-    # 1) best-effort: try import spec origin
-    try:
-        spec = importlib.util.find_spec(module_name)
-        if spec and spec.origin and os.path.exists(spec.origin):
-            if spec.origin.endswith(".py"):
-                return spec.origin, "py"
-            if spec.origin.endswith(".pyc"):
-                return spec.origin, "pyc"
-    except Exception:
-        pass
-
-    # 2) derive from SCRIPT_DIR/module path
-    try:
-        base_dir = genv.get("SCRIPT_DIR") or os.path.dirname(os.path.abspath(__file__))
-        base = os.path.join(base_dir, *module_name.split("."))
-        py_path = base + ".py"
-        pyc_path = base + ".pyc"
-        if os.path.exists(py_path):
-            return py_path, "py"
-        if os.path.exists(pyc_path):
-            return pyc_path, "pyc"
-        return py_path, "py"  # keep old error messages (likely "file not exists")
-    except Exception:
-        return None, ""
-
-
-def _hotfix_next_backup_path(target_path: str) -> str:
-    base = target_path + ".bak"
-    if not os.path.exists(base):
-        return base
-    idx = 1
-    while True:
-        cand = f"{base}.{idx}"
-        if not os.path.exists(cand):
-            return cand
-        idx += 1
-
-
-def _hotfix_delete_pyc_for_source(source_path: str):
-    try:
-        pyc_path = importlib.util.cache_from_source(source_path)
-        if pyc_path and os.path.exists(pyc_path):
-            os.remove(pyc_path)
-    except Exception:
-        pass
-
-
-def _hotfix_compile_source(source_path: str) -> bool:
-    try:
-        py_compile.compile(source_path, doraise=True)
-        return True
-    except Exception as e:
-        if logger:
-            logger.error(f"【热更新】编译失败: {source_path}: {e}")
-        else:
-            print(f"【热更新】编译失败: {source_path}: {e}")
-        return False
-
-
-def _hotfix_compile_to_pyc(source_path: str, pyc_path: str) -> Tuple[bool, str]:
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(pyc_path)), exist_ok=True)
-    except Exception:
-        pass
-    try:
-        py_compile.compile(source_path, cfile=pyc_path, doraise=True)
-        return True, ""
-    except Exception as e:
-        if logger:
-            logger.error(f"【热更新】编译失败: {source_path} -> {pyc_path}: {e}")
-        else:
-            print(f"【热更新】编译失败: {source_path} -> {pyc_path}: {e}")
-        return False, str(e)
-
-
-def _hotfix_download_text(url: str, fallbacks: List[str]) -> Tuple[bool, bytes, str]:
-    from ssl_utils import should_verify_ssl
-    sess = requests.Session()
-    sess.trust_env = False
-    headers = {"Accept": "text/plain, */*"}
-    for source_url in [url] + fallbacks:
-        try:
-            resp = sess.get(source_url, timeout=20, headers=headers, verify=should_verify_ssl())
-            if resp.status_code == 200:
-                return True, resp.content, ""
-            last_error = f"HTTP {resp.status_code}"
-        except requests.RequestException as e:
-            last_error = str(e)
-    return False, b"", last_error
-
-
-def _hotfix_restart_self(reason: str = ""):
-    try:
-        if reason:
-            if logger:
-                logger.info(f"【热更新】即将重启: {reason}")
-            else:
-                print(f"【热更新】即将重启: {reason}")
-        # mark as intentional restart to avoid treating as crash
-        genv.set("last_run_state", "restart", True)
-        genv.set("last_run_state_ts", int(time.time()), True)
-    except Exception:
-        pass
-
-    if getattr(sys, 'frozen', False):
-        args = [sys.executable] + sys.argv[1:]
+# -- 全局异常钩子 --
+def _global_excepthook(exc_type, exc_value, exc_tb):
+    """处理主线程中未捕获的异常"""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    import traceback
+    tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    if logger:
+        logger.critical(f"未捕获的异常:\n{tb_str}")
     else:
-        args = [sys.executable] + sys.argv
+        print(f"未捕获的异常:\n{tb_str}", file=sys.stderr)
 
-    try:
-        subprocess.Popen(args, cwd=genv.get("SCRIPT_DIR") or os.getcwd())
-    except Exception:
-        # last resort: try without cwd
-        subprocess.Popen(args)
-    os._exit(0)
+sys.excepthook = _global_excepthook
 
-
-def _hotfix_apply_one(item: dict) -> Tuple[bool, str]:
-    """返回 (success, message)。成功时会落盘并编译。"""
-    hotfix_id = _hotfix_make_id(item)
-    module_name = (item or {}).get("target_module", "")
-    commit = (item or {}).get("target_commit", "")
-    if not module_name or not commit:
-        return False, "配置缺少 target_module 或 target_commit"
-
-    target_path, target_kind = _hotfix_resolve_module_target_path(module_name)
-    if not target_path or not target_kind:
-        return False, f"无法定位模块文件: {module_name}"
-    if not os.path.exists(target_path):
-        return False, f"模块文件不存在: {target_path}"
-    if not os.access(target_path, os.W_OK):
-        return False, f"模块文件不可写（可能无权限或在只读目录）: {target_path}"
-
-    remote_rel = "src/" + "/".join(module_name.split(".")) + ".py"
-    url = f"https://git.keygen.eu.org/keygen/idv-login/raw/commit/{commit}/{remote_rel}"
-    fallbacks = [
-        f"https://gitee.com/opguess/idv-login/raw/{commit}/{remote_rel}",
-        f"https://cdn.jsdelivr.net/gh/KKeygen/idv-login@{commit}/{remote_rel}",
-        f"https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
-        f"https://gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
-        f"https://gh.monlor.com/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
-        f"https://hk.gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
-    ]
-    ok, content, err = _hotfix_download_text(url,fallbacks)
-    if not ok:
-        return False, f"下载失败: {url} ({err})"
-
-    backup_path = _hotfix_next_backup_path(target_path)
-
-    if target_kind == "py":
-        # write to temp near target
-        tmp_path = target_path + ".hotfix.tmp"
-        try:
-            with open(tmp_path, "wb") as f:
-                f.write(content)
-        except Exception as e:
-            return False, f"写入临时文件失败: {e}"
-
-        # compile temp first to validate
-        if not _hotfix_compile_source(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-            return False, "新文件编译失败，已放弃应用"
-
-        try:
-            shutil.copy2(target_path, backup_path)
-        except Exception as e:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-            return False, f"备份失败: {e}"
-
-        try:
-            shutil.move(tmp_path, target_path)
-            _hotfix_delete_pyc_for_source(target_path)
-            if not _hotfix_compile_source(target_path):
-                raise RuntimeError("新文件落盘后编译失败")
-        except Exception as e:
-            try:
-                if os.path.exists(backup_path):
-                    shutil.copy2(backup_path, target_path)
-                    _hotfix_delete_pyc_for_source(target_path)
-                    _hotfix_compile_source(target_path)
-            except Exception:
-                pass
-            return False, f"替换/编译失败，已回滚: {e}"
-
-    elif target_kind == "pyc":
-        # Embedded build (pack.yaml): src contains only .pyc; compile downloaded source into a .pyc then replace
-        tmp_source_dir = os.path.join(genv.get("FP_WORKDIR") or os.getcwd(), "hotfix_src")
-        try:
-            os.makedirs(tmp_source_dir, exist_ok=True)
-        except Exception:
-            pass
-        tmp_source_path = os.path.join(
-            tmp_source_dir,
-            f"{module_name.replace('.', '_')}_{commit[:8]}.py",
-        )
-        tmp_pyc_path = target_path + ".hotfix.tmp"
-        try:
-            with open(tmp_source_path, "wb") as f:
-                f.write(content)
-        except Exception as e:
-            return False, f"写入临时源码失败: {e}"
-
-        okc, errc = _hotfix_compile_to_pyc(tmp_source_path, tmp_pyc_path)
-        if not okc:
-            try:
-                os.remove(tmp_source_path)
-            except Exception:
-                pass
-            try:
-                if os.path.exists(tmp_pyc_path):
-                    os.remove(tmp_pyc_path)
-            except Exception:
-                pass
-            return False, f"新文件编译失败，已放弃应用: {errc}"
-
-        try:
-            shutil.copy2(target_path, backup_path)
-        except Exception as e:
-            try:
-                os.remove(tmp_source_path)
-            except Exception:
-                pass
-            try:
-                os.remove(tmp_pyc_path)
-            except Exception:
-                pass
-            return False, f"备份失败: {e}"
-
-        try:
-            os.replace(tmp_pyc_path, target_path)
-        except Exception as e:
-            try:
-                if os.path.exists(backup_path):
-                    shutil.copy2(backup_path, target_path)
-            except Exception:
-                pass
-            return False, f"替换失败，已回滚: {e}"
-        finally:
-            try:
-                os.remove(tmp_source_path)
-            except Exception:
-                pass
-
+def _threading_excepthook(args):
+    """处理子线程中未捕获的异常 (Python 3.8+)"""
+    if args.exc_type is SystemExit:
+        return
+    import traceback
+    tb_str = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+    thread_name = args.thread.name if args.thread else "Unknown"
+    if logger:
+        logger.critical(f"线程 '{thread_name}' 中未捕获的异常:\n{tb_str}")
     else:
-        return False, f"不支持的目标类型: {target_kind}"
+        print(f"线程 '{thread_name}' 中未捕获的异常:\n{tb_str}", file=sys.stderr)
 
-    _hotfix_record_update(
-        hotfix_id,
-        {
-            "status": "pending_validate",
-            "target_module": module_name,
-            "target_commit": commit,
-            "note": (item or {}).get("note", ""),
-            "target_kind": target_kind,
-            "target_path": os.path.abspath(target_path),
-            "backup_path": os.path.abspath(backup_path),
-            "applied_at": int(time.time()),
-            "url": url,
-        },
-    )
-    return True, f"应用成功: {module_name} ({commit})"
-
-
-def _hotfix_rollback_one(hotfix_id: str) -> Tuple[bool, str]:
-    records = _hotfix_get_records()
-    rec = records.get(hotfix_id, {})
-    if not isinstance(rec, dict):
-        return False, "记录损坏"
-    target_path = rec.get("target_path")
-    backup_path = rec.get("backup_path")
-    if not target_path or not backup_path:
-        return False, "缺少 target_path/backup_path"
-    if not os.path.exists(backup_path):
-        return False, f"备份文件不存在: {backup_path}"
-    try:
-        shutil.copy2(backup_path, target_path)
-        if str(target_path).endswith(".py"):
-            _hotfix_delete_pyc_for_source(target_path)
-            _hotfix_compile_source(target_path)
-        _hotfix_record_update(hotfix_id, {"status": "rolled_back", "rolled_back_at": int(time.time())})
-        return True, "已回滚"
-    except Exception as e:
-        return False, f"回滚失败: {e}"
-
-
-def hotfix_pre_start_check_and_rollback_if_needed():
-    """在本次运行开始前：根据上次运行状态，对待验证的 hotfix 做确认/回滚。"""
-    prev_state = genv.get("last_run_state", "")
-    pending_ids = _hotfix_get_pending_ids()
-    if not pending_ids:
-        return
-
-    # 若上次运行崩溃，则回滚所有待验证 hotfix，并标记为永久跳过
-    if prev_state == "crash":
-        for hid in list(pending_ids):
-            ok, msg = _hotfix_rollback_one(hid)
-            print(f"【热更新】检测到上次热更新后崩溃，回滚 {hid}: {msg}")
-            _hotfix_record_update(hid, {"status": "skipped", "skip_reason": "rollback_after_crash"})
-        _hotfix_add_skipped(pending_ids)
-        _hotfix_set_pending_ids([])
-        #回滚完毕后，重启。
-        _hotfix_restart_self("已回滚所有待验证热更新")
-        return
-
-    # 若上次正常退出，则确认 hotfix 生效
-    if prev_state == "ok":
-        for hid in list(pending_ids):
-            _hotfix_record_update(hid, {"status": "applied", "validated_at": int(time.time())})
-        _hotfix_add_applied(pending_ids)
-        _hotfix_set_pending_ids([])
-
-
-def handle_hotfix_if_needed():
-    """根据 CloudRes 下发配置，提示并应用热更新（必要时重启）。"""
-    if not m_cloudres:
-        return
-    try:
-        hotfixes = m_cloudres.get_hotfixes()
-    except Exception:
-        hotfixes = []
-    if not hotfixes:
-        return
-
-    current_version = str(genv.get("VERSION", ""))
-    skipped = set(_hotfix_get_skipped_ids())
-    records = _hotfix_get_records()
-
-    candidates = []
-    for item in hotfixes:
-        if not isinstance(item, dict):
-            continue
-        need_versions = item.get("need_hotfix_version", [])
-        if isinstance(need_versions, str):
-            need_versions = [need_versions]
-        if current_version and need_versions and current_version not in [str(v) for v in need_versions]:
-            continue
-        hid = _hotfix_make_id(item)
-        if not hid:
-            continue
-        if hid in skipped:
-            continue
-        status = (records.get(hid, {}) or {}).get("status")
-        if status in ("applied", "pending_validate"):
-            continue
-        candidates.append(item)
-
-    if not candidates:
-        return
-
-    # prompt user, allow quitting within 5 seconds to skip permanently
-    global _hotfix_prompt_active, _hotfix_prompt_items
-    _hotfix_prompt_active = True
-    _hotfix_prompt_items = candidates
-
-    print("\n================ 热更新提示 ================")
-    print("检测到需要对当前版本进行热更新，将下载并替换本地模块文件。")
-    print("如果你不想热更新，请在 5 秒内直接退出程序（关闭窗口/Ctrl+C）。")
-    for idx, item in enumerate(candidates, 1):
-        module_name = item.get("target_module", "")
-        commit = item.get("target_commit", "")
-        note = item.get("note", "")
-        print(f"- [{idx}] 模块: {module_name}")
-        print(f"      云端版本: {commit}")
-        if note:
-            print(f"      更新原因: {note}")
-    print("===========================================\n")
-
-    for i in range(5, 0, -1):
-        print(f"【热更新】{i}s 后自动热更新... (现在退出即永久跳过)")
-        time.sleep(1)
-
-    # accepted
-    _hotfix_prompt_active = False
-    _hotfix_prompt_items = []
-
-    applied_ids = []
-    success_any = False
-    for item in candidates:
-        hid = _hotfix_make_id(item)
-        _hotfix_record_update(hid, {"status": "applying", "ts": int(time.time())})
-        ok, msg = _hotfix_apply_one(item)
-        print(f"【热更新】{hid}: {msg}")
-        if ok:
-            success_any = True
-            applied_ids.append(hid)
-        else:
-            _hotfix_record_update(hid, {"status": "skipped", "skip_reason": "apply_failed", "error": msg})
-            _hotfix_add_skipped([hid])
-
-    if success_any:
-        _hotfix_set_pending_ids(applied_ids)
-        _hotfix_restart_self("已应用热更新")
+import threading
+threading.excepthook = _threading_excepthook
 
 
 def get_computer_name():
@@ -577,30 +108,22 @@ def get_computer_name():
         logger.exception(f"获取计算机名时发生异常: {e}")
         return None
 
+
+# ------------------------------------------------------------------
+# 用户级代理环境变量管理 (Windows)
+# 全局标志，防止handle_exit被多次调用
+_exit_handled = False
+
 def handle_exit():
+    global _exit_handled, _dns_policy_mgr, _dns_server
+    if _exit_handled:
+        return  # 已经执行过清理，不要重复执行
+    _exit_handled = True
+    
     # Assuming logger is initialized by the time this is called via atexit or signal
     # hotfix: if user quits during countdown, persist skip permanently
-    global _hotfix_prompt_active, _hotfix_prompt_items
     try:
-        if _hotfix_prompt_active and _hotfix_prompt_items:
-            ids = [_hotfix_make_id(i) for i in _hotfix_prompt_items if isinstance(i, dict)]
-            ids = [x for x in ids if x]
-            if ids:
-                _hotfix_add_skipped(ids)
-                for it in _hotfix_prompt_items:
-                    if isinstance(it, dict):
-                        _hotfix_record_update(
-                            _hotfix_make_id(it),
-                            {
-                                "status": "skipped",
-                                "skip_reason": "user_exit_during_countdown",
-                                "target_module": it.get("target_module", ""),
-                                "target_commit": it.get("target_commit", ""),
-                                "note": it.get("note", ""),
-                                "skipped_at": int(time.time()),
-                            },
-                        )
-                print("【热更新】已记录：本次热更新被用户跳过（永久）。")
+        hotfixmgr.handle_exit_skip_if_active()
     except Exception:
         pass
 
@@ -617,20 +140,71 @@ def handle_exit():
     else:
         print("程序关闭，正在清理！ (logger 未初始化)")
 
-    if not genv.get("USING_BACKUP_VER", False) and m_hostmgr: # m_hostmgr is global
-        if logger: logger.info("正在清理 hosts...")
-        else: print("正在清理 hosts...")
-        m_hostmgr.remove(genv.get("DOMAIN_TARGET"))
-        m_hostmgr.remove(genv.get("DOMAIN_TARGET_OVERSEA"))
-    
-    if genv.get("USING_BACKUP_VER", False):
-        backup_mgr = genv.get("backupVerMgr")
-        if backup_mgr:
-            if logger: logger.info("正在停止 mitmproxy...")
-            else: print("正在停止 mitmproxy...")
-            backup_mgr.stop_mitmproxy()
-    from httpdnsblocker import HttpDNSBlocker
-    HttpDNSBlocker().unblock_all()
+    # 停止 mitmproxy 代理
+    proxy_mgr = app_state.proxy_mgr
+    if proxy_mgr:
+        if logger: 
+            logger.info("正在停止 mitmproxy 代理...")
+        else: 
+            print("正在停止 mitmproxy 代理...")
+            sys.stdout.flush()
+        proxy_mgr.stop()
+        if logger:
+            logger.info("mitmproxy 代理已停止")
+        else:
+            print("mitmproxy 代理已停止")
+            sys.stdout.flush()
+
+    # 兼容模式清理：停止 DNS 服务器和清理 DNS 策略
+    if _dns_server:
+        try:
+            _dns_server.stop()
+            _dns_server = None
+        except Exception as e:
+            if logger:
+                logger.warning(f"停止 DNS 服务器失败: {e}")
+
+    if _dns_policy_mgr:
+        try:
+            _dns_policy_mgr.cleanup()
+            _dns_policy_mgr = None
+        except Exception as e:
+            if logger:
+                logger.warning(f"清理 DNS 策略失败: {e}")
+
+    # 清理自定义 DNS 缓存
+    try:
+        from mitm_proxy import clear_custom_dns
+        clear_custom_dns()
+    except Exception:
+        pass
+
+    # 恢复代理设置（Windows 环境变量 / macOS networksetup / Linux gsettings）
+    try:
+        if logger:
+            logger.info("正在恢复代理设置...")
+        _unset_proxy()
+        if logger:
+            logger.info("代理设置已恢复")
+    except Exception as e:
+        if logger:
+            logger.warning(f"恢复代理设置失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+
+    # 注销 URI Scheme（减少痕迹）
+    try:
+        if logger:
+            logger.info("正在注销 URI Scheme...")
+        from uri_scheme import unregister_uri_scheme
+        unregister_uri_scheme()
+        if logger:
+            logger.info("URI Scheme 已注销")
+    except Exception as e:
+        if logger:
+            logger.warning(f"注销 URI Scheme 失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
     print("再见!")
 
 def handle_update():
@@ -738,7 +312,12 @@ def handle_update():
 def ctrl_handler(ctrl_type):
     if ctrl_type in (0, 1, 2, 5, 6):
         handle_exit()
-        return False
+        # 强制结束进程，防止主线程阻塞在 Qt 事件循环 (app.exec()) 中导致程序假死
+        # 等待足够时间以确保清理操作（NRPT 规则删除、WM_SETTINGCHANGE 广播等）完成
+        import time, os
+        time.sleep(3.0)
+        os._exit(0)
+        return True
     return True
 
 
@@ -761,8 +340,9 @@ def initialize():
                 args = sys.argv[1:] if len(sys.argv) > 1 else []
                 argvs = [f'"{arg}"' for arg in args]
             else:
-                # Python脚本：需要传递完整的argv
-                argvs = [f'"{i}"' for i in sys.argv]
+                # Python脚本：需要传递完整的argv，argv[0] 转为绝对路径
+                abs_argv0 = os.path.abspath(sys.argv[0])
+                argvs = [f'"{abs_argv0}"'] + [f'"{a}"' for a in sys.argv[1:]]
             
             ctypes.windll.shell32.ShellExecuteW(
                 None, "runas", executable, " ".join(argvs), script_dir, 1
@@ -774,7 +354,7 @@ def initialize():
             print("sudo required.")
             sys.exit(1)
     #全局变量声明
-    global m_certmgr, m_hostmgr, m_proxy, m_cloudres
+    global m_certmgr, m_proxy, m_cloudres
 
         # initialize workpath
     if not os.path.exists(genv.get("FP_WORKDIR")):
@@ -783,6 +363,18 @@ def initialize():
 
 
     # initialize the global vars at first
+    # 全局禁用 requests 库的环境变量代理 (HTTP_PROXY 等),
+    # 防止本工具设置的系统代理影响 Python 侧的 HTTP 请求
+    import requests as _requests_mod
+    _orig_session_init = _requests_mod.Session.__init__
+
+    def _no_trust_env_init(self, *a, **kw):
+        _orig_session_init(self, *a, **kw)
+        self.trust_env = False
+
+    _requests_mod.Session.__init__ = _no_trust_env_init
+    #Refer to https://forum.qt.io/post/833203. LGTM, yet potentially risky.
+    os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
     genv.set("DOMAIN_TARGET", "service.mkey.163.com")
     genv.set("DOMAIN_TARGET_OVERSEA","sdk-os.mpsdk.easebar.com")
     genv.set("FP_FAKE_DEVICE", os.path.join(genv.get("FP_WORKDIR"), "fakeDevice.json"))
@@ -817,8 +409,8 @@ def initialize():
                     with open(local_cloudres_path, "r", encoding="utf-8") as f:
                         local_cloudres = json.load(f)
                     cache_path = os.path.join(genv.get("FP_WORKDIR"), "cache.json")
-                    with open(cache_path, "w", encoding="utf-8") as f:
-                        json.dump(local_cloudres, f, ensure_ascii=False, indent=4)
+                    from secure_write import write_json_restricted
+                    write_json_restricted(cache_path, local_cloudres)
                     CloudPaths = []
                     print("【云端配置】未检测到版本信息，已使用本地 assets\\cloudRes.json。")
                 except Exception as e:
@@ -834,7 +426,7 @@ def initialize():
     from cloudRes import CloudRes
     m_cloudres=CloudRes(CloudPaths,genv.get('FP_WORKDIR'))
     m_cloudres.update_cache_if_needed()
-    genv.set("CLOUD_RES",m_cloudres)
+    app_state.cloud_res = m_cloudres
     genv.set("CLOUD_VERSION",m_cloudres.get_version())
     genv.set("CLOUD_ANNO",m_cloudres.get_announcement())
 
@@ -857,12 +449,12 @@ def initialize():
             "is_root": 0,
             "oaid": "",
         }
-        with open(genv.get("FP_FAKE_DEVICE"), "w") as f:
-            json.dump(sdkDevice, f)
+        from secure_write import write_json_restricted
+        write_json_restricted(genv.get("FP_FAKE_DEVICE"), sdkDevice)
     else:
-        with open(genv.get("FP_FAKE_DEVICE"), "r") as f:
+        with open(genv.get("FP_FAKE_DEVICE"), "r", encoding="utf-8") as f:
             sdkDevice = json.load(f)
-    genv.set("FAKE_DEVICE", sdkDevice)
+    app_state.fake_device = sdkDevice
     
     if not os.path.exists(genv.get("GLOB_LOGIN_PROFILE_PATH")):
         os.makedirs(genv.get("GLOB_LOGIN_PROFILE_PATH"))
@@ -872,37 +464,52 @@ def initialize():
     
     from channelmgr import ChannelManager
     m_certmgr = certmgr()
-    if sys.platform=='darwin':
-        from macProxyMgr import macProxyMgr
-        m_proxy = macProxyMgr()
-    else:
-        from proxymgr import proxymgr
-        m_proxy = proxymgr()
-    genv.set("CHANNELS_HELPER", ChannelManager())
-    #blocks httpdns ips
-    from httpdnsblocker import HttpDNSBlocker
-    
-    # 检查全局HTTPDNS屏蔽设置，默认启用
-    httpdns_enabled = genv.get("httpdns_blocking_enabled", False)
-    
-    if httpdns_enabled:
-        HttpDNSBlocker().apply_blocking()
-        logger.info(f"HTTPDNS屏蔽已启用，封锁了{len(HttpDNSBlocker().blocked)}个HTTPDNS IP")
-    else:
-        # 确保之前的屏蔽规则被清除
-        HttpDNSBlocker().unblock_all()
+    # Proxy manager is created later during setup_network_proxy()
+    m_proxy = None
+    app_state.channels_helper = ChannelManager()
 
     logger.info("初始化内置浏览器")
     os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
     os.environ.pop('QT_PLUGIN_PATH', None)
     os.environ.pop('LD_LIBRARY_PATH', None)   # Linux/macOS 下动态库搜索路径
+    # 移除进程环境中的代理变量，防止 QtWebEngine (Chromium 子进程) 继承后
+    # 将 OAuth 登录页面等 HTTPS 流量路由到 mitmproxy 导致加载失败。
+    # 游戏子进程通过 mitm_proxy.get_proxy_env() 获取独立的代理配置。
+    for _pvar in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+                  "NO_PROXY", "no_proxy"):
+        os.environ.pop(_pvar, None)
+    # 双保险: 通过 Chromium 命令行参数显式禁用代理
+    _chromium_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    if "--no-proxy-server" not in _chromium_flags:
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+            (_chromium_flags + " " if _chromium_flags else "") + "--no-proxy-server"
+        )
     from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtWebEngineCore import QWebEngineUrlScheme
-    from PyQt6.QtNetwork import QNetworkProxyFactory
+    from PyQt6.QtNetwork import QNetworkProxyFactory, QNetworkProxy
+    from uimgr import register_url_scheme
+    # Register custom URL schemes before creating QApplication
+    register_url_scheme()
+
     argv = sys.argv if sys.argv else ["idv-login"]
-    genv.set("APP",QApplication(argv))
-    QWebEngineUrlScheme.registerScheme(QWebEngineUrlScheme("hms".encode()))
+    app = QApplication(argv)
+    app_state.app = app
+    # 初始化主线程调度器，必须在 app 设置后、其他线程启动前调用
+    app_state._ensure_invoker()
+
+    # 关闭所有窗口后不退出应用 —— 本工具是后台代理服务，应持续运行。
+    app.setQuitOnLastWindowClosed(False)
+    # 标记主事件循环即将运行，让 WebBrowser.run() 使用局部 QEventLoop
+    # 而非再次调用 app.exec()。否则登录窗口关闭时 cleanup() 会调用
+    # app.quit() 导致整个应用退出，管理页面无法收到登录结果。
+    app.setProperty("_main_loop_running", True)
+
+    # 显式告知 Qt (及其内嵌 Chromium) 不使用任何代理。
+    # Qt 文档: "If QNetworkProxy::applicationProxy is set, it will also be
+    # used for Qt WebEngine." 这是控制 Chromium 代理行为的官方 API。
     QNetworkProxyFactory.setUseSystemConfiguration(False)
+    QNetworkProxy.setApplicationProxy(
+        QNetworkProxy(QNetworkProxy.ProxyType.NoProxy)
+    )
 
     if genv.get(f"{genv.get('VERSION')}_first_use",True):
         # 记录安装根目录
@@ -913,13 +520,32 @@ def initialize():
         #genv.set("httpdns_blocking_enabled",False,True)
         #webbrowser.open(url)
         genv.set(f"{genv.get('VERSION')}_first_use",False,True)
+        from hostmgr import hostmgr
+        try:
+            h_mgr=hostmgr()
+            if h_mgr.isExist(genv.get("DOMAIN_TARGET")):
+                logger.warning(f"Hosts文件中已存在{genv.get('DOMAIN_TARGET')}的记录，正在尝试删除旧记录...")
+                h_mgr.remove(genv.get("DOMAIN_TARGET"))
+            if h_mgr.isExist(genv.get("DOMAIN_TARGET_OVERSEA")):
+                logger.warning(f"Hosts文件中已存在{genv.get('DOMAIN_TARGET_OVERSEA')}的记录，正在尝试删除旧记录...")
+                h_mgr.remove(genv.get("DOMAIN_TARGET_OVERSEA"))
+        except Exception as e:
+            logger.error(f"删除可能存在的旧Hosts记录失败: {e}")
+        
+        # v6.0.0 新增：首次启动时清理孤立的 weblogin profile/cache 文件夹
+        try:
+            from channelmgr import ChannelManager
+            channel_mgr = ChannelManager()
+            channel_mgr.cleanup_orphaned_weblogin_profiles()
+        except Exception as e:
+            logger.error(f"清理孤立 weblogin profile/cache 失败: {e}")
+        
         #from gamemgr import GameManager
         #try:
         #    game_mgr = GameManager()
         #    for game in game_mgr.games.values():
-        #        start_args=CloudRes().get_start_argument(getShortGameId(game.game_id)) or ""
-        #        logger.info(f"新建快捷方式: {game.path}，启动参数: {start_args}")
-        #        game.create_launch_shortcut(start_args=start_args,bypass_path_check=False)
+        #        logger.info(f"新建快捷方式: {game.path}")
+        #        game.create_tool_launch_shortcut(game.path or "")
                 
         #except Exception as e:
         #    logger.error(f"首次使用创建快捷方式失败: {e}")
@@ -928,15 +554,19 @@ def initialize():
         setup_shortcuts()
     except:
         logger.error("创建快捷方式失败")
-    computer_name = get_computer_name()
     from run_once import run_once
     try:
         run_once()
     except Exception as e:
         logger.error(f"运行一次性任务失败: {e}")
     #如果是windows，清空DNS缓存
-    if sys.platform=='win32':
-        os.system("ipconfig /flushdns")
+    #if sys.platform=='win32':
+    #    subprocess.call(
+    #        "ipconfig /flushdns",
+    #        shell=True,
+    #        stdout=subprocess.DEVNULL,
+    #        stderr=subprocess.DEVNULL,
+    #    )
 
 def welcome():
     print(f"[+] 欢迎使用第五人格登陆助手 {genv.get('VERSION')}!")
@@ -1049,9 +679,6 @@ def handle_download_task(task_file_path):
         logger_local.exception(f"读取下载任务文件失败: {e}")
         return False
     download_root = task_data.get("download_root", "")
-    directories = task_data.get("directories", [])
-    files = task_data.get("files", [])
-    concurrent_files = int(task_data.get("concurrent_files", 2))
     game_id = task_data.get("game_id", "")
     version_code = task_data.get("version_code", "")
     distribution_id = int(task_data.get("distribution_id", -1))
@@ -1130,7 +757,7 @@ def handle_download_task(task_file_path):
                     game.should_auto_start=True
                 game_mgr._save_games()
                 print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")
-                game.create_launch_shortcut(start_args=start_args,bypass_path_check=True)
+                game.create_tool_launch_shortcut(game.path or "")
 
                 
         if ui_server_process:
@@ -1170,21 +797,26 @@ def handle_download_task(task_file_path):
 
 def cleanup_expired_certificates():
     """清理过期的证书文件"""
+    from mitm_proxy import MitmProxyManager
+
     # 检查证书是否过期
     web_cert_expired = m_certmgr.is_certificate_expired(genv.get("FP_WEBCERT"))
     ca_cert_expired = m_certmgr.is_certificate_expired(genv.get("FP_CACERT"))
 
     if web_cert_expired or ca_cert_expired:
         logger.info("一个或多个证书已过期或不存在，正在重新生成...")
+        confdir = MitmProxyManager.get_confdir()
         # 删除旧证书文件（如果存在）
         cert_files = [
             (genv.get("FP_WEBCERT"), "网站证书"),
             (genv.get("FP_WEBKEY"), "网站密钥"),
-            (genv.get("FP_CACERT"), "CA证书")
+            (genv.get("FP_CACERT"), "CA证书"),
+            (os.path.join(confdir, "mitmproxy-ca.pem"), "mitmproxy CA密钥+证书"),
+            (os.path.join(confdir, "mitmproxy-ca-cert.pem"), "mitmproxy CA证书"),
         ]
         
         for cert_path, cert_name in cert_files:
-            if os.path.exists(cert_path):
+            if cert_path and os.path.exists(cert_path):
                 os.remove(cert_path)
                 logger.info(f"已删除旧的{cert_name}: {cert_path}")
     
@@ -1192,42 +824,74 @@ def cleanup_expired_certificates():
 
 
 def generate_certificates_if_needed():
-    """检查并生成必要的证书文件"""
+    """检查并生成必要的证书文件, 同时为 mitmproxy 准备 CA 密钥+证书。
+
+    CA 私钥保存在 mitmproxy confdir 内部的 ``mitmproxy-ca.pem`` 中，
+    并通过文件系统权限限制只允许当前用户读取。公钥证书导出到
+    ``FP_CACERT`` 并导入系统根证书存储。
+    """
+    from mitm_proxy import MitmProxyManager
+    from cryptography.hazmat.primitives import serialization
+
     web_cert_expired, ca_cert_expired = cleanup_expired_certificates()
-    
-    if (os.path.exists(genv.get("FP_WEBCERT")) == False) or \
-       (os.path.exists(genv.get("FP_WEBKEY")) == False) or \
-       (os.path.exists(genv.get("FP_CACERT")) == False) or \
-       web_cert_expired or ca_cert_expired: # 添加过期检查条件
+
+    confdir = MitmProxyManager.get_confdir()
+    os.makedirs(confdir, exist_ok=True)
+    mitm_ca_pem = os.path.join(confdir, "mitmproxy-ca.pem")
+    mitm_ca_cert_pem = os.path.join(confdir, "mitmproxy-ca-cert.pem")
+
+    need_regen = (
+        not os.path.exists(genv.get("FP_CACERT"))
+        or not os.path.exists(mitm_ca_pem)
+        or not os.path.exists(mitm_ca_cert_pem)
+        or web_cert_expired
+        or ca_cert_expired
+    )
+
+    if need_regen:
         logger.info("正在生成必要的证书文件...")
 
         ca_key = m_certmgr.generate_private_key(bits=2048)
         ca_cert = m_certmgr.generate_ca(ca_key)
         m_certmgr.export_cert(genv.get("FP_CACERT"), ca_cert)
 
-        srv_key = m_certmgr.generate_private_key(bits=2048)
-        srv_cert = m_certmgr.generate_cert(
-            [genv.get("DOMAIN_TARGET"),genv.get("DOMAIN_TARGET_OVERSEA"),"localhost"], srv_key, ca_cert, ca_key
+        # ── 保存 CA 私钥+证书供 mitmproxy 使用 ──
+        key_pem = ca_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
         )
+        cert_pem = ca_cert.public_bytes(serialization.Encoding.PEM)
 
+        # mitmproxy-ca.pem = key + cert (mitmproxy 需要)
+        # 使用 os.open 以限制权限创建文件 (避免短暂的权限窗口)
+        from secure_write import write_file_restricted
+        write_file_restricted(mitm_ca_pem, key_pem + cert_pem)
+        # mitmproxy-ca-cert.pem = cert only (公钥，无需限制权限)
+        with open(mitm_ca_cert_pem, "wb") as f:
+            f.write(cert_pem)
+
+        # ── 导入 CA 证书到系统根证书存储 ──
         if m_certmgr.import_to_root(genv.get("FP_CACERT")) == False:
             logger.error("导入CA证书失败!")
-            if sys.platform == 'win32': # Keep platform-specific behavior
+            if sys.platform == 'win32':
                 os.system("pause")
             else:
                 input("导入CA证书失败，请按回车键退出。")
             sys.exit(-1)
 
+        # ── 生成服务器证书 (仍用于某些内部流程) ──
+        srv_key = m_certmgr.generate_private_key(bits=2048)
+        srv_cert = m_certmgr.generate_cert(
+            [genv.get("DOMAIN_TARGET"), genv.get("DOMAIN_TARGET_OVERSEA"), "localhost"],
+            srv_key, ca_cert, ca_key,
+        )
         m_certmgr.export_cert(genv.get("FP_WEBCERT"), srv_cert)
         m_certmgr.export_key(genv.get("FP_WEBKEY"), srv_key)
         logger.info("证书初始化成功!")
+    else:
+        logger.info("证书已存在且有效，跳过生成。")
 
-
-def setup_backup_version_manager():
-    """初始化备用版本管理器"""
-    from backupvermgr import BackupVersionMgr
-    backupVerMgr_instance = BackupVersionMgr(work_dir=genv.get("FP_WORKDIR"))
-    return backupVerMgr_instance
 
 def setup_shortcuts():
     """设置快捷方式"""
@@ -1235,86 +899,442 @@ def setup_shortcuts():
     shortcutMgr_instance = ShortcutMgr()
     shortcutMgr_instance.handle_shortcuts()
 
-def start_mitm_mode(backupVerMgr_instance):
-    """启动MITM代理模式"""
-    logger.warning("正在启动备用方案 (mitmproxy)...")
-    pid = os.getpid()
-    try:
-        genv.set("backupVerMgr", backupVerMgr_instance)
-        if backupVerMgr_instance.setup_environment(): 
-            if backupVerMgr_instance.start_mitmproxy_redirect(pid):
-                genv.set("USING_BACKUP_VER", True, False) # Mark as actively using MITM
-                logger.info("备用方案 (mitmproxy) 启动成功!")
-                return True
-            else:
-                logger.error("备用方案 (mitmproxy) 启动失败。程序将继续，但可能无法正常工作。")
-        else:
-            logger.error("备用方案 (mitmproxy) 环境设置失败。程序将继续，但可能无法正常工作。")
-    except Exception as e_mitm:
-        logger.exception(f"启动备用方案 (mitmproxy) 时发生错误: {e_mitm}")
-        logger.error("备用方案 (mitmproxy) 启动时发生异常。程序将继续，但可能无法正常工作。")
-    return False
+def setup_network_proxy(proxy_port):
+    """Set up the mitmproxy-based network proxy.
 
+    Supports three modes:
+    - "global": Sets system-level HTTP_PROXY/HTTPS_PROXY environment variables
+    - "process": Sets proxy variables only for game subprocess
+    - "compat": Uses DNS hijacking (NRPT/Hosts) + local DNS server + mitmproxy reverse proxy
 
-def setup_host_manager():
-    """设置Host管理器进行域名重定向"""
-    global m_hostmgr
-    logger.info("正在重定向目标地址到本机 (hosts 文件修改)...")
-    try:
-        from hostmgr import hostmgr 
-        # m_hostmgr is a global variable, assign the instance to it.
-        m_hostmgr = hostmgr() 
+    In compat mode, the workflow is:
+    1. Set up DNS policy (NRPT rules or Hosts file) to redirect target domains to 127.0.0.1
+    2. Start local DNS server on 127.0.0.1:53 to respond with 127.0.0.1 for target domains
+    3. Start mitmproxy in reverse proxy mode on port 443 to handle incoming HTTPS requests
+    """
+    global m_proxy, _dns_policy_mgr, _dns_server
 
-        if m_hostmgr.isExist(genv.get("DOMAIN_TARGET")) == True:
-            logger.info("识别到手动定向!")
-            logger.info(
-                f"请确保已经将 {genv.get('DOMAIN_TARGET')}、{genv.get('DOMAIN_TARGET_OVERSEA')} 和 localhost 指向 127.0.0.1"
-            )
-        else:
-            m_hostmgr.add(genv.get("DOMAIN_TARGET"), "127.0.0.1")
-            m_hostmgr.add(genv.get("DOMAIN_TARGET_OVERSEA"), "127.0.0.1")
-            m_hostmgr.add("localhost", "127.0.0.1")
-        return True
-    except Exception as e_hostmgr:
-        logger.warning(f"Host管理器初始化失败 ({e_hostmgr})，正在尝试备用方案 (mitmproxy)...")
-        return False
+    from gamemgr import GameManager
+    from channelHandler.channelUtils import getShortGameId
+    from cloudRes import CloudRes
 
+    game_helper = GameManager()
+    ui_logger = logger
 
-def fallback_to_mitm():
-    """当Host管理器失败时，回退到MITM模式"""
-    from backupvermgr import BackupVersionMgr
-    pid = os.getpid()
-    try:
-        backupVerMgr_instance = BackupVersionMgr(work_dir=genv.get("FP_WORKDIR"))
-        genv.set("backupVerMgr", backupVerMgr_instance) # Store for cleanup
-        # Check if backupVer was already true (e.g. from config) or if env setup is ok
-        if genv.get("backupVer", False) and backupVerMgr_instance.setup_environment():
-            genv.set("backupVer", True, True) # Mark intention/attempt
-            if backupVerMgr_instance.start_mitmproxy_redirect(pid):
-                genv.set("USING_BACKUP_VER", True, False) # Mark as actively using MITM
-                logger.info("备用方案 (mitmproxy) 启动成功!")
-            else:
-                logger.error("备用方案 (mitmproxy) 启动失败。")
-        else:
-            logger.error("备用方案 (mitmproxy) 环境设置失败。")
-    except Exception as e_mitm_fallback:
-        logger.exception(f"尝试备用方案 (mitmproxy) 时发生错误: {e_mitm_fallback}")
-        logger.error("备用方案 (mitmproxy) 尝试时发生异常。")
+    # Platform-specific defaults
+    if sys.platform == "darwin":
+        cv = "i4.7.0"
+        login_style = 2
+        app_channel_default = "netease.wyzymnqsd_cps_dev"
+        use_login_mapping_always = True
 
+        def _create_login_query_hook(query, game_id):
+            query["qrcode_channel_type"] = "3"
+            query["gv"] = "251881013"
+            query["gvn"] = "2025.0707.1013"
+            query["cv"] = cv
+            query["sv"] = "35"
+            query["app_type"] = "games"
+            query["app_mode"] = "2"
+            query["app_channel"] = app_channel_default
+            query["_cloud_extra_base64"] = "e30="
+            query["sc"] = "1"
 
-def setup_network_proxy(force_mitm_mode):
-    """设置网络代理（Host管理器或MITM模式）"""
-    backupVerMgr_instance = setup_backup_version_manager()
-    
-    if force_mitm_mode:
-        logger.info("命令行参数指定使用备用模式。")
-        genv.set("backupVer", True, True)
-        start_mitm_mode(backupVerMgr_instance)
+        qrcode_app_channel_provider = None
     else:
-        # Standard host modification logic
-        if not setup_host_manager():
-            # Fallback to MITM (original logic)
-            fallback_to_mitm()
+        cv = "a5.10.0"
+        login_style = 1
+        app_channel_default = "netease.wyzymnqsd_cps_dev"
+        use_login_mapping_always = False
+
+        qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
+
+        def _create_login_query_hook(query, game_id):
+            config = CloudRes().get_qrcode_login_config(game_id)
+            if config:
+                for k, v in config.items():
+                    if k != "game_id":
+                        query[k] = v
+
+    # Create the UI manager for the Qt window
+    from uimgr import UIManager
+    ui_mgr = UIManager(game_helper=game_helper, ui_logger=ui_logger)
+    app_state.ui_mgr = ui_mgr
+
+    # Create the mitmproxy addon
+    from mitm_addon import IDVLoginAddon
+    addon = IDVLoginAddon(
+        cv=cv,
+        login_style=login_style,
+        game_helper=game_helper,
+        logger=logger,
+        app_channel_default=app_channel_default,
+        qrcode_app_channel_provider=qrcode_app_channel_provider,
+        create_login_query_hook=_create_login_query_hook,
+        use_login_mapping_always=use_login_mapping_always,
+        ui_manager=ui_mgr,
+    )
+
+    # 获取代理模式
+    uri_action = genv.get("URI_STARTUP_ACTION", "")
+    uri_game_id = genv.get("URI_STARTUP_GAME_ID", "")
+    auto_games = game_helper.list_auto_start_games()
+    proxy_mode = genv.get("proxy_mode", "")
+    if not proxy_mode:
+        proxy_mode = "process" if auto_games else "global"
+        genv.set("proxy_mode", proxy_mode, True)
+
+    # 兼容模式特殊处理
+    if proxy_mode == "compat":
+        # 兼容模式不使用代理环境变量，清理上次可能残留的设置
+        try:
+            _unset_proxy()
+        except Exception:
+            pass
+        logger.info("正在启动兼容模式...")
+        try:
+            _setup_compat_mode(addon)
+        except Exception as e:
+            logger.error(f"兼容模式启动失败: {e}，回退到常规代理模式")
+            # 清理可能已部分设置的资源
+            if _dns_policy_mgr:
+                try:
+                    _dns_policy_mgr.cleanup()
+                except Exception:
+                    pass
+                _dns_policy_mgr = None
+            if _dns_server:
+                try:
+                    _dns_server.stop()
+                except Exception:
+                    pass
+                _dns_server = None
+            from mitm_proxy import clear_custom_dns
+            clear_custom_dns()
+            # 回退到常规模式（不持久化，下次启动仍尝试兼容模式）
+            proxy_mode = "process" if auto_games else "global"
+            from mitm_proxy import MitmProxyManager
+            proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular")
+            proxy_mgr.start()
+            m_proxy = proxy_mgr
+            app_state.proxy_mgr = proxy_mgr
+    else:
+        # 常规代理模式（global 或 process）
+        from mitm_proxy import MitmProxyManager
+        proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular")
+        proxy_mgr.start()
+        m_proxy = proxy_mgr
+        app_state.proxy_mgr = proxy_mgr
+
+    # Register the URI scheme so QR code redirects open our Qt window
+    from uri_scheme import register_uri_scheme, start_uri_listener
+    register_uri_scheme()
+
+    # Start the URI listener so that new --uri invocations signal this instance
+    def _on_uri_signal(action: str, game_id: str):
+        logger.info(f"收到 URI 信号: action={action}, game_id={game_id}")
+        if action == "start" and game_id:
+            game = game_helper.get_game(game_id)
+            if game:
+                logger.info(f"通过信号启动游戏: {game.name or game_id}")
+                game.start()
+            else:
+                logger.warning(f"信号指定的游戏未找到: {game_id}")
+        else:
+            ui_mgr.open_for_game(game_id)
+
+    start_uri_listener(_on_uri_signal)
+
+    # If we were launched via --uri / --open-ui, open the UI
+    if genv.get("URI_STARTUP_OPEN_UI"):
+        startup_game_id = genv.get("URI_STARTUP_GAME_ID", "")
+        ui_mgr.open_for_game(startup_game_id)
+
+    # 根据模式执行不同的启动逻辑
+    if proxy_mode == "compat":
+        # 兼容模式：无需设置代理环境变量，DNS 劫持会自动生效
+        logger.info("提示：当前使用兼容模式，通过 DNS 劫持拦截游戏流量。")
+        if auto_games:
+            names = ", ".join(g.name for g in auto_games)
+            logger.info(f"同时启动自启游戏: {names}")
+            for g in auto_games:
+                g.start()
+    elif uri_action == "start" and uri_game_id:
+        # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
+        game = game_helper.get_game(uri_game_id)
+        if game:
+            logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
+            game.start()
+        else:
+            logger.warning(f"未找到游戏: {uri_game_id}")
+        # 清理启动参数
+        genv.set("URI_STARTUP_ACTION", "")
+        genv.set("URI_STARTUP_GAME_ID", "")
+    elif proxy_mode == "global":
+        # 次优先级：全局模式 → 设置系统/用户级代理
+        _set_proxy(proxy_port)
+        logger.info("提示：当前使用全局代理模式，会处理本机所有网络连接。")
+        if auto_games:
+            # 全局模式下也启动自启游戏（它们会继承代理环境变量）
+            names = ", ".join(g.name for g in auto_games)
+            logger.info(f"同时启动自启游戏: {names}")
+            for g in auto_games:
+                g.start()
+        else:
+            logger.info("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
+    elif auto_games:
+        # 第三优先级：进程模式但有自启游戏 → 启动自启游戏（进程级代理）
+        names = ", ".join(g.name for g in auto_games)
+        logger.info(f"进程代理模式，启动自启游戏: {names}")
+        for g in auto_games:
+            g.start()
+    else:
+        # 进程代理模式且没有自启游戏
+        logger.info("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
+        logger.info("如需设置全局代理，可在管理页面切换为全局模式。")
+
+    if proxy_mode == "compat":
+        logger.info("兼容模式已就绪！DNS 劫持和反向代理已启动。")
+    else:
+        logger.info(f"mitmproxy 代理模式已就绪！监听端口: {proxy_port}")
+    logger.info("拦截成功，您现在可以打开游戏了。游戏将通过代理自动路由。")
+    logger.warning("如果您在之前已经打开了游戏，请关闭游戏后重新打开，否则工具不会生效！")
+    logger.info("登入账号且已经··进入游戏··后，您可以关闭本工具。")
+
+
+def _setup_compat_mode(addon):
+    """设置兼容模式：DNS 劫持 + 本地 DNS 服务器 + 反向代理。"""
+    global m_proxy, _dns_policy_mgr, _dns_server
+
+    # 目标域名
+    target_domains = [
+        genv.get("DOMAIN_TARGET", "service.mkey.163.com"),
+        genv.get("DOMAIN_TARGET_OVERSEA", "sdk-os.mpsdk.easebar.com"),
+    ]
+
+    # 0. 检测并处理 443 端口占用
+    _check_and_handle_port_443()
+
+    # 1. 并行预解析目标域名的真实 IP（防止 DNS 回环）
+    from mitm_proxy import resolve_domain_ip, add_custom_dns
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    resolved_ips = {}
+    with ThreadPoolExecutor(max_workers=len(target_domains)) as executor:
+        futures = {
+            executor.submit(resolve_domain_ip, domain, True): domain
+            for domain in target_domains
+        }
+        for future in as_completed(futures, timeout=15):
+            domain = futures[future]
+            try:
+                ip = future.result()
+                if ip:
+                    resolved_ips[domain] = ip
+                    add_custom_dns(domain, 443, ip)
+                    logger.debug(f"目标服务器: {domain} -> {ip}")
+                else:
+                    logger.warning(f"无法解析 {domain}，兼容模式可能无法正常工作")
+            except Exception as e:
+                logger.warning(f"解析 {domain} 失败: {e}")
+
+    if not resolved_ips:
+        logger.error("所有目标域名解析失败，无法启动兼容模式")
+        raise RuntimeError("Failed to resolve any target domain for compat mode")
+
+    # 保存解析结果供其他模块使用
+    genv.set("COMPAT_RESOLVED_IPS", resolved_ips)
+
+    # 2. 设置 DNS 策略（NRPT 或 Hosts）
+    from mitm_proxy import DnsPolicyManager
+    _dns_policy_mgr = DnsPolicyManager(domains=target_domains, target_ip="127.0.0.1")
+    if not _dns_policy_mgr.setup():
+        logger.error("DNS 策略设置失败，无法启动兼容模式")
+        raise RuntimeError("Failed to setup DNS policy for compat mode")
+
+    method = "NRPT" if _dns_policy_mgr.is_using_nrpt else "Hosts 文件"
+    logger.debug(f"DNS 策略已设置 (方式: {method})")
+
+    # 3. 启动本地 DNS 服务器
+    from mitm_proxy import LocalDnsServer
+    _dns_server = LocalDnsServer(
+        intercept_domains=set(target_domains),
+        target_ip="127.0.0.1",
+        listen_host="127.0.0.1",
+        listen_port=53,
+    )
+    if not _dns_server.start():
+        logger.error("本地 DNS 服务器启动失败")
+        _dns_policy_mgr.cleanup()
+        _dns_policy_mgr = None
+        raise RuntimeError("Failed to start local DNS server for compat mode")
+
+    logger.debug("本地 DNS 服务器已启动 (127.0.0.1:53)")
+
+    # 4. 启动 mitmproxy 反向代理
+    from mitm_proxy import MitmProxyManager
+    proxy_mgr = MitmProxyManager(addon=addon, mode="compat")
+    proxy_mgr.start()
+    m_proxy = proxy_mgr
+    app_state.proxy_mgr = proxy_mgr
+
+
+def _ask_user_confirmation(title: str, message: str) -> bool:
+    """向用户询问确认，优先使用 Qt 对话框，回退到 Windows API，最后使用控制台。
+    
+    Args:
+        title: 对话框标题
+        message: 对话框消息
+        
+    Returns:
+        用户是否确认（是/否）
+    """
+    # 1. 尝试使用 Qt 对话框（如果已初始化）
+    try:
+        if app_state.app is not None:
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                None, title, message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            return reply == QMessageBox.StandardButton.Yes
+    except Exception:
+        pass
+    
+    # 2. 尝试使用 Windows API（仅 Windows）
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            MB_YESNO = 0x04
+            MB_ICONQUESTION = 0x20
+            IDYES = 6
+            result = ctypes.windll.user32.MessageBoxW(
+                0, message, title, MB_YESNO | MB_ICONQUESTION
+            )
+            return result == IDYES
+        except Exception:
+            pass
+    
+    # 3. 回退到控制台输入（回车为肯定）
+    print(f"\n{title}")
+    print(message)
+    user_input = input("按回车键确认，输入其他内容取消: ")
+    return user_input == ""
+
+
+def _check_and_handle_port_443():
+    """检测并处理 443 端口占用。"""
+    import psutil
+
+    def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return False
+            except socket.error:
+                return True
+
+    if not is_port_in_use(443):
+        return
+
+    logger.warning("检测到 443 端口被占用，正在查找占用进程...")
+
+    # 查找占用 443 端口的进程
+    occupying_pids = []
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            for line in result.stdout.splitlines():
+                if ":443 " in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        if pid.isdigit():
+                            occupying_pids.append(int(pid))
+        except Exception as e:
+            logger.warning(f"查找占用进程失败: {e}")
+    else:
+        try:
+            result = subprocess.run(
+                ["lsof", "-i", ":443", "-sTCP:LISTEN"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            for line in result.stdout.splitlines()[1:]:  # Skip header
+                parts = line.split()
+                if len(parts) >= 2:
+                    pid = parts[1]
+                    if pid.isdigit():
+                        occupying_pids.append(int(pid))
+        except Exception as e:
+            logger.warning(f"查找占用进程失败: {e}")
+
+    if not occupying_pids:
+        logger.warning("无法确定占用 443 端口的进程，请手动关闭后重试")
+        _ask_user_confirmation("端口占用", "无法确定占用 443 端口的进程。\n请手动关闭相关进程后按确认继续。")
+        return
+
+    # 获取进程信息并提示用户
+    for pid in set(occupying_pids):
+        try:
+            proc = psutil.Process(pid)
+            exe_name = proc.exe()
+            logger.warning(f"进程 {exe_name} (PID={pid}) 正在占用 443 端口")
+
+            # Windows PID 4 是 System 进程（HTTP.sys 服务）
+            if sys.platform == "win32" and pid == 4:
+                logger.warning("这是 Windows HTTP 服务 (PID=4)，将尝试停止 http 服务")
+                if _ask_user_confirmation(
+                    "停止 Windows HTTP 服务",
+                    "Windows HTTP 服务 (PID=4) 正在占用 443 端口。\n"
+                    "这通常由 IIS、SQL Server Reporting Services 等引起。\n\n"
+                    "是否停止 Windows HTTP 服务？"
+                ):
+                    try:
+                        subprocess.run(
+                            ["net", "stop", "http", "/y"],
+                            check=True, timeout=30,
+                            capture_output=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                        )
+                        logger.info("HTTP 服务已停止")
+                        time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"停止 HTTP 服务失败: {e}")
+            else:
+                if _ask_user_confirmation(
+                    "终止占用端口的进程",
+                    f"进程 {exe_name}\n(PID={pid}) 正在占用 443 端口。\n\n"
+                    f"是否终止该进程？"
+                ):
+                    try:
+                        if sys.platform == "win32":
+                            subprocess.run(
+                                ["taskkill", "/f", "/pid", str(pid)],
+                                check=True, timeout=10,
+                                capture_output=True,
+                                creationflags=subprocess.CREATE_NO_WINDOW,
+                            )
+                        else:
+                            subprocess.run(["kill", "-9", str(pid)], check=True, timeout=10)
+                        logger.info(f"进程 {pid} 已终止")
+                        time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"终止进程失败: {e}")
+        except psutil.AccessDenied:
+            logger.warning(f"无权限访问进程 {pid}，请以管理员身份运行")
+        except psutil.NoSuchProcess:
+            pass
+        except Exception as e:
+            logger.warning(f"获取进程 {pid} 信息失败: {e}")
 
 
 def handle_error_and_exit(e):
@@ -1358,8 +1378,12 @@ def setup_signal_handlers():
     
     def signal_handler(sig, frame):
         print(f"捕获到信号 {sig}，正在执行清理...")
+        sys.stdout.flush()
         handle_exit()
-        sys.exit(0)
+        # 等待足够时间以确保清理操作（NRPT 规则删除、WM_SETTINGCHANGE 广播等）完成
+        time.sleep(3.0)
+        import os
+        os._exit(0)
     # 捕获常见的终止信号
     signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
     signal.signal(signal.SIGTERM, signal_handler)  # kill 命令
@@ -1382,20 +1406,18 @@ def main(cli_args=None):
     from logutil import setup_logger
     logger = setup_logger() 
 
-    force_mitm_mode = cli_args.mitm
-
     try:
         cloudBuildInfo()
         initialize() # This sets up atexit(handle_exit) among other things
 
         # hotfix gate: verify config cache can be written; if not, skip all hotfix logic to avoid infinite restarts.
-        can_run_hotfix = _hotfix_probe_cache_write_once()
+        can_run_hotfix = hotfixmgr.probe_cache_write_once()
         if not can_run_hotfix:
             logger.warning("【热更新】探测到配置缓存写入失败：已跳过本次所有热更新逻辑（避免无限重启）。")
         else:
             # hotfix: rollback/confirm pending hotfix based on last run state (genv 环境在 initialize 后更完整)
             try:
-                hotfix_pre_start_check_and_rollback_if_needed()
+                hotfixmgr.pre_start_check_and_rollback_if_needed()
             except Exception:
                 pass
 
@@ -1406,21 +1428,45 @@ def main(cli_args=None):
 
         # hotfix: apply if needed (may restart process)
         if can_run_hotfix:
-            handle_hotfix_if_needed()
+            hotfixmgr.handle_if_needed(m_cloudres)
 
         welcome()
         handle_update()
         handle_announcement()
         
-        # 证书管理
+        # 证书管理: 生成 CA + 服务器证书并导入系统信任存储
         generate_certificates_if_needed()
 
-        # 网络代理设置
-        setup_network_proxy(force_mitm_mode)
+        # 网络代理设置 (mitmproxy normal mode)
+        proxy_port = cli_args.proxy_port
+        setup_network_proxy(proxy_port)
+
+        # setup_network_proxy → _set_proxy → _broadcast_env_change 可能导致
+        # Qt 重新读取系统代理。必须在此之后再次显式设置 NoProxy。
+        from PyQt6.QtNetwork import QNetworkProxy
+        QNetworkProxy.setApplicationProxy(
+            QNetworkProxy(QNetworkProxy.ProxyType.NoProxy)
+        )
         
-        # Start proxy server (m_proxy is global, initialized in initialize())
-        logger.info("正在启动代理服务器...")
-        m_proxy.run()
+        # The proxy runs in a background thread.
+        # Keep the main thread alive (for Qt event loop or simple wait).
+        app = app_state.app
+        if app is not None:
+            # If a Qt application exists, run its event loop.
+            # 在Qt退出前执行清理
+            app.aboutToQuit.connect(handle_exit)
+            app.setProperty("_main_loop_running", True)
+            app.exec()
+            # Qt已退出，但handle_exit可能还没完成，稍等一下
+            time.sleep(0.2)
+        else:
+            # No Qt app – just block the main thread.
+            import threading
+            stop_event = threading.Event()
+            try:
+                stop_event.wait()
+            except KeyboardInterrupt:
+                pass
     except Exception as e:
         handle_error_and_exit(e)
 
@@ -1430,6 +1476,47 @@ if __name__ == "__main__":
         if CLI_ARGS.download:
             success = handle_download_task(CLI_ARGS.download)
             sys.exit(0 if success else 1)
+        # --open-ui 是 --uri "idvlogin://open" 的简写，用于快捷方式
+        if CLI_ARGS.open_ui and not CLI_ARGS.uri:
+            CLI_ARGS.uri = "idvlogin://open"
+        if CLI_ARGS.uri:
+            # URI scheme invocation (e.g. idvlogin://open?game_id=xxx or idvlogin://start?game_id=xxx)
+            # 如果当前进程没有管理员权限，先提权再处理 URI
+            if sys.platform == "win32" and ctypes.windll.shell32.IsUserAnAdmin() == 0:
+                if getattr(sys, 'frozen', False):
+                    exe = sys.argv[0]
+                    args = sys.argv[1:] if len(sys.argv) > 1 else []
+                    argvs = [f'"{a}"' for a in args]
+                else:
+                    exe = sys.executable
+                    # argv[0] 转为绝对路径，避免提权后工作目录变化导致找不到脚本
+                    abs_argv0 = os.path.abspath(sys.argv[0])
+                    argvs = [f'"{abs_argv0}"'] + [f'"{a}"' for a in sys.argv[1:]]
+                ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", exe, " ".join(argvs), script_dir, 1
+                )
+                sys.exit(0)
+            # Try to signal the already-running instance via named pipe.
+            from uri_scheme import parse_uri, signal_running_instance
+            params = parse_uri(CLI_ARGS.uri)
+            action = params.get("action", "open")
+            game_id = params.get("game_id", "")
+            
+            # idvlogin://start?game_id=xxx - 启动工具并仅启动该游戏（进程代理模式）
+            # idvlogin://open?game_id=xxx - 打开 UI
+            # 两种 action 都先尝试信号已运行实例
+            if signal_running_instance(game_id, action):
+                # 已运行实例收到信号，退出本进程
+                sys.exit(0)
+            # 无已运行实例，作为新实例启动
+            if action == "start" and game_id:
+                genv.set("URI_STARTUP_ACTION", "start")
+                genv.set("URI_STARTUP_GAME_ID", game_id)
+            else:
+                # No running instance — fall through and start normally.
+                # Store the game_id so the UI opens for it after startup.
+                genv.set("URI_STARTUP_GAME_ID", game_id)
+                genv.set("URI_STARTUP_OPEN_UI", "1")
     except SystemExit:
         raise
     except Exception:

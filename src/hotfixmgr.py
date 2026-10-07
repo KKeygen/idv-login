@@ -11,7 +11,6 @@ TODO: 支持创建新模块文件的热更新
 3. 在回滚时检查此标记，若为新模块则删除文件而非恢复备份
 """
 
-import importlib.abc
 import importlib.util
 import logging
 import os
@@ -20,7 +19,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import requests
 
@@ -33,18 +32,6 @@ logger = logging.getLogger("hotfixmgr")
 # ------------------------------------------------------------------
 prompt_active = False
 prompt_items: list = []
-_import_hook_installed = False
-
-
-class _HotfixOverlayFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, module_paths: Dict[str, str]):
-        self.module_paths = dict(module_paths or {})
-
-    def find_spec(self, fullname, path=None, target=None):
-        source_path = self.module_paths.get(fullname)
-        if not source_path or not os.path.exists(source_path):
-            return None
-        return importlib.util.spec_from_file_location(fullname, source_path)
 
 
 # ------------------------------------------------------------------
@@ -136,55 +123,6 @@ def _add_applied(hotfix_ids: List[str]):
     genv.set("hotfix_applied", sorted(s), True)
 
 
-def _is_macos_pyinstaller() -> bool:
-    return sys.platform == "darwin" and bool(getattr(sys, "frozen", False))
-
-
-def _safe_hotfix_dir_name(hotfix_id: str) -> str:
-    safe = []
-    for ch in str(hotfix_id):
-        safe.append(ch if ch.isalnum() or ch in ("-", "_", ".") else "_")
-    return "".join(safe).strip("._") or "hotfix"
-
-
-def _overlay_root() -> str:
-    return os.path.join(genv.get("FP_WORKDIR") or os.getcwd(), "hotfix_overlay")
-
-
-def _get_active_overlay_paths() -> Dict[str, str]:
-    records = _get_records()
-    result = {}
-    for rec in records.values():
-        if not isinstance(rec, dict):
-            continue
-        if rec.get("target_kind") != "overlay_py":
-            continue
-        if rec.get("status") not in ("pending_validate", "applied"):
-            continue
-        module_name = str(rec.get("target_module") or "")
-        target_path = str(rec.get("target_path") or "")
-        if module_name and target_path and os.path.exists(target_path):
-            result[module_name] = target_path
-    return result
-
-
-def install_import_hook():
-    """启用外置 hotfix overlay。
-
-    macOS PyInstaller 包内模块不可持久替换，因此这类 hotfix 以源码文件形式
-    存放在用户工作目录，并通过精确模块名的 import hook 优先加载。
-    """
-    global _import_hook_installed
-    if _import_hook_installed:
-        return
-    module_paths = _get_active_overlay_paths()
-    if not module_paths:
-        return
-    sys.meta_path.insert(0, _HotfixOverlayFinder(module_paths))
-    _import_hook_installed = True
-    logger.info(f"【热更新】已启用外置模块覆盖: {', '.join(sorted(module_paths.keys()))}")
-
-
 def _resolve_module_target_path(module_name: str) -> Tuple[Optional[str], str]:
     """返回 (target_path, kind)。kind ∈ {'py','pyc',''}。
 
@@ -265,40 +203,22 @@ def _compile_to_pyc(source_path: str, pyc_path: str) -> Tuple[bool, str]:
 
 
 def _download_text(url: str, fallbacks: List[str]) -> Tuple[bool, bytes, str]:
-    try:
-        from ssl_utils import should_verify_ssl
-        sess = requests.Session()
-        sess.trust_env = False
-        headers = {
-            "Accept": "text/plain, */*",
-        }
-        resp = sess.get(url, timeout=20, headers=headers, verify=should_verify_ssl())
-        if resp.status_code != 200:
-            return False, b"", f"HTTP {resp.status_code}"
-        return True, resp.content, ""
-    except Exception as e:
-        # Try fallback URLs
-        for fallback_url in fallbacks:
-            try:
-                resp = sess.get(fallback_url, timeout=20, headers=headers, verify=should_verify_ssl())
-                if resp.status_code == 200:
-                    return True, resp.content, ""
-            except Exception:
-                continue
-        return False, b"", str(e)
+    from ssl_utils import should_verify_ssl
+    sess = requests.Session()
+    sess.trust_env = False
+    headers = {"Accept": "text/plain, */*"}
+    for source_url in [url] + fallbacks:
+        try:
+            resp = sess.get(source_url, timeout=20, headers=headers, verify=should_verify_ssl())
+            if resp.status_code == 200:
+                return True, resp.content, ""
+            last_error = f"HTTP {resp.status_code}"
+        except requests.RequestException as e:
+            last_error = str(e)
+    return False, b"", last_error
 
 
-def _build_remote_source_info(module_name: str, commit: str) -> Tuple[str, List[str]]:
-    remote_rel = "src/" + "/".join(module_name.split(".")) + ".py"
-    url = f"https://gitee.com/opguess/idv-login/raw/{commit}/{remote_rel}"
-    fallbacks = [
-        f"https://git.keygen.eu.org/keygen/idv-login/raw/commit/{commit}/{remote_rel}",
-        f"https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
-    ]
-    return url, fallbacks
-
-
-def restart_self(reason: str = ""):
+def _restart_self(reason: str = ""):
     try:
         if reason:
             logger.info(f"【热更新】即将重启: {reason}")
@@ -314,32 +234,14 @@ def restart_self(reason: str = ""):
         handle_exit()
     except Exception:
         pass
-    if _is_macos_pyinstaller():
-        try:
-            genv.set("last_run_state", "restart", True)
-            genv.set("last_run_state_ts", int(time.time()), True)
-        except Exception:
-            pass
 
     if getattr(sys, 'frozen', False):
         args = [sys.executable] + sys.argv[1:]
     else:
         args = [sys.executable] + sys.argv
 
-    cwd = genv.get("SCRIPT_DIR") or os.getcwd()
-    if _is_macos_pyinstaller():
-        cwd = genv.get("FP_WORKDIR") or os.getcwd()
-        try:
-            os.chdir(cwd)
-        except Exception:
-            pass
-        try:
-            os.execv(sys.executable, args)
-        except Exception:
-            pass
-
     try:
-        subprocess.Popen(args, cwd=cwd)
+        subprocess.Popen(args, cwd=genv.get("SCRIPT_DIR") or os.getcwd())
     except Exception:
         # last resort: try without cwd
         subprocess.Popen(args)
@@ -358,9 +260,6 @@ def _apply_one(item: dict) -> Tuple[bool, str]:
     if not module_name or not commit:
         return False, "配置缺少 target_module 或 target_commit"
 
-    if _is_macos_pyinstaller():
-        return _apply_one_overlay(item, hotfix_id, module_name, commit)
-
     target_path, target_kind = _resolve_module_target_path(module_name)
     if not target_path or not target_kind:
         return False, f"无法定位模块文件: {module_name}"
@@ -369,7 +268,16 @@ def _apply_one(item: dict) -> Tuple[bool, str]:
     if not os.access(target_path, os.W_OK):
         return False, f"模块文件不可写（可能无权限或在只读目录）: {target_path}"
 
-    url, fallbacks = _build_remote_source_info(module_name, commit)
+    remote_rel = "src/" + "/".join(module_name.split(".")) + ".py"
+    url = f"https://git.keygen.eu.org/keygen/idv-login/raw/commit/{commit}/{remote_rel}"
+    fallbacks = [
+        f"https://gitee.com/opguess/idv-login/raw/{commit}/{remote_rel}",
+        f"https://cdn.jsdelivr.net/gh/KKeygen/idv-login@{commit}/{remote_rel}",
+        f"https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
+        f"https://gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
+        f"https://gh.monlor.com/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
+        f"https://hk.gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
+    ]
     ok, content, err = _download_text(url, fallbacks)
     if not ok:
         return False, f"下载失败: {url} ({err})"
@@ -496,75 +404,12 @@ def _apply_one(item: dict) -> Tuple[bool, str]:
     return True, f"应用成功: {module_name} ({commit})"
 
 
-def _apply_one_overlay(item: dict, hotfix_id: str, module_name: str, commit: str) -> Tuple[bool, str]:
-    """为 macOS PyInstaller 应用外置源码覆盖，不修改包内文件。"""
-    url, fallbacks = _build_remote_source_info(module_name, commit)
-    ok, content, err = _download_text(url, fallbacks)
-    if not ok:
-        return False, f"下载失败: {url} ({err})"
-
-    patch_root = os.path.join(_overlay_root(), _safe_hotfix_dir_name(hotfix_id))
-    target_path = os.path.join(patch_root, *module_name.split(".")) + ".py"
-    tmp_path = target_path + ".hotfix.tmp"
-    try:
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        with open(tmp_path, "wb") as f:
-            f.write(content)
-    except Exception as e:
-        return False, f"写入外置热更新文件失败: {e}"
-
-    if not _compile_source(tmp_path):
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
-        return False, "新文件编译失败，已放弃应用"
-
-    try:
-        os.replace(tmp_path, target_path)
-        _delete_pyc_for_source(target_path)
-        if not _compile_source(target_path):
-            raise RuntimeError("外置热更新文件落盘后编译失败")
-    except Exception as e:
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception:
-            pass
-        return False, f"写入外置热更新文件失败: {e}"
-
-    _record_update(
-        hotfix_id,
-        {
-            "status": "pending_validate",
-            "target_module": module_name,
-            "target_commit": commit,
-            "note": (item or {}).get("note", ""),
-            "target_kind": "overlay_py",
-            "target_path": os.path.abspath(target_path),
-            "backup_path": "",
-            "applied_at": int(time.time()),
-            "url": url,
-        },
-    )
-    return True, f"应用成功: {module_name} ({commit}, macOS 外置覆盖)"
-
-
 def _rollback_one(hotfix_id: str) -> Tuple[bool, str]:
     records = _get_records()
     rec = records.get(hotfix_id, {})
     if not isinstance(rec, dict):
         return False, "记录损坏"
     target_path = rec.get("target_path")
-    if rec.get("target_kind") == "overlay_py":
-        try:
-            if target_path and os.path.exists(target_path):
-                os.remove(target_path)
-            _record_update(hotfix_id, {"status": "rolled_back", "rolled_back_at": int(time.time())})
-            return True, "已禁用外置热更新"
-        except Exception as e:
-            return False, f"禁用外置热更新失败: {e}"
-
     backup_path = rec.get("backup_path")
     if not target_path or not backup_path:
         return False, "缺少 target_path/backup_path"
@@ -601,7 +446,7 @@ def pre_start_check_and_rollback_if_needed():
         _add_skipped(pending_ids)
         _set_pending_ids([])
         # 回滚完毕后，重启。
-        restart_self("已回滚所有待验证热更新")
+        _restart_self("已回滚所有待验证热更新")
         return
 
     # 若上次正常退出，则确认 hotfix 生效
@@ -661,10 +506,7 @@ def handle_if_needed(cloudres):
     prompt_items = candidates
 
     print("\n================ 热更新提示 ================")
-    if _is_macos_pyinstaller():
-        print("检测到需要对当前版本进行热更新，将下载并启用外置模块覆盖。")
-    else:
-        print("检测到需要对当前版本进行热更新，将下载并替换本地模块文件。")
+    print("检测到需要对当前版本进行热更新，将下载并替换本地模块文件。")
     print("如果你不想热更新，请在 5 秒内直接退出程序（关闭窗口/Ctrl+C）。")
     for idx, item in enumerate(candidates, 1):
         module_name = item.get("target_module", "")
@@ -700,7 +542,7 @@ def handle_if_needed(cloudres):
 
     if success_any:
         _set_pending_ids(applied_ids)
-        restart_self("已应用热更新")
+        _restart_self("已应用热更新")
 
 
 def handle_exit_skip_if_active():
