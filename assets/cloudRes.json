@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791307225,
+  "lastModified": 1791390368,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -185,15 +185,6 @@
     },
     {
       "need_hotfix_version": [
-        "v6.0.0-beta",
-        "v6.0.1-stable"
-      ],
-      "target_module": "hotfixmgr",
-      "target_commit": "d24fb91b0a1a7e0827a948c484fc6ae15e49f389",
-      "note": "一些bug修复+引入兼容模式，避免兼容模式引起网络问题"
-    },
-    {
-      "need_hotfix_version": [
         "v6.0.2-stable"
       ],
       "target_module": "mitm_proxy",
@@ -240,26 +231,6 @@
     },
     {
       "need_hotfix_version": [
-        "v6.0.0-beta",
-        "v6.0.1-stable",
-        "v6.0.2-stable"
-      ],
-      "target_module": "main",
-      "target_commit": "c37c58fb0ba076a1800d0e0b6af916896869170f",
-      "note": "恢复官服扫码记住账号，云端配置已同步更新，如不应用此热更新可能出现非法请求错误"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.0-beta",
-        "v6.0.1-stable",
-        "v6.0.2-stable"
-      ],
-      "target_module": "cloudRes",
-      "target_commit": "c37c58fb0ba076a1800d0e0b6af916896869170f",
-      "note": "恢复官服扫码记住账号，云端配置已同步更新，如不应用此热更新可能出现非法请求错误"
-    },
-    {
-      "need_hotfix_version": [
         "v5.8.3.1-beta",
         "v5.9.0-beta",
         "v5.9.1-stable"
@@ -295,22 +266,6 @@
       "target_module": "local_handler",
       "target_commit": "87f9cf2366b4cde43f902224e2e4fa13f3a6e738",
       "note": "解决了渠道服管理界面偶发的，手动登录或切换账号时，卡在【正在处理】的问题"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.4-stable"
-      ],
-      "target_module": "main",
-      "target_commit": "57fef3d3c5ccbe8fb068010746631c830352d3f0",
-      "note": "尝试修复某些情况下，关闭原生扫码时保存记录仍然只有三天的问题。一并修复可能造成误解的文案"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.4-stable"
-      ],
-      "target_module": "channelmgr",
-      "target_commit": "57fef3d3c5ccbe8fb068010746631c830352d3f0",
-      "note": "尝试修复某些情况下，关闭原生扫码时保存记录仍然只有三天的问题。一并修复可能造成误解的文案"
     },
     {
       "need_hotfix_version": [
@@ -371,14 +326,6 @@
       "target_module": "mitm_proxy",
       "target_commit": "c6db82fce30c682dbaca7a1517b6878388035a6f",
       "note": "修复UDP 443端口被占用时工具无法启动的问题"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.1.0-mac"
-      ],
-      "target_module": "main",
-      "target_commit": "fdb6149f94cd80d39f293b81b35a8c7166c68875",
-      "note": "修复macOS兼容模式下本地DNS端口冲突导致无法启动的问题"
     },
     {
       "need_hotfix_version": [
@@ -522,49 +469,6 @@
     },
     {
       "need_hotfix_version": [
-        "v6.3.0-stable"
-      ],
-      "target_module": "cloudRes",
-      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
-      "note": "允许下载、更新和修复国际服游戏"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.3.0-stable"
-      ],
-      "target_module": "gamecatalog",
-      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
-      "note": "允许下载、更新和修复国际服游戏"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.3.0-stable"
-      ],
-      "target_module": "gamemgr",
-      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
-      "note": "允许下载、更新和修复国际服游戏"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.3.0-stable"
-      ],
-      "target_module": "main",
-      "target_commit": "6393c29ba67c837e6ba3f739a3bb616bdffc038d",
-      "note": "允许下载、更新和修复国际服游戏"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.0-beta",
-        "v6.0.1-stable",
-        "v6.0.2-stable"
-      ],
-      "target_module": "mitm_addon",
-      "target_commit": "5da21ee137e7da9c18b5a6a23f2d9733647342cc",
-      "note": "修复国际服登录的时候提示cv参数错误的问题"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.0.4-stable",
         "v6.0.5-beta",
         "v6.1.0-mac",
         "v6.1.0-stable"
@@ -624,6 +528,237 @@
       "target_module": "mpay_db_sync",
       "target_commit": "8bfcbffe59c0a156af5a31dd9efd313b95d4a1ed",
       "note": "解决了华为、VIVO、OPPO、小米在下拉菜单登录容易过期的问题"
+    },
+    {
+      "need_hotfix_version": [
+        "v5.8.3.1-beta"
+      ],
+      "target_module": "main",
+      "target_commit": "81b55549864d358612c9673ad0e98835fce1d47a",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v5.9.0-beta",
+        "v5.9.1-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "c2af3a59c4d01b1af373b5db4949521da4172ba7",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "f9f301966507f334b5be41d00ffda5b2ebba4037",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "f9f301966507f334b5be41d00ffda5b2ebba4037",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable"
+      ],
+      "target_module": "cloudRes",
+      "target_commit": "f9f301966507f334b5be41d00ffda5b2ebba4037",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "f9f301966507f334b5be41d00ffda5b2ebba4037",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.4-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "a0aa860792a7716eb04dc1231afee9cbeb4bf7ca",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.4-stable"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "a0aa860792a7716eb04dc1231afee9cbeb4bf7ca",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.4-stable"
+      ],
+      "target_module": "channelmgr",
+      "target_commit": "a0aa860792a7716eb04dc1231afee9cbeb4bf7ca",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.4-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "a0aa860792a7716eb04dc1231afee9cbeb4bf7ca",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.5-beta",
+        "v6.1.0-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "7e9836f78c6ae60ce6339c85e7e0d038da1b2bf2",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.5-beta",
+        "v6.1.0-stable"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "7e9836f78c6ae60ce6339c85e7e0d038da1b2bf2",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.1.0-mac"
+      ],
+      "target_module": "main",
+      "target_commit": "c068cdf23ba1a3fd412b298603fe42ec2f21d83a",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.1.0-mac"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "c068cdf23ba1a3fd412b298603fe42ec2f21d83a",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "main",
+      "target_commit": "853b855ffc1c233a8fcb293aedfd371000498a27",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "853b855ffc1c233a8fcb293aedfd371000498a27",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.1-stable",
+        "v6.2.2-stable",
+        "v6.2.3-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "ce467174a14fed751db7238edb320731dfc631d1",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.1-stable",
+        "v6.2.2-stable",
+        "v6.2.3-stable"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "ce467174a14fed751db7238edb320731dfc631d1",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "23361e6fbfc45d4afe3fa411087bd30dfe32832d",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "23361e6fbfc45d4afe3fa411087bd30dfe32832d",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "cloudRes",
+      "target_commit": "23361e6fbfc45d4afe3fa411087bd30dfe32832d",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "gamecatalog",
+      "target_commit": "23361e6fbfc45d4afe3fa411087bd30dfe32832d",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.0-stable"
+      ],
+      "target_module": "gamemgr",
+      "target_commit": "23361e6fbfc45d4afe3fa411087bd30dfe32832d",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.1-beta"
+      ],
+      "target_module": "main",
+      "target_commit": "07b4dbb7d995058b623701747d97546dccb8db53",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.1-beta"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "07b4dbb7d995058b623701747d97546dccb8db53",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "main",
+      "target_commit": "fda128450b39751e5838445f78e9eb14373314b6",
+      "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "hotfixmgr",
+      "target_commit": "fda128450b39751e5838445f78e9eb14373314b6",
+      "note": "减少获取云配置时爆红字的概率"
     }
   ],
   "shortcuts": [
