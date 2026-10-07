@@ -58,4 +58,5 @@ jobs:
             printf '%s\n' "$GITEA_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/gitea-known-hosts"
             trap 'rm -f "$RUNNER_TEMP/gitea-key" "$RUNNER_TEMP/gitea-known-hosts"' EXIT
             export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/gitea-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/gitea-known-hosts -o ConnectTimeout=15"
-            git push "$GITEA_SSH_URL" HEAD:refs/heads/main --tags
+            # Mirror compatibility branches too: hotfix URLs pin their commits.
+            git push "$GITEA_SSH_URL" 'refs/remotes/origin/*:refs/heads/*' --tags
