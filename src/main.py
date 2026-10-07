@@ -925,24 +925,24 @@ def setup_network_proxy(proxy_port):
 
     # Platform-specific defaults
     if sys.platform == "darwin":
-        cv = "i4.7.0"
+        cv = "a5.10.0"
         login_style = 2
         app_channel_default = "netease.wyzymnqsd_cps_dev"
-        use_login_mapping_always = True
+        use_login_mapping_always = False
+
+        qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
+
+        _CREATE_LOGIN_WHITELIST = frozenset({
+            "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
+            "app_type", "app_mode", "_cloud_extra_base64", "sc",
+        })
 
         def _create_login_query_hook(query, game_id):
-            query["qrcode_channel_type"] = "3"
-            query["gv"] = "251881013"
-            query["gvn"] = "2025.0707.1013"
-            query["cv"] = cv
-            query["sv"] = "35"
-            query["app_type"] = "games"
-            query["app_mode"] = "2"
-            query["app_channel"] = app_channel_default
-            query["_cloud_extra_base64"] = "e30="
-            query["sc"] = "1"
-
-        qrcode_app_channel_provider = None
+            config = CloudRes().get_qrcode_login_config(game_id)
+            if config:
+                for k, v in config.items():
+                    if k in _CREATE_LOGIN_WHITELIST:
+                        query[k] = str(v)
     else:
         cv = "a5.10.0"
         login_style = 1
@@ -1171,21 +1171,26 @@ def _setup_compat_mode(addon):
     method = "NRPT" if _dns_policy_mgr.is_using_nrpt else "Hosts 文件"
     logger.debug(f"DNS 策略已设置 (方式: {method})")
 
-    # 3. 启动本地 DNS 服务器
-    from mitm_proxy import LocalDnsServer
-    _dns_server = LocalDnsServer(
-        intercept_domains=set(target_domains),
-        target_ip="127.0.0.1",
-        listen_host="127.0.0.1",
-        listen_port=53,
-    )
-    if not _dns_server.start():
-        logger.error("本地 DNS 服务器启动失败")
-        _dns_policy_mgr.cleanup()
-        _dns_policy_mgr = None
-        raise RuntimeError("Failed to start local DNS server for compat mode")
+    # 3. 启动本地 DNS 服务器。Hosts 文件方式已经直接写入解析结果，
+    # 无需再占用 53 端口。
+    if _dns_policy_mgr.is_using_nrpt:
+        from mitm_proxy import LocalDnsServer
+        _dns_server = LocalDnsServer(
+            intercept_domains=set(target_domains),
+            target_ip="127.0.0.1",
+            listen_host="127.0.0.1",
+            listen_port=53,
+        )
+        if not _dns_server.start():
+            logger.error("本地 DNS 服务器启动失败")
+            _dns_policy_mgr.cleanup()
+            _dns_policy_mgr = None
+            raise RuntimeError("Failed to start local DNS server for compat mode")
 
-    logger.debug("本地 DNS 服务器已启动 (127.0.0.1:53)")
+        logger.debug("本地 DNS 服务器已启动 (127.0.0.1:53)")
+    else:
+        _dns_server = None
+        logger.debug("Hosts 文件方式无需启动本地 DNS 服务器")
 
     # 4. 启动 mitmproxy 反向代理
     from mitm_proxy import MitmProxyManager
@@ -1424,18 +1429,23 @@ def main(cli_args=None):
 
     try:
         cloudBuildInfo()
-        initialize() # This sets up atexit(handle_exit) among other things
-
-        # hotfix gate: verify config cache can be written; if not, skip all hotfix logic to avoid infinite restarts.
+        # hotfix gate: verify config cache can be written before importing most app modules.
+        # macOS PyInstaller hotfixes are loaded via an import hook, so it must be installed
+        # before initialize() pulls in channel/proxy/UI modules.
         can_run_hotfix = hotfixmgr.probe_cache_write_once()
         if not can_run_hotfix:
-            logger.warning("【热更新】探测到配置缓存写入失败：已跳过本次所有热更新逻辑（避免无限重启）。")
+            print("【热更新】探测到配置缓存写入失败：已跳过本次所有热更新逻辑（避免无限重启）。")
         else:
-            # hotfix: rollback/confirm pending hotfix based on last run state (genv 环境在 initialize 后更完整)
             try:
                 hotfixmgr.pre_start_check_and_rollback_if_needed()
             except Exception:
                 pass
+            try:
+                hotfixmgr.install_import_hook()
+            except Exception:
+                pass
+
+        initialize() # This sets up atexit(handle_exit) among other things
 
 
         genv.set("last_run_state", "running", True)
