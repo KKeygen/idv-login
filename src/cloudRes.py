@@ -9,6 +9,11 @@ from channelHandler.channelUtils import cmp_game_id
 
 logger = setup_logger()
 
+# fetch_json_from_url 返回状态
+_MODIFIED = "modified"
+_NOT_MODIFIED = "not_modified"
+_ERROR = "error"
+
 class CloudRes:
     # 单例实例
     _instance = None
@@ -29,14 +34,60 @@ class CloudRes:
             self.local_data = self.load_local_cache()
             self.session = requests.Session()
             self.session.trust_env = False
+            from gamecatalog import DynamicGameCatalog
+            self.dynamic_game_catalog = DynamicGameCatalog(cache_dir=self.cache_dir)
             self._initialized = True
 
+    def _get_url_meta(self, url):
+        """获取指定 URL 的 HTTP 缓存验证器"""
+        all_meta = genv.get("_cloud_http_meta", {})
+        return all_meta.get(url, {})
+
+    def _set_url_meta(self, url, meta):
+        """保存指定 URL 的 HTTP 缓存验证器"""
+        all_meta = genv.get("_cloud_http_meta", {})
+        all_meta[url] = meta
+        genv.set("_cloud_http_meta", all_meta, True)
+
     def fetch_json_from_url(self):
+        """尝试从云端获取配置，支持 HTTP 条件请求 (ETag/If-Modified-Since)。
+        
+        Returns:
+            tuple: (status, data)
+                - (_MODIFIED, dict): 服务器返回了新数据
+                - (_NOT_MODIFIED, None): 304 未修改
+                - (_ERROR, None): 所有 URL 均失败
+        """
         for url in self.urls:
             try:
-                response = self.session.get(url, timeout=10, verify=should_verify_ssl())
-                response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
-                return response.json()
+                headers = {}
+                url_meta = self._get_url_meta(url)
+                if url_meta.get("etag"):
+                    headers["If-None-Match"] = url_meta["etag"]
+                if url_meta.get("last_modified"):
+                    headers["If-Modified-Since"] = url_meta["last_modified"]
+
+                response = self.session.get(
+                    url, timeout=10, verify=should_verify_ssl(), headers=headers
+                )
+
+                if response.status_code == 304:
+                    logger.info(f"云端配置未变化 (304): {url}")
+                    return (_NOT_MODIFIED, None)
+
+                response.raise_for_status()
+                data = response.json()
+
+                # 更新该 URL 的缓存验证器
+                new_meta = {}
+                if response.headers.get("ETag"):
+                    new_meta["etag"] = response.headers["ETag"]
+                if response.headers.get("Last-Modified"):
+                    new_meta["last_modified"] = response.headers["Last-Modified"]
+                if new_meta:
+                    self._set_url_meta(url, new_meta)
+
+                return (_MODIFIED, data)
             except requests.RequestException as e:
                 logger.error(f"Failed to fetch JSON from URL {url}: {e}")
             except json.JSONDecodeError as e:
@@ -44,7 +95,7 @@ class CloudRes:
             except Exception as e:
                 logger.error(f"Unexpected error while fetching JSON from URL {url}: {e}")
         logger.error("Failed to fetch JSON from all provided URLs.")
-        return None
+        return (_ERROR, None)
 
     def load_local_cache(self):
         try:
@@ -63,19 +114,25 @@ class CloudRes:
             return {}
 
     def update_cache_if_needed(self):
-        cloud_data = self.fetch_json_from_url()
-        if cloud_data:
-            cloud_last_modified = cloud_data.get('lastModified', 0)
-            local_last_modified = self.local_data.get('lastModified', 0)
-            if cloud_last_modified > local_last_modified:
-                self.local_data = cloud_data
-                from secure_write import write_json_restricted
-                write_json_restricted(self.cache_file, cloud_data)
-                logger.info("云端配置有更新，应用成功")
-            else:
-                logger.info("本地配置已是最新")
-        else:
+        status, cloud_data = self.fetch_json_from_url()
+
+        if status == _NOT_MODIFIED:
+            logger.info("本地配置已是最新 (HTTP 304)")
+            return
+
+        if status == _ERROR or cloud_data is None:
             logger.warning("获取云端配置失败，将继续使用本地配置")
+            return
+
+        cloud_last_modified = cloud_data.get('lastModified', 0)
+        local_last_modified = self.local_data.get('lastModified', 0)
+        if cloud_last_modified > local_last_modified:
+            self.local_data = cloud_data
+            from secure_write import write_json_restricted
+            write_json_restricted(self.cache_file, cloud_data)
+            logger.info("云端配置有更新，应用成功")
+        else:
+            logger.info("本地配置已是最新")
 
     def get_channelData(self, channelName,shortGameId):
         data=self.local_data.get('data', [])
@@ -89,7 +146,7 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId:
                 return item
-        return None
+        return self.dynamic_game_catalog.get_cloud_config(shortGameId)
     
     def get_netease_style_pkgname_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -103,10 +160,82 @@ class CloudRes:
     #same with data, but key is feature_game_short_ids
     def get_feature_by_game_id(self,shortGameId):
         data=self.local_data.get('feature_game_short_ids', [])
+        manual_feature = None
         for item in data:
             if item.get('game_id') == shortGameId:
-                return item
-        return None
+                manual_feature = item
+                break
+        dynamic_feature = self.dynamic_game_catalog.get_feature(shortGameId)
+        if manual_feature is None:
+            return dynamic_feature
+        if not dynamic_feature:
+            return manual_feature
+        if dynamic_feature.get('platform_type') == 'native':
+            # Public visual metadata never grants a Fever distribution or
+            # download capability, even if a manual feature has old defaults.
+            return {**manual_feature, **dynamic_feature}
+
+        # Keep hand-maintained behavior authoritative, but append distributions
+        # discovered from LoadingBay (including the international catalog).
+        merged = dict(manual_feature)
+        merged_distributions = list(manual_feature.get('download_distributions', []))
+        seen = set()
+        for item in merged_distributions:
+            value = item.get('distribution_id') if isinstance(item, dict) else item
+            if isinstance(item, dict) and value is None:
+                value = item.get('app_id')
+            try:
+                seen.add(int(value))
+            except (TypeError, ValueError):
+                pass
+        for item in dynamic_feature.get('download_distributions', []):
+            value = item.get('distribution_id') if isinstance(item, dict) else item
+            if isinstance(item, dict) and value is None:
+                value = item.get('app_id')
+            try:
+                normalized = int(value)
+            except (TypeError, ValueError):
+                continue
+            if normalized not in seen:
+                merged_distributions.append(item)
+                seen.add(normalized)
+        merged['download_distributions'] = merged_distributions
+        distribution_sources = dict(manual_feature.get('distribution_sources', {}))
+        for key, value in dynamic_feature.get('distribution_sources', {}).items():
+            distribution_sources.setdefault(str(key), value)
+        if distribution_sources:
+            merged['distribution_sources'] = distribution_sources
+        return merged
+
+    def has_manual_game_feature(self, shortGameId):
+        """Whether launcher behavior is explicitly maintained in cloudRes."""
+        for item in self.local_data.get('feature_game_short_ids', []):
+            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId):
+                return True
+        return False
+
+    def is_fever_managed_game(self, shortGameId, distribution_id=-1):
+        catalog_item = self.dynamic_game_catalog.get_game(shortGameId) or {}
+        platform_type = catalog_item.get('platform_type')
+        if platform_type:
+            return platform_type == 'fever'
+        feature = next((
+            item for item in self.local_data.get('feature_game_short_ids', [])
+            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId)
+        ), None)
+        distributions = feature.get('download_distributions', []) if feature else []
+        normalized = []
+        for item in distributions:
+            value = item.get('distribution_id') if isinstance(item, dict) else item
+            try:
+                normalized.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        try:
+            requested = int(distribution_id)
+        except (TypeError, ValueError):
+            requested = -1
+        return requested in normalized if requested != -1 else bool(normalized)
     
     def get_all_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -121,20 +250,30 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId and item.get(key) != "" and item.get(key) != None:
                 return item.get(key)
+        dynamic_item = self.dynamic_game_catalog.get_cloud_config(shortGameId)
+        if dynamic_item and dynamic_item.get(key) not in ("", None):
+            return dynamic_item.get(key)
         return None
+
+    def start_dynamic_game_catalog_update(self):
+        """后台刷新可下载游戏与云端游戏 ID 映射。"""
+        return self.dynamic_game_catalog.start_background_refresh()
+
+    def get_dynamic_game_catalog(self):
+        return self.dynamic_game_catalog.get_games()
+
+    def get_dynamic_game_catalog_status(self):
+        return self.dynamic_game_catalog.get_status()
+
+    def resolve_cloud_game_id(self, game_id):
+        """将 h55 类短代号转为 aec...-g-h55 形式。"""
+        return self.dynamic_game_catalog.resolve_cloud_game_id(game_id)
 
     def get_version(self):
         return self.local_data.get('version', genv.get('VERSION'))
 
     def get_netease_qrcode_login_game_list(self):
         return self.local_data.get('netease_qrcode_login_game_list', [])
-
-    def is_game_in_qrcode_login_list(self,game_id):
-        game_list = self.get_netease_qrcode_login_game_list()
-        for item in game_list:
-            if cmp_game_id(item.get('game_id'), game_id):
-                return True
-        return False
 
     def get_qrcode_app_channel(self,game_id):
         config = self.get_qrcode_login_config(game_id)
@@ -155,9 +294,6 @@ class CloudRes:
     def get_downloadUrl(self):
         return self.local_data.get('downloadUrl', '')
     
-    def get_guideUrl(self):
-        return self.local_data.get('guideUrl', '')
-    
     def get_detail(self):
         return self.local_data.get('detail', '')
     
@@ -169,7 +305,16 @@ class CloudRes:
     
     def get_login_page(self):
         import base64
-        return base64.b64decode(self.local_data.get('login_base64_page', '')).decode()
+        import binascii
+        for key in ('login_base64_page_fever', 'login_base64_page'):
+            encoded = self.local_data.get(key, '')
+            if not encoded:
+                continue
+            try:
+                return base64.b64decode(encoded, validate=True).decode()
+            except (binascii.Error, UnicodeDecodeError, TypeError, ValueError):
+                logger.warning(f"云端页面字段无效，尝试兼容回退: {key}")
+        return ""
     
     def get_shortcuts(self):
         return self.local_data.get('shortcuts', [])
@@ -182,12 +327,35 @@ class CloudRes:
         if not features:
             return ""
         return features.get('start_argument', "")
-    
+
     def get_download_distributions(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
         if not features:
             return []
         return features.get('download_distributions', [])
+
+    def get_distribution_source(self, shortGameId, distribution_id):
+        """Return ``cn`` or ``oversea`` for a LoadingBay distribution."""
+        features = self.get_feature_by_game_id(shortGameId) or {}
+        try:
+            target_id = int(distribution_id)
+        except (TypeError, ValueError):
+            return "cn"
+        for item in features.get('download_distributions', []):
+            if not isinstance(item, dict):
+                continue
+            value = item.get('distribution_id', item.get('app_id'))
+            try:
+                if int(value) == target_id and item.get('source'):
+                    return str(item.get('source'))
+            except (TypeError, ValueError):
+                continue
+        sources = features.get('distribution_sources', {})
+        if isinstance(sources, dict):
+            source = str(sources.get(str(target_id)) or "").strip().lower()
+            if source in ("cn", "oversea"):
+                return source
+        return "cn"
     
     def is_convert_to_normal(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
@@ -224,3 +392,22 @@ class CloudRes:
         if not isinstance(domains, list):
             return []
         return domains
+
+    def should_start_from_exe_path(self):
+        """返回需要从 exe 所在目录启动的 game_id 名单。
+
+        名单记录的是游戏库接口反推出来的 game_id 字段（如 "h74"）。
+        模拟发烧平台托管启动时，名单内的游戏继续以 exe 所在目录为工作目录，
+        其余游戏以安装目录作为启动路径。
+        """
+        data = self.local_data or {}
+        names = data.get("should_start_from_exe_path") or []
+        if not isinstance(names, list):
+            return []
+        return [str(name) for name in names]
+
+    def is_should_start_from_exe_path(self, shortGameId):
+        return any(
+            cmp_game_id(item, str(shortGameId))
+            for item in self.should_start_from_exe_path()
+        )

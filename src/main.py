@@ -949,12 +949,17 @@ def setup_network_proxy(proxy_port):
 
         qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
 
+        _CREATE_LOGIN_WHITELIST = frozenset({
+            "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
+            "app_type", "app_mode", "_cloud_extra_base64", "sc",
+        })
+
         def _create_login_query_hook(query, game_id):
             config = CloudRes().get_qrcode_login_config(game_id)
             if config:
                 for k, v in config.items():
-                    if k != "game_id":
-                        query[k] = v
+                    if k in _CREATE_LOGIN_WHITELIST:
+                        query[k] = str(v)
 
     # Create the UI manager for the Qt window
     from uimgr import UIManager
@@ -981,8 +986,8 @@ def setup_network_proxy(proxy_port):
     auto_games = game_helper.list_auto_start_games()
     proxy_mode = genv.get("proxy_mode", "")
     if not proxy_mode:
-        proxy_mode = "process" if auto_games else "global"
-        genv.set("proxy_mode", proxy_mode, True)
+        proxy_mode = "compat"
+        genv.set("proxy_mode", "compat", True)
 
     # 兼容模式特殊处理
     if proxy_mode == "compat":
@@ -1054,7 +1059,16 @@ def setup_network_proxy(proxy_port):
     if proxy_mode == "compat":
         # 兼容模式：无需设置代理环境变量，DNS 劫持会自动生效
         logger.info("提示：当前使用兼容模式，通过 DNS 劫持拦截游戏流量。")
-        if auto_games:
+        if uri_action == "start" and uri_game_id:
+            game = game_helper.get_game(uri_game_id)
+            if game:
+                logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
+                game.start()
+            else:
+                logger.warning(f"未找到游戏: {uri_game_id}")
+            genv.set("URI_STARTUP_ACTION", "")
+            genv.set("URI_STARTUP_GAME_ID", "")
+        elif auto_games:
             names = ", ".join(g.name for g in auto_games)
             logger.info(f"同时启动自启游戏: {names}")
             for g in auto_games:
