@@ -405,8 +405,11 @@ def initialize():
     CloudPaths = [
         "https://git.keygen.eu.org/keygen/idv-login/raw/branch/main/assets/cloudRes.json",
         "https://gitee.com/opguess/idv-login/raw/main/assets/cloudRes.json",
-        "https://hk.gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/refs/heads/main/assets/cloudRes.json",
         "https://cdn.jsdelivr.net/gh/KKeygen/idv-login@main/assets/cloudRes.json",
+        "https://raw.githubusercontent.com/KKeygen/idv-login/refs/heads/main/assets/cloudRes.json",
+        "https://gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/refs/heads/main/assets/cloudRes.json",
+        "https://gh.monlor.com/https://raw.githubusercontent.com/KKeygen/idv-login/refs/heads/main/assets/cloudRes.json",
+        "https://hk.gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/refs/heads/main/assets/cloudRes.json",
     ]
 
     # 无版本信息时：优先使用本地 assets\cloudRes.json；仅当本地不存在时才使用云端

@@ -265,35 +265,31 @@ def _compile_to_pyc(source_path: str, pyc_path: str) -> Tuple[bool, str]:
 
 
 def _download_text(url: str, fallbacks: List[str]) -> Tuple[bool, bytes, str]:
-    try:
-        from ssl_utils import should_verify_ssl
-        sess = requests.Session()
-        sess.trust_env = False
-        headers = {
-            "Accept": "text/plain, */*",
-        }
-        resp = sess.get(url, timeout=20, headers=headers, verify=should_verify_ssl())
-        if resp.status_code != 200:
-            return False, b"", f"HTTP {resp.status_code}"
-        return True, resp.content, ""
-    except Exception as e:
-        # Try fallback URLs
-        for fallback_url in fallbacks:
-            try:
-                resp = sess.get(fallback_url, timeout=20, headers=headers, verify=should_verify_ssl())
-                if resp.status_code == 200:
-                    return True, resp.content, ""
-            except Exception:
-                continue
-        return False, b"", str(e)
+    from ssl_utils import should_verify_ssl
+    sess = requests.Session()
+    sess.trust_env = False
+    headers = {"Accept": "text/plain, */*"}
+    for source_url in [url] + fallbacks:
+        try:
+            resp = sess.get(source_url, timeout=20, headers=headers, verify=should_verify_ssl())
+            if resp.status_code == 200:
+                return True, resp.content, ""
+            last_error = f"HTTP {resp.status_code}"
+        except requests.RequestException as e:
+            last_error = str(e)
+    return False, b"", last_error
 
 
 def _build_remote_source_info(module_name: str, commit: str) -> Tuple[str, List[str]]:
     remote_rel = "src/" + "/".join(module_name.split(".")) + ".py"
-    url = f"https://gitee.com/opguess/idv-login/raw/{commit}/{remote_rel}"
+    url = f"https://git.keygen.eu.org/keygen/idv-login/raw/commit/{commit}/{remote_rel}"
     fallbacks = [
-        f"https://git.keygen.eu.org/keygen/idv-login/raw/commit/{commit}/{remote_rel}",
+        f"https://gitee.com/opguess/idv-login/raw/{commit}/{remote_rel}",
+        f"https://cdn.jsdelivr.net/gh/KKeygen/idv-login@{commit}/{remote_rel}",
         f"https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
+        f"https://gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
+        f"https://gh.monlor.com/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
+        f"https://hk.gh-proxy.org/https://raw.githubusercontent.com/KKeygen/idv-login/{commit}/{remote_rel}",
     ]
     return url, fallbacks
 
