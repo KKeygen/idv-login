@@ -113,12 +113,14 @@ def get_computer_name():
 # 用户级代理环境变量管理 (Windows)
 # 全局标志，防止handle_exit被多次调用
 _exit_handled = False
+_exit_lock = threading.Lock()
 
 def handle_exit():
     global _exit_handled, _dns_policy_mgr, _dns_server
-    if _exit_handled:
-        return  # 已经执行过清理，不要重复执行
-    _exit_handled = True
+    with _exit_lock:
+        if _exit_handled:
+            return
+        _exit_handled = True
     
     # Assuming logger is initialized by the time this is called via atexit or signal
     # hotfix: if user quits during countdown, persist skip permanently
