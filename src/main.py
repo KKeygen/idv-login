@@ -106,18 +106,6 @@ import threading
 threading.excepthook = _threading_excepthook
 
 
-def get_computer_name():
-    try:
-        # 获取计算机名
-        computer_name = socket.gethostname()
-        # 确保计算机名编码为 UTF-8
-        computer_name_utf8 = computer_name.encode('utf-8').decode('utf-8')
-        return computer_name_utf8
-    except Exception as e:
-        logger.exception(f"获取计算机名时发生异常: {e}")
-        return None
-
-
 # ------------------------------------------------------------------
 # 用户级代理环境变量管理 (Windows)
 # 全局标志，防止handle_exit被多次调用
@@ -771,6 +759,7 @@ def handle_download_task(task_file_path):
     version_code = task_data.get("version_code", "")
     distribution_id = int(task_data.get("distribution_id", -1))
     content_id = task_data.get("content_id")
+    oversea = bool(task_data.get("oversea", False))
     original_version = task_data.get("original_version", "")
     repair_list_path = task_data.get("repair_list_path", "")
     progress_file = task_data.get("progress_file", "")
@@ -828,7 +817,7 @@ def handle_download_task(task_file_path):
                     os.path.join(os.getcwd(), "downloadIPC.exe"),
                     f"--gameid:{distribution_id}",
                     f"--env:live",
-                    f"--oversea:0",
+                    f"--oversea:{1 if oversea else 0}",
                     f"--scene:3",
                     f"--rateLimit:0",
                     f"--channel:platform",
@@ -888,7 +877,6 @@ def handle_download_task(task_file_path):
                     installation.updated_at = int(time.time())
                     if not installation.write_marker(game_id):
                         logger_local.warning("下载完成，但写入安装标记文件失败")
-                    game.default_installation_id = installation.installation_id
                     game.should_auto_start = True
                     game_mgr._save_games()
                     print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")

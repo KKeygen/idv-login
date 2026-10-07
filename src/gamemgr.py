@@ -425,10 +425,8 @@ class Game:
         installation_state=None,
         installations=None,
         force_fever_bridge_distributions=None,
-        account_switching=None,
     ) -> None:
         self.game_id = game_id
-        self.account_switching = dict(account_switching) if isinstance(account_switching, dict) else {}
         self.name = name if name else game_id
         self.should_auto_start = should_auto_start
         self.auto_close_after_login = auto_close_after_login
@@ -485,6 +483,7 @@ class Game:
             )
         self.last_update_async = False
         self.last_start_error = ""
+        self.active_installation_id = ""
 
     @staticmethod
     def _coerce_distribution_id(value) -> int:
@@ -778,7 +777,6 @@ class Game:
             # Compatibility with development builds that briefly wrote these
             # fields at the game-record root.
             installations=data.get("installations"),
-            account_switching=data.get("account_switching"),
         )
 
     def to_dict(self) -> dict:
@@ -786,7 +784,6 @@ class Game:
             "game_id": self.game_id,
             "name": self.name,
             "path": self.path,
-            "account_switching": dict(self.account_switching),
             "should_auto_start": self.should_auto_start,
             "auto_close_after_login": self.auto_close_after_login,
             "last_used_time": self.last_used_time,
@@ -865,14 +862,7 @@ class Game:
             self.logger.error(f"游戏路径无效或不存在: {game_path}")
             self.last_start_error = "游戏路径无效或不存在"
             return False
-        if app_state.channels_helper and app_state.channels_helper.db_sync:
-            # Account settings take effect before the native SDK reads its list.
-            try:
-                app_state.channels_helper.db_sync.refresh_before_game(self.game_id)
-            except Exception as error:
-                from mpay_db_sync import log_failure
-                log_failure(self.logger, f'[game] game={self.game_id} installation={installation.installation_id} stage=launch.account_sync 启动前账号准备失败', error)
-                # Account-list refresh is best effort; always continue this launch.
+        self.active_installation_id = installation.installation_id
         cloud_res = CloudRes()
         short_game_id = getShortGameId(self.game_id)
         has_manual_feature = cloud_res.has_manual_game_feature(short_game_id)
@@ -1726,7 +1716,6 @@ class GameManager:
     def __init__(self):
         self.logger = setup_logger()
         self.games: Dict[str, Game] = {}
-        self._save_lock = threading.RLock()
         self._fever_import_thread = None
         self._load_games()
 
@@ -1773,60 +1762,16 @@ class GameManager:
 
     def _save_games(self):
         """保存游戏设置到缓存"""
-        with self._save_lock:
-            try:
-                game_settings = {game_id: game.to_dict() for game_id, game in self.games.items()}
-                installation_settings = {
-                    game_id: game.to_installation_state()
-                    for game_id, game in self.games.items()
-                }
-                genv.set(self.GAMES_CACHE_KEY, game_settings, cached=True)
-                genv.set(self.INSTALLATIONS_CACHE_KEY, installation_settings, cached=True)
-            except Exception as e:
-                self.logger.exception(f"保存游戏设置失败: {str(e)}")
-
-    def save_account_switching(self, settings, choices):
-        """Game owns its list; global preferences and game choices commit together."""
-        with self._save_lock:
-            games = list(self.games.items())
-            game_settings = {game_id: game.to_dict() for game_id, game in games}
-            for game_id, data in game_settings.items():
-                short = getShortGameId(game_id)
-                if short in choices:
-                    data['account_switching'] = choices[short]
-            genv.update_cached({
-                'account_switching_settings': settings,
-                self.GAMES_CACHE_KEY: game_settings,
-            }, remove=('account_switching_active_installations',))
-            for game_id, game in games:
-                game.account_switching = dict(game_settings[game_id]['account_switching'])
-
-    def migrate_account_switching(self):
-        with self._save_lock:
-            saved = genv.get('account_switching_settings', {})
-            active = genv.get('account_switching_active_installations')
-            if 'games' not in saved and active is None:
-                return
-            active = active or {}
-            legacy = saved.get('games', {})
-            choices = {}
-            for game in self.games.values():
-                if game.account_switching:
-                    continue
-                short = getShortGameId(game.game_id)
-                installations = [item for item in game.installations.values() if item.path]
-                preferred = next((item for item in installations
-                                  if item.installation_id == active.get(short)), None)
-                entries = [legacy.get(f'{short}:{item.installation_id}', {}) for item in installations]
-                # Preserve the old effective list: active installation (including off),
-                # otherwise the first enabled installation. Never union selections.
-                choice = (legacy.get(f'{short}:{preferred.installation_id}', {}) if preferred else
-                          next((entry for entry in entries if entry.get('enabled')), None))
-                if choice is None:
-                    choice = next((entry for entry in entries if entry), {})
-                choices[short] = {'enabled': bool(choice.get('enabled', False)),
-                                  'account_uuids': list(choice.get('account_uuids', []))}
-            self.save_account_switching({key: value for key, value in saved.items() if key != 'games'}, choices)
+        try:
+            game_settings = {game_id: game.to_dict() for game_id, game in self.games.items()}
+            installation_settings = {
+                game_id: game.to_installation_state()
+                for game_id, game in self.games.items()
+            }
+            genv.set(self.GAMES_CACHE_KEY, game_settings, cached=True)
+            genv.set(self.INSTALLATIONS_CACHE_KEY, installation_settings, cached=True)
+        except Exception as e:
+            self.logger.exception(f"保存游戏设置失败: {str(e)}")
 
     def get_game(self, game_id: str) -> Optional[Game]:
         """获取指定游戏ID的游戏信息"""
