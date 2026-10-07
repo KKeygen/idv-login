@@ -389,7 +389,7 @@ def initialize():
     genv.set("FP_WEBCERT", os.path.join(genv.get("FP_WORKDIR"), "domain_cert_4.pem"))
     genv.set("FP_WEBKEY", os.path.join(genv.get("FP_WORKDIR"), "domain_key_4.pem"))
     genv.set("FP_CACERT", os.path.join(genv.get("FP_WORKDIR"), "root_ca_oversea_0213.pem"))
-    genv.set("FP_CHANNEL_RECORD", os.path.join(genv.get("FP_WORKDIR"), "channels.json"))
+    genv.set("FP_CHANNEL_RECORD", os.path.join(genv.get("FP_WORKDIR"), "channels-v2.json"))
     genv.set("CHANNEL_ACCOUNT_SELECTED", "")
     genv.set("GLOB_LOGIN_PROFILE_PATH", os.path.join(genv.get("FP_WORKDIR"), "profile"))
     genv.set("GLOB_LOGIN_CACHE_PATH", os.path.join(genv.get("FP_WORKDIR"), "cache"))
@@ -475,6 +475,9 @@ def initialize():
     m_certmgr = certmgr()
     # Proxy manager is created later during setup_network_proxy()
     m_proxy = None
+    # 账号迁移必须早于首次加载；其余一次性任务保持原来的启动顺序。
+    from run_once import migrate_channel_records
+    migrate_channel_records()
     app_state.channels_helper = ChannelManager()
 
     logger.info("初始化内置浏览器")
@@ -1609,9 +1612,14 @@ def main(cli_args=None):
         # hotfix gate: verify config cache can be written before importing most app modules.
         # macOS PyInstaller hotfixes are loaded via an import hook, so it must be installed
         # before initialize() pulls in channel/proxy/UI modules.
-        can_run_hotfix = hotfixmgr.probe_cache_write_once()
+        # 版本号为空视为开发环境，不应用任何热更新。
+        is_debug = not genv.get("VERSION", "")
+        can_run_hotfix = (not is_debug) and hotfixmgr.probe_cache_write_once()
         if not can_run_hotfix:
-            print("【热更新】探测到配置缓存写入失败：已跳过本次所有热更新逻辑（避免无限重启）。")
+            if is_debug:
+                print("【热更新】开发环境（版本号为空），已跳过本次所有热更新逻辑。")
+            else:
+                print("【热更新】探测到配置缓存写入失败：已跳过本次所有热更新逻辑（避免无限重启）。")
         else:
             try:
                 hotfixmgr.pre_start_check_and_rollback_if_needed()
