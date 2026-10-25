@@ -17,7 +17,7 @@ class CustomEncoder(json.JSONEncoder):
 def _get_my_ip():
         #get my IP
     try:
-        return requests.get("https://who.nie.netease.com/", verify=False).json().get("ip")
+        return requests.get("https://who.nie.netease.com/", verify=should_verify_ssl()).json().get("ip")
     except Exception as e:
         return "127.0.0.1"
 

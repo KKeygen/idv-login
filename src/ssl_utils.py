@@ -1,12 +1,6 @@
-import sys
-
 def should_verify_ssl():
-    """根据操作系统平台决定是否进行SSL验证
-    
-    Returns:
-        bool: 如果需要SSL验证返回True，否则返回False
+    """所有平台均校验 HTTPS 证书，使用 Requests 默认的 CA 信任链。
+
+    证书不可信或主机名不匹配时由调用方处理请求失败，不能降级为跳过校验。
     """
-    # MacOS系统禁用SSL验证以避免证书问题
-    if sys.platform == 'darwin':
-        return False
     return True
