@@ -1,5 +1,5 @@
 {
-  "lastModified": 1793453294,
+  "lastModified": 1793455958,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -435,18 +435,6 @@
     },
     {
       "need_hotfix_version": [
-        "v6.2.0-beta",
-        "v6.2.1-stable",
-        "v6.2.2-stable",
-        "v6.2.3-stable",
-        "v6.3.0-stable"
-      ],
-      "target_module": "mitm_addon",
-      "target_commit": "3ff15ebe2a394b7531e6ca4ed85ad6ab69479762",
-      "note": "修复国际服登录的时候提示cv参数错误的问题"
-    },
-    {
-      "need_hotfix_version": [
         "v6.3.2-stable"
       ],
       "target_module": "fever_bridge",
@@ -468,14 +456,6 @@
       "target_module": "channelmgr",
       "target_commit": "cd5c5ac3a7347cf03504e5648bc7c38a1cbc73da",
       "note": "解决了华为账号在一定时间间隔内打开游戏登录会失败的问题，请注意，游戏中切换账号如果还是失败，则必须从渠道服管理界面登录"
-    },
-    {
-      "need_hotfix_version": [
-        "v6.3.2-stable"
-      ],
-      "target_module": "mitm_addon",
-      "target_commit": "3ff08ba670ba075a3f8baa80753265f98395e1ca",
-      "note": "撤回本次自动关闭相关改动，恢复原有登录行为，保留华为登录修复"
     },
     {
       "need_hotfix_version": [
@@ -948,6 +928,34 @@
       "target_module": "channelHandler.oppoLogin.jsbridge",
       "target_commit": "69986a3f4006b5334e35c1b7e13cabe02485159c",
       "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable",
+        "v6.2.3-stable",
+        "v6.3.0-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "f7e957377fa290245872c7c5d7acaa890a349a42",
+      "note": "修复光遇登录时重复弹出扫码窗口的问题，请联网重启工具获取热更新。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.1-beta"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "46dbaabb96daeddae387651f64b628e3109255d7",
+      "note": "修复光遇登录时重复弹出扫码窗口的问题，请联网重启工具获取热更新。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "mitm_addon",
+      "target_commit": "b673fbbddba01f80c9bc92c3245a91f51c216243",
+      "note": "修复光遇登录时重复弹出扫码窗口的问题，请联网重启工具获取热更新。"
     }
   ],
   "shortcuts": [
