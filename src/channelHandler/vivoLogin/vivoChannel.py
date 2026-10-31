@@ -126,6 +126,35 @@ class VivoLogin:
         self.cookies = {}
         self._active_browser: VivoBrowser = None  # 异步模式下保持强引用
 
+    def _request(self, method, url, **kwargs):
+        session = getattr(self, "_http_session", None)
+        if session is None or self.cookies != self._http_cookies:
+            if session is not None:
+                session.close()
+            session = requests.Session()
+            # Keep legacy name/value records compatible, scoped to vivo rather
+            # than Requests' unrestricted domainless cookies. A live session
+            # retains domain/path information received after this snapshot.
+            for name, value in self.cookies.items():
+                session.cookies.set(name, value, domain=".vivo.com.cn", path="/", secure=True)
+            self._http_session = session
+            self._http_cookies = self.cookies.copy()
+        response = session.request(
+            method, url, verify=should_verify_ssl(), **kwargs
+        )
+        # Requests applies Set-Cookie from all redirects and the final response.
+        # Never flatten cookies from another redirect host into a saved vivo
+        # record: on restore that would incorrectly rebind them to vivo.
+        self.cookies = {
+            cookie.name: cookie.value for cookie in session.cookies
+            if cookie.domain.lstrip(".") == "vivo.com.cn"
+            or cookie.domain.endswith(".vivo.com.cn")
+        }
+        if self.cookies != self._http_cookies:
+            self.logger.info("VIVO 登录 Cookie 已更新")
+        self._http_cookies = self.cookies.copy()
+        return response
+
     def webLogin(self, cookies=None, on_complete=None):
         u = f"https://joint.vivo.com.cn/h5/union/get?gamePackage={self.gamePackage}"
         self.cookies = cookies or {}
@@ -133,7 +162,7 @@ class VivoLogin:
         if self.cookies:
             self.logger.info(f"使用本地cookies登录: {u}")
             try:
-                r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
+                r = self._request("GET", u)
                 j = r.json()
                 if j.get("code") == 0:
                     result = j.get("data")
@@ -162,7 +191,7 @@ class VivoLogin:
                         result = browser.result
                         if isinstance(result, dict) and result.get("code") == 0:
                             self.cookies = browser.export_cookie().copy()
-                            r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
+                            r = self._request("GET", u)
                             j = r.json()
                             if j.get("code") == 0:
                                 on_complete(j.get("data"))
@@ -179,7 +208,7 @@ class VivoLogin:
                 # 浏览器退出后再读取Cookies数据库，显著降低Windows文件锁概率
                 self.cookies = miBrowser.export_cookie().copy()
                 self.logger.info(u)
-                r = requests.get(u, cookies=self.cookies, verify=should_verify_ssl())
+                r = self._request("GET", u)
                 j = r.json()
                 if j.get("code") == 0:
                     return j.get("data")
@@ -201,7 +230,7 @@ class VivoLogin:
         header={
             "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36 Edg/105.0.1343.27"
         }
-        r = requests.post("https://joint.vivo.com.cn/h5/union/use",data=data,cookies=self.cookies,headers=header,verify=should_verify_ssl())
+        r = self._request("POST", "https://joint.vivo.com.cn/h5/union/use", data=data, headers=header)
         try:
             resp=r.json()
             if resp.get("code") == 0:

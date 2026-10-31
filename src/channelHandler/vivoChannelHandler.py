@@ -167,12 +167,13 @@ class vivoChannel(channelmgr.channel):
         if self.activeAccount is None:
             self.logger.error("Vivo登录失败：未找到选中的小号")
             return False
+        self.activeAccount.openToken = ""
         open_token = self.vivoLogin.loginSubAccount(self.activeAccount.subOpenId)
         if not open_token:
-            self.activeAccount.openToken = ""
             self.logger.error("Vivo登录失败：未获取到新的登录凭证")
             return False
         self.activeAccount.openToken = open_token
+        self.cookies = self.vivoLogin.cookies
         return True
 
 
