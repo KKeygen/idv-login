@@ -1,5 +1,5 @@
 {
-  "lastModified": 1793451680,
+  "lastModified": 1793453294,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -29,22 +29,6 @@
       "target_module": "channelHandler.WebLoginUtils",
       "target_commit": "e666fc5edd5b7360dfc522be673da9c906e9dff2",
       "note": "修改初始化问题，防止vivo导出cookies死锁"
-    },
-    {
-      "need_hotfix_version": [
-        "v5.9.0-beta"
-      ],
-      "target_module": "channelHandler.oppoLogin.oppoChannel",
-      "target_commit": "3af68688d71bc2c5a93006f7bb79064dd7cd5f01",
-      "note": "修复了若干导致OPPO登不上的问题（如“您长时间未操作，请重新开始”），新增支持OPPO账密登录、支持在工具中二次验证"
-    },
-    {
-      "need_hotfix_version": [
-        "v5.9.0-beta"
-      ],
-      "target_module": "channelHandler.oppoLogin.jsbridge",
-      "target_commit": "3af68688d71bc2c5a93006f7bb79064dd7cd5f01",
-      "note": "修复了若干导致OPPO登不上的问题（如“您长时间未操作，请重新开始”），新增支持OPPO账密登录、支持在工具中二次验证"
     },
     {
       "need_hotfix_version": [
@@ -876,6 +860,94 @@
       "target_module": "channelHandler.vivoChannelHandler",
       "target_commit": "2a54d45fd0e6b9f24782b4a1d14b40aa42a3027d",
       "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v5.9.0-beta",
+        "v5.9.1-stable"
+      ],
+      "target_module": "channelHandler.oppoLogin.oppoChannel",
+      "target_commit": "42c0c45ad1cb442b8e9eda8fd9dcf8f61b899af2",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v5.9.0-beta",
+        "v5.9.1-stable"
+      ],
+      "target_module": "channelHandler.oppoLogin.jsbridge",
+      "target_commit": "42c0c45ad1cb442b8e9eda8fd9dcf8f61b899af2",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable",
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable",
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "channelHandler.oppoLogin.oppoChannel",
+      "target_commit": "b6bd9eea5ff3fcdaad369a712541e2c17270aae7",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable",
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable",
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "channelHandler.oppoLogin.jsbridge",
+      "target_commit": "b6bd9eea5ff3fcdaad369a712541e2c17270aae7",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.3-stable",
+        "v6.3.0-stable",
+        "v6.3.1-beta"
+      ],
+      "target_module": "channelHandler.oppoLogin.oppoChannel",
+      "target_commit": "b0804c4e6047c519b9869abaa4a4e87377cbebff",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.3-stable",
+        "v6.3.0-stable",
+        "v6.3.1-beta"
+      ],
+      "target_module": "channelHandler.oppoLogin.jsbridge",
+      "target_commit": "b0804c4e6047c519b9869abaa4a4e87377cbebff",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "channelHandler.oppoLogin.oppoChannel",
+      "target_commit": "69986a3f4006b5334e35c1b7e13cabe02485159c",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "channelHandler.oppoLogin.jsbridge",
+      "target_commit": "69986a3f4006b5334e35c1b7e13cabe02485159c",
+      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
     }
   ],
   "shortcuts": [
