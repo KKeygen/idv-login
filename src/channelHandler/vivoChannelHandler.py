@@ -133,7 +133,9 @@ class vivoChannel(channelmgr.channel):
         for i in range(len(self.session.subAccounts)):
             if self.session.subAccounts[i].subOpenId==self.chosenAccount:
                 self.activeAccount=self.session.subAccounts[i]
+                self.activeAccount.openToken = ""
                 self.activeAccount.openToken=self.vivoLogin.loginSubAccount(self.activeAccount.subOpenId)
+                self.cookies = self.vivoLogin.cookies
         #如果自己的uuid等于name，则说明是默认名字，登录成功后用昵称更新名字
         if self.name==self.uuid:
             self.name=f"{self.session.nickName}-{self.activeAccount.nickName}"
