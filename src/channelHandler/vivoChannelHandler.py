@@ -165,10 +165,12 @@ class vivoChannel(channelmgr.channel):
     def _refresh_open_token(self) -> bool:
         if self.activeAccount is None:
             return False
+        self.activeAccount.openToken = ""
         open_token = self.vivoLogin.loginSubAccount(self.activeAccount.subOpenId)
         if not open_token:
             return False
         self.activeAccount.openToken = open_token
+        self.cookies = self.vivoLogin.cookies
         return True
 
 
