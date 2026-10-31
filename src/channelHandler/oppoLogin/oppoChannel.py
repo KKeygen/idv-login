@@ -2,7 +2,7 @@ import json
 import time
 from typing import Any, Dict, Optional
 
-from PyQt6.QtCore import QTimer, QUrl
+from PyQt6.QtCore import QEvent, QTimer, QUrl
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from channelHandler.WebLoginUtils import WebBrowser
@@ -26,6 +26,7 @@ class OppoBrowser(WebBrowser):
         self._captured: Optional[Dict[str, Any]] = None
         self._observed_popup_view: Optional[QWebEngineView] = None
         self._observed_popup_page = None
+        self._pending_observed_callback = None
         self._pending_call_executor_callback_id: Optional[str] = None
         self._pending_call_executor_business_id: str = ""
         self.consts = consts
@@ -44,12 +45,7 @@ class OppoBrowser(WebBrowser):
         if not url:
             return
 
-        try:
-            if self._observed_popup_view is not None:
-                self._observed_popup_view.close()
-                self._observed_popup_view.deleteLater()
-        except Exception:
-            pass
+        self._close_observed_popup()
 
         popup = QWebEngineView(self)
         popup.setWindowTitle("Oppo Verify")
@@ -57,6 +53,7 @@ class OppoBrowser(WebBrowser):
 
         popup_page = self.create_page(self.profile, popup)
         popup.setPage(popup_page)
+        popup.installEventFilter(self)
 
         self._observed_popup_view = popup
         self._observed_popup_page = popup_page
@@ -75,20 +72,58 @@ class OppoBrowser(WebBrowser):
         QTimer.singleShot(delay_ms, self._trigger_main_page_refresh)
 
     def _close_observed_popup(self):
-        try:
-            if self._observed_popup_view is not None:
-                self._observed_popup_view.close()
-                self._observed_popup_view.deleteLater()
-        except Exception:
-            pass
+        popup = self._observed_popup_view
         self._observed_popup_view = None
         self._observed_popup_page = None
+        self._pending_observed_callback = None
+        try:
+            if popup is not None:
+                popup.close()
+                popup.deleteLater()
+        except Exception:
+            pass
+
+    def eventFilter(self, watched, event):
+        if watched is self._observed_popup_view and event.type() == QEvent.Type.Close:
+            self.on_popup_closed(self._observed_popup_page)
+        return super().eventFilter(watched, event)
+
+    def on_popup_closed(self, page):
+        if page is not None and page is self._observed_popup_page:
+            self._observed_popup_view = None
+            self._observed_popup_page = None
+            self._pending_call_executor_callback_id = None
+            self._pending_call_executor_business_id = ""
+            if self._pending_observed_callback is not None:
+                self._emit_observed_result({})
+            else:
+                self._schedule_main_page_refresh()
 
     def _finish_popup_verify(self):
         self._close_observed_popup()
         self._schedule_main_page_refresh()
 
-    def _emit_main_page_callback(self, callback_id: str, payload: Dict[str, Any]):
+    def _emit_observed_result(self, param: Any):
+        pending = self._pending_observed_callback
+        self._pending_observed_callback = None
+        if pending is not None:
+            source_page, callback_id = pending
+            self._emit_main_page_callback(callback_id, {
+                "code": 0,
+                "msg": "success!",
+                "data": param if isinstance(param, dict) else {},
+            }, page=source_page)
+
+    def _finish_observed_popup(self, page, param: Any):
+        if page is not self._observed_popup_page:
+            return
+        # Native openAndObserveWebview returns the full onFinish object to its
+        # original caller before popping the child; it is not a refresh signal.
+        self._emit_observed_result(param)
+        if page is self._observed_popup_page:
+            self._close_observed_popup()
+
+    def _emit_main_page_callback(self, callback_id: str, payload: Dict[str, Any], page=None):
         if not callback_id:
             return
         payload_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -103,7 +138,8 @@ class OppoBrowser(WebBrowser):
             "}catch(e){}"
             "})();"
         )
-        self.page.runJavaScript(script)
+        target_page = self.page if page is None else page
+        target_page.runJavaScript(script)
 
     def _build_verify_url_from_call_executor(self, param: Dict[str, Any]) -> str:
         try:
@@ -244,9 +280,23 @@ class OppoBrowser(WebBrowser):
             content = ""
             if isinstance(param, dict):
                 content = str(param.get("content", "") or "")
+            callback_id = str(callback_id) if callback_id is not None else None
+            if not content:
+                self._emit_main_page_callback(callback_id, {
+                    "code": 5999,
+                    "msg": "apiObject param content is null or empty" if isinstance(param, dict) else "apiObject is null",
+                    "data": {},
+                }, page=page)
+                return
             self._open_observed_webview(content)
+            self._pending_observed_callback = (
+                self.page if page is None else page, callback_id,
+            )
             return
         if method == "vip.onFinish" and page is self._observed_popup_page:
+            if self._pending_observed_callback is not None:
+                QTimer.singleShot(0, lambda: self._finish_observed_popup(page, param))
+                return
             ticket = self._extract_verify_ticket(param)
             if self._is_popup_verify_success(param) and ticket and self._pending_call_executor_callback_id:
                 callback_payload = {

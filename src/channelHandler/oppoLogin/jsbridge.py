@@ -146,8 +146,8 @@ def build_mock_native_js(consts: OppoNativeConsts = DEFAULT_CONSTS) -> str:
       // 关键：捕获网页登录完成回调
         _emitInvoke(method, param, callbackid);
 
-      // account.CallMethodExecutor 需要由 Python 层异步手动回调。
-      if (method === 'account.CallMethodExecutor') {{
+      // These calls complete only when the native child returns a result.
+      if (method === 'account.CallMethodExecutor' || method === 'vip.openAndObserveWebview') {{
         return true;
       }}
 
