@@ -1,5 +1,5 @@
 {
-  "lastModified": 1791900446,
+  "lastModified": 1793420519,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -9,8 +9,8 @@
         "v5.9.1-stable"
       ],
       "target_module": "channelHandler.vivoLogin.vivoChannel",
-      "target_commit": "759708aaf882c114d5a0fe0fb2e0d583f6d2d677",
-      "note": "【测试】VIVO账号长时间保存cookies，避免两周后登录过期"
+      "target_commit": "6962d2a17ba6351f8b012d8dd55d2efb8f920f02",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
     },
     {
       "need_hotfix_version": [
@@ -19,8 +19,8 @@
         "v5.9.1-stable"
       ],
       "target_module": "channelHandler.vivoChannelHandler",
-      "target_commit": "759708aaf882c114d5a0fe0fb2e0d583f6d2d677",
-      "note": "【测试】VIVO账号长时间保存cookies，避免两周后登录过期"
+      "target_commit": "6962d2a17ba6351f8b012d8dd55d2efb8f920f02",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
     },
     {
       "need_hotfix_version": [
@@ -385,11 +385,13 @@
         "v6.1.0-stable",
         "v6.2.0-beta",
         "v6.2.1-stable",
-        "v6.2.2-stable"
+        "v6.2.2-stable",
+        "v6.2.3-stable",
+        "v6.3.0-stable"
       ],
       "target_module": "channelHandler.vivoChannelHandler",
-      "target_commit": "a5cc7e1ceed65474add6362cf0cf33e273835579",
-      "note": "修复VIVO账号在同一游戏生命周期内切换账号时复用旧登录凭证的问题；重新下发v6.0.0-beta以避免旧热更新跳过记录影响本次修复"
+      "target_commit": "858067ef752e5d2139b3ec12d002d37d05d5a1b3",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
     },
     {
       "need_hotfix_version": [
@@ -823,6 +825,57 @@
       "target_module": "cloudRes",
       "target_commit": "420cd3f4b2570dbbd4ec242199e2075f0363eb69",
       "note": "减少获取云配置时爆红字的概率"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.0.0-beta",
+        "v6.0.1-stable",
+        "v6.0.2-stable",
+        "v6.0.4-stable",
+        "v6.0.5-beta",
+        "v6.1.0-mac",
+        "v6.1.0-stable",
+        "v6.2.0-beta",
+        "v6.2.1-stable",
+        "v6.2.2-stable"
+      ],
+      "target_module": "channelHandler.vivoLogin.vivoChannel",
+      "target_commit": "858067ef752e5d2139b3ec12d002d37d05d5a1b3",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.2.3-stable",
+        "v6.3.0-stable",
+        "v6.3.1-beta"
+      ],
+      "target_module": "channelHandler.vivoLogin.vivoChannel",
+      "target_commit": "789de580b22d04d4f840181970a637abede5aa6d",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.1-beta"
+      ],
+      "target_module": "channelHandler.vivoChannelHandler",
+      "target_commit": "789de580b22d04d4f840181970a637abede5aa6d",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "channelHandler.vivoLogin.vivoChannel",
+      "target_commit": "2a54d45fd0e6b9f24782b4a1d14b40aa42a3027d",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
+    },
+    {
+      "need_hotfix_version": [
+        "v6.3.2-stable"
+      ],
+      "target_module": "channelHandler.vivoChannelHandler",
+      "target_commit": "2a54d45fd0e6b9f24782b4a1d14b40aa42a3027d",
+      "note": "【测试】尝试解决VIVO渠道服账号只能保存两周的问题。"
     }
   ],
   "shortcuts": [
