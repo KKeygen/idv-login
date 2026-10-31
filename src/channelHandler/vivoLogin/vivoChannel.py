@@ -150,6 +150,8 @@ class VivoLogin:
             if cookie.domain.lstrip(".") == "vivo.com.cn"
             or cookie.domain.endswith(".vivo.com.cn")
         }
+        if self.cookies != self._http_cookies:
+            self.logger.info("VIVO 登录 Cookie 已更新")
         self._http_cookies = self.cookies.copy()
         return response
 
