@@ -265,7 +265,9 @@ class IDVLoginAddon:
                 return
             if request_role == ROLE_HOSTED_FEVER_MPAY:
                 if self._re_login_methods.match(path):
-                    self._modify_login_methods_response(flow)
+                    self._modify_login_methods_response(
+                        flow, self._effective_hosted_game_id(flow)
+                    )
                 elif path == "/mpay/games/pc_config":
                     if flow.request.query.get("game_id", "") != "aecglf6ee4aaaarz-g-a50":
                         self._modify_pc_config_response(flow)
@@ -563,14 +565,22 @@ class IDVLoginAddon:
     # Response modification helpers
     # ------------------------------------------------------------------
 
-    def _modify_login_methods_response(self, flow: http.HTTPFlow):
+    def _modify_login_methods_response(
+        self, flow: http.HTTPFlow, hosted_game_id: str = ""
+    ):
         try:
             data = json.loads(flow.response.content)
             data["entrance"] = [LOGIN_METHODS]
-            data["select_platform"] = True
-            data["qrcode_select_platform"] = True
-            for i in data.get("config", {}):
-                data["config"][i]["select_platforms"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            match = self._re_login_methods.match(flow.request.path.split("?")[0])
+            game_id = match.group(1) if match else ""
+            # A concrete game in the URL takes precedence over an active host.
+            if getShortGameId(game_id) == "a50" and hosted_game_id:
+                game_id = hosted_game_id
+            if getShortGameId(game_id) != "ma75":
+                data["select_platform"] = True
+                data["qrcode_select_platform"] = True
+                for i in data.get("config", {}):
+                    data["config"][i]["select_platforms"] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
             flow.response.content = json.dumps(data).encode()
         except Exception:
             pass
