@@ -793,6 +793,11 @@ class MitmProxyManager:
         self._thread: threading.Thread | None = None
         self._master = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._proxy_task: asyncio.Task | None = None
+        self._startup_complete = threading.Event()
+        self._stop_requested = threading.Event()
+        self._startup_error: BaseException | None = None
+        self._ready = False
 
     # ------------------------------------------------------------------
     # Port selection
@@ -847,54 +852,92 @@ class MitmProxyManager:
     # Proxy lifecycle
     # ------------------------------------------------------------------
 
-    def start(self):
+    def start(self, timeout: float = 30.0):
         """Start mitmproxy in a daemon thread."""
-        if self._thread and self._thread.is_alive():
-            logger.warning("mitmproxy 已经在运行中")
-            return
+        if not (self._thread and self._thread.is_alive()):
+            self._resolve_port()
+            self._startup_complete.clear()
+            self._stop_requested.clear()
+            self._startup_error = None
+            self._ready = False
+            self._master = None
+            self._loop = None
+            self._proxy_task = None
+            self._thread = threading.Thread(
+                target=self._run_proxy,
+                name="mitmproxy-worker",
+                daemon=True,
+            )
+            self._thread.start()
 
-        self._resolve_port()
-
-        self._thread = threading.Thread(
-            target=self._run_proxy,
-            name="mitmproxy-worker",
-            daemon=True,
-        )
-        self._thread.start()
+        if not self._startup_complete.wait(timeout):
+            self.stop()
+            raise TimeoutError("等待 mitmproxy 监听端口就绪超时")
+        if self._startup_error is not None or not self._ready:
+            error = self._startup_error
+            self.stop()
+            raise RuntimeError("mitmproxy 监听启动失败") from error
 
         mode_desc = "兼容模式 (反向代理)" if self.mode == "compat" else "常规代理模式"
-        logger.info(f"mitmproxy {mode_desc}已启动，监听端口 {self.port}")
+        logger.info(f"mitmproxy {mode_desc}已就绪，监听端口 {self.port}")
+
+    def _listener_ready(self):
+        if self._stop_requested.is_set():
+            raise RuntimeError("mitmproxy 启动已取消")
+        proxyserver = self._master.addons.get("proxyserver")
+        addresses = [
+            address
+            for server in proxyserver.servers if server.is_running
+            for address in server.listen_addrs
+        ] if proxyserver else []
+        for host, port, *_ in addresses:
+            if host == "127.0.0.1" and (self.port == 0 or port == self.port):
+                self.port = port
+                self._ready = True
+                self._startup_complete.set()
+                return
+        raise RuntimeError("mitmproxy 未建立预期的本地监听端口")
 
     def _run_proxy(self):
         """Thread target: create an asyncio event loop and run mitmproxy."""
-        # Windows ProactorEventLoop 在多线程环境下 accept() 存在已知 bug
-        # (WinError 10014 / WSAEFAULT)，改用更稳定的 SelectorEventLoop
-        if sys.platform == "win32":
-            self._loop = asyncio.SelectorEventLoop()
-        else:
-            self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-
         try:
-            self._loop.run_until_complete(self._run_proxy_async())
-        except Exception as e:
-            logger.exception(f"mitmproxy 运行出错: {e}")
+            # Windows ProactorEventLoop 在多线程环境下 accept() 存在已知 bug
+            # (WinError 10014 / WSAEFAULT)，改用更稳定的 SelectorEventLoop
+            self._loop = (asyncio.SelectorEventLoop() if sys.platform == "win32"
+                          else asyncio.new_event_loop())
+            asyncio.set_event_loop(self._loop)
+            self._proxy_task = self._loop.create_task(self._run_proxy_async())
+            self._loop.run_until_complete(self._proxy_task)
+        except BaseException as error:
+            if not (isinstance(error, asyncio.CancelledError) and self._stop_requested.is_set()):
+                self._startup_error = error
+                logger.exception("mitmproxy 运行出错")
         finally:
-            # 取消所有待处理的任务，避免 "task destroyed but pending" 警告
-            try:
-                pending = asyncio.all_tasks(self._loop)
-                for task in pending:
-                    task.cancel()
-                
-                # 等待所有任务完成取消
-                if pending:
-                    self._loop.run_until_complete(
-                        asyncio.gather(*pending, return_exceptions=True)
-                    )
-            except Exception:
-                pass
-            
-            self._loop.close()
+            self._ready = False
+            if self._loop is not None:
+                try:
+                    if self._proxy_task and self._proxy_task.done() and not self._proxy_task.cancelled():
+                        self._proxy_task.exception()
+                    pending = asyncio.all_tasks(self._loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        self._loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
+                    if self._master is not None:
+                        proxyserver = self._master.addons.get("proxyserver")
+                        if proxyserver:
+                            for server in proxyserver.servers:
+                                if server.is_running:
+                                    self._loop.run_until_complete(server.stop())
+                except Exception:
+                    logger.exception("mitmproxy 监听清理失败")
+                finally:
+                    self._loop.close()
+            if self._startup_error is None and not self._stop_requested.is_set():
+                self._startup_error = RuntimeError("mitmproxy 工作线程已退出")
+            self._startup_complete.set()
 
     async def _run_proxy_async(self):
         """Async entry point – DumpMaster needs a *running* event loop."""
@@ -954,16 +997,25 @@ class MitmProxyManager:
             self._master.addons.add(_CompatModeAddon())
         self._master.addons.add(self.addon)
         self._master.addons.add(_ResponseLogAddon())
-        await self._master.run()
+        self._master.addons.add(_ProxyStartupAddon(self))
+        if not self._stop_requested.is_set():
+            await self._master.run()
 
     def stop(self):
         """Shut down the mitmproxy proxy."""
+        self._stop_requested.set()
         if self._master:
             try:
                 self._master.shutdown()
             except Exception:
                 pass
         
+        if not self._ready and self._loop and self._proxy_task:
+            try:
+                self._loop.call_soon_threadsafe(self._proxy_task.cancel)
+            except RuntimeError:
+                pass
+
         # 等待代理线程优雅退出
         if self._thread and self._thread.is_alive():
             try:
@@ -1012,6 +1064,21 @@ class MitmProxyManager:
             return ",".join(domains) if domains else ""
         except Exception:
             return ""
+
+
+class _ProxyStartupAddon:
+    def __init__(self, manager):
+        self.manager = manager
+
+    async def running(self):
+        errorcheck = self.manager._master.addons.get("errorcheck")
+        if errorcheck:
+            await errorcheck.shutdown_if_errored()
+        try:
+            self.manager._listener_ready()
+        except Exception as error:
+            self.manager._startup_error = error
+            self.manager._master.shutdown()
 
 
 def _patch_mitmproxy_reverse_https_tcp_only():
