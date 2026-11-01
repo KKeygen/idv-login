@@ -252,7 +252,8 @@ def handle_update():
     # 延后导入：避免在工作目录切换前导入 cloudRes/logutil 导致 log.txt 写入启动目录（如 bat 文件夹）
     from cloudRes import CloudRes
 
-    from PyQt6.QtWidgets import QMessageBox, QDialog
+    from PyQt6.QtWidgets import QDialog
+    from native_ui.dialogs import MessageBox as QMessageBox
     from updater_dialog import UpdateDialog, web_url
 
     ignoredVersions=genv.get("ignoredVersions",[])
@@ -1419,7 +1420,7 @@ def _ask_user_confirmation(title: str, message: str) -> bool:
     # 1. 尝试使用 Qt 对话框（如果已初始化）
     try:
         if app_state.app is not None:
-            from PyQt6.QtWidgets import QMessageBox
+            from native_ui.dialogs import MessageBox as QMessageBox
             reply = QMessageBox.question(
                 None, title, message,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,

@@ -562,7 +562,6 @@ class oppoChannel(channelmgr.channel):
                 QDialogButtonBox,
                 QLabel,
                 QListWidget,
-                QVBoxLayout,
                 QWidget,
             )
 
@@ -575,10 +574,12 @@ class oppoChannel(channelmgr.channel):
             parent = QWidget()
             dialog = QDialog(parent)
             dialog.setWindowTitle("选择账号")
-            layout = QVBoxLayout(dialog)
+            from native_ui.dialogs import configure_account_list, dialog_layout, primary_button
+            layout = dialog_layout(dialog)
             layout.addWidget(QLabel("请选择要使用的账号："))
 
             lst = QListWidget(dialog)
+            configure_account_list(lst, len(labels))
             for label in labels:
                 lst.addItem(label)
             lst.setCurrentRow(0)
@@ -589,6 +590,10 @@ class oppoChannel(channelmgr.channel):
             layout.addWidget(remember_cb)
 
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.layout().setSpacing(8)
+            primary_button(buttons.button(QDialogButtonBox.StandardButton.Ok))
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确认")
+            buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
             buttons.accepted.connect(dialog.accept)
             buttons.rejected.connect(dialog.reject)
             layout.addWidget(buttons)

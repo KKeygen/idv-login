@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
     QFrame,
 )
 
+from native_ui.dialogs import StatusLabel, dialog_layout, primary_button
+
 from channelHandler.ucLogin.consts import (
     UC_APP_ID,
     UC_DEFAULT_HOST,
@@ -64,7 +66,6 @@ class UCSmsLoginDialog(QDialog):
             self.windowFlags()
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setFixedSize(380, 260)
         self.setModal(True)
 
         self._game_data = game_data
@@ -86,9 +87,7 @@ class UCSmsLoginDialog(QDialog):
         self._pending_accounts: List[dict] = []
         self._pending_ticket = ""
 
-        self._main_layout = QVBoxLayout(self)
-        self._main_layout.setContentsMargins(20, 16, 20, 16)
-        self._main_layout.setSpacing(10)
+        self._main_layout = dialog_layout(self)
 
         self._build_phone_page()
 
@@ -115,8 +114,8 @@ class UCSmsLoginDialog(QDialog):
                 pass  # spacers are removed automatically
 
     def _new_status_label(self) -> QLabel:
-        lbl = QLabel("")
-        lbl.setStyleSheet("color: #cc0000; font-size: 12px;")
+        lbl = StatusLabel()
+        lbl.setProperty("role", "status")
         lbl.setWordWrap(True)
         self._status_label = lbl
         return lbl
@@ -124,15 +123,16 @@ class UCSmsLoginDialog(QDialog):
     def _build_phone_page(self):
         """状态 1: 手机号输入。"""
         self._clear_layout()
-        self.setFixedSize(380, 220)
 
         title = QLabel("请输入手机号接收验证码")
-        title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        title.setProperty("role", "heading")
+        title.setWordWrap(True)
         self._main_layout.addWidget(title)
 
         row = QHBoxLayout()
+        row.setSpacing(8)
         self._country_input = QLineEdit("86")
-        self._country_input.setFixedWidth(50)
+        self._country_input.setFixedWidth(64)
         self._country_input.setPlaceholderText("区号")
         row.addWidget(QLabel("+"))
         row.addWidget(self._country_input)
@@ -142,22 +142,22 @@ class UCSmsLoginDialog(QDialog):
         row.addWidget(self._phone_input)
         self._main_layout.addLayout(row)
 
-        self._send_btn = QPushButton("发送验证码")
-        self._send_btn.setFixedHeight(36)
+        self._send_btn = primary_button(QPushButton("发送验证码"))
         self._send_btn.clicked.connect(self._on_send_sms)
         self._main_layout.addWidget(self._send_btn)
 
         self._main_layout.addWidget(self._new_status_label())
-        self._main_layout.addStretch()
+        self._phone_input.setFocus()
+        self.adjustSize()
 
     def _build_code_page(self):
         """状态 2: 验证码输入。"""
         self._clear_layout()
-        self.setFixedSize(380, 260)
 
         masked = self._mask_phone(self._current_mobile)
         hint = QLabel(f"验证码已发送到 {masked}")
-        hint.setStyleSheet("font-size: 13px;")
+        hint.setProperty("role", "muted")
+        hint.setWordWrap(True)
         self._main_layout.addWidget(hint)
 
         self._code_input = QLineEdit()
@@ -166,13 +166,12 @@ class UCSmsLoginDialog(QDialog):
         self._main_layout.addWidget(self._code_input)
 
         btn_row = QHBoxLayout()
-        self._login_btn = QPushButton("登录")
-        self._login_btn.setFixedHeight(36)
+        btn_row.setSpacing(8)
+        self._login_btn = primary_button(QPushButton("登录"))
         self._login_btn.clicked.connect(self._on_login)
         btn_row.addWidget(self._login_btn)
 
         self._resend_btn = QPushButton()
-        self._resend_btn.setFixedHeight(36)
         self._resend_btn.clicked.connect(self._on_send_sms)
         self._resend_btn.setEnabled(False)
         btn_row.addWidget(self._resend_btn)
@@ -180,24 +179,24 @@ class UCSmsLoginDialog(QDialog):
 
         back_btn = QPushButton("← 返回")
         back_btn.setFlat(True)
-        back_btn.setStyleSheet("color: #0066cc; text-align: left; font-size: 12px;")
+        back_btn.setStyleSheet("QPushButton { color: #cbad8e; text-align: left; border-color: transparent; background: transparent; }")
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back_btn.clicked.connect(self._build_phone_page)
         self._main_layout.addWidget(back_btn)
 
         self._main_layout.addWidget(self._new_status_label())
-        self._main_layout.addStretch()
+        self._code_input.setFocus()
+        self.adjustSize()
 
         self._start_countdown()
 
     def _build_account_page(self, accounts: list):
         """状态 3: 账号选择。"""
         self._clear_layout()
-        height = min(140 + len(accounts) * 52, 500)
-        self.setFixedSize(380, height)
 
         title = QLabel("请选择游戏账号")
-        title.setStyleSheet("font-size: 14px; font-weight: bold;")
+        title.setProperty("role", "heading")
+        title.setWordWrap(True)
         self._main_layout.addWidget(title)
 
         scroll = QScrollArea()
@@ -205,7 +204,8 @@ class UCSmsLoginDialog(QDialog):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         container = QWidget()
         scroll_layout = QVBoxLayout(container)
-        scroll_layout.setSpacing(4)
+        scroll_layout.setContentsMargins(0, 0, 8, 0)
+        scroll_layout.setSpacing(12)
 
         self._account_group = QButtonGroup(self)
         for i, acct in enumerate(accounts):
@@ -214,22 +214,37 @@ class UCSmsLoginDialog(QDialog):
             label = desc or remark or f"账号 {i + 1}"
             if remark and desc:
                 label = f"{desc}  ({remark})"
-            rb = QRadioButton(label)
+            rb = QRadioButton()
+            rb.setAccessibleName(label)
+            caption = QLabel(label)
+            caption.setTextFormat(Qt.TextFormat.PlainText)
+            caption.setWordWrap(True)
+            caption.setBuddy(rb)
+            def choose_account(event, button=rb):
+                if event.button() == Qt.MouseButton.LeftButton:
+                    button.click()
+                    button.setFocus()
+            caption.mousePressEvent = choose_account
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addWidget(rb, 0, Qt.AlignmentFlag.AlignTop)
+            row.addWidget(caption, 1)
             rb.setProperty("acct_index", i)
             self._account_group.addButton(rb, i)
-            scroll_layout.addWidget(rb)
+            scroll_layout.addLayout(row)
             if i == 0:
                 rb.setChecked(True)
 
         scroll.setWidget(container)
+        scroll.setMinimumHeight(min(260, max(96, len(accounts) * 52)))
         self._main_layout.addWidget(scroll)
 
-        confirm_btn = QPushButton("确认")
-        confirm_btn.setFixedHeight(36)
+        confirm_btn = primary_button(QPushButton("确认"))
         confirm_btn.clicked.connect(self._on_account_selected)
         self._main_layout.addWidget(confirm_btn)
 
         self._main_layout.addWidget(self._new_status_label())
+        self.adjustSize()
 
     # ── 倒计时 ────────────────────────────────────────────────
 

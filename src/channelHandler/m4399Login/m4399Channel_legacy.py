@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 from PyQt6.QtCore import QTimer
 
+from native_ui.dialogs import fit_login_window
 from channelHandler.WebLoginUtils import WebBrowser
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
@@ -413,7 +414,7 @@ class M4399Browser(WebBrowser):
 
         super().__init__("m4399", True, frameless=True)
         self.logger = setup_logger()
-        self.resize(430, 680)
+        fit_login_window(self, 430, 680)
 
         try:
             self.profile.cookieStore().loadAllCookies()

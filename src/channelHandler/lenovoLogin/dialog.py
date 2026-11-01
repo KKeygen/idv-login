@@ -1,8 +1,9 @@
 # Copyright (c) 2026 KKeygen. SPDX-License-Identifier: GPL-3.0-or-later
 import threading
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLabel, QLineEdit, QPushButton
 from .protocol import LoginError
+from native_ui.dialogs import StatusLabel, dialog_layout, primary_button
 
 _workers = set()
 
@@ -41,26 +42,31 @@ class LenovoLoginDialog(QDialog):
         self._busy = False
         self._closed = False
         self.setWindowTitle("联想账号登录")
-        self.setMinimumWidth(420)
-        layout = QVBoxLayout(self)
+        layout = dialog_layout(self)
         note = QLabel("请输入联想手机号或邮箱；密码不保存。\n激活、验证码或实名认证请先在官方游戏客户端完成。")
         note.setWordWrap(True)
+        note.setProperty("role", "muted")
         layout.addWidget(note)
         self.account = QLineEdit()
         self.account.setPlaceholderText("联想手机号或邮箱")
         self.password = QLineEdit()
         self.password.setPlaceholderText("密码")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.status = QLabel("")
-        self.status.setWordWrap(True)
-        self.submit = QPushButton("登录")
+        self.status = StatusLabel()
+        self.submit = primary_button(QPushButton("登录"))
         cancel = QPushButton("取消")
-        for widget in (self.account, self.password, self.status, self.submit, cancel):
+        for widget in (self.account, self.password, self.status):
             layout.addWidget(widget)
+        buttons = QDialogButtonBox()
+        buttons.layout().setSpacing(8)
+        buttons.addButton(self.submit, QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(cancel, QDialogButtonBox.ButtonRole.RejectRole)
+        layout.addWidget(buttons)
         self.submit.clicked.connect(self._submit)
         self.password.returnPressed.connect(self._submit)
         cancel.clicked.connect(self.reject)
         self.finished.connect(self._finish)
+        self.account.setFocus()
 
     def _submit(self):
         if self._busy or self._closed:

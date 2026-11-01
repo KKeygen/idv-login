@@ -4,7 +4,9 @@ import base64
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton
+
+from native_ui.dialogs import dialog_layout
 
 
 class QrDialog(QDialog):
@@ -13,14 +15,7 @@ class QrDialog(QDialog):
         self.channel = channel
         self.setWindowTitle('扫码登录')
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
-        self.setStyleSheet(
-            'QDialog { background: #25272c; }'
-            'QLabel { color: #f4f5f7; font-size: 14px; }'
-            'QPushButton { color: #f4f5f7; background: #41444b; padding: 8px 24px; }')
-        self.resize(360, 180)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout = dialog_layout(self, width=360)
         self.image = QLabel()
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image.setFixedSize(280, 280)
@@ -34,9 +29,10 @@ class QrDialog(QDialog):
         self.status = QLabel('正在获取二维码…')
         self.status.setWordWrap(True)
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status.setMinimumHeight(48)
+        self.status.setMinimumHeight(42)
         layout.addWidget(self.status)
         self.cancel_button = QPushButton('取消登录')
+        self.cancel_button.setMinimumWidth(112)
         self.cancel_button.clicked.connect(self.reject)
         layout.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignHCenter)
 

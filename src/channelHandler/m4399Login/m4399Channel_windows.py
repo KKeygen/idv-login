@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from native_ui.dialogs import fit_login_window
 from channelHandler.WebLoginUtils import WebBrowser
 from browser_cookies import CookieExport
 from logutil import setup_logger
@@ -402,7 +403,7 @@ class M4399Browser(WebBrowser):
 
         super().__init__("m4399", True, frameless=True)
         self.logger = setup_logger()
-        self.resize(430, 680)
+        fit_login_window(self, 430, 680)
 
     # ── Privacy-safe navigation logs ──────────────────────────
 
