@@ -14,6 +14,7 @@ manual_login_channels = [
     {"name": "4399账号", "channel": "4399com"},
     {"name": "360账号", "channel": "360_assistant"},
     {"name": "百度（旧版渠道）", "channel": "baidu", "min_version": "6.3.3-beta"},
+    {"name": "联想", "channel": "lenovo_open", "min_version": "6.3.3-beta"},
 ]
 
 
