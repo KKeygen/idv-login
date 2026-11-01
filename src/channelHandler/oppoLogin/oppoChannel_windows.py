@@ -25,6 +25,7 @@ class OppoBrowser(WebBrowser):
         self._captured: Optional[Dict[str, Any]] = None
         self._observed_popup_view = None
         self._observed_popup_page = None
+        self._pending_observed_callback = None
         self._pending_call_executor_callback_id: Optional[str] = None
         self._pending_call_executor_business_id: str = ""
         self.consts = consts
@@ -59,13 +60,15 @@ class OppoBrowser(WebBrowser):
         QTimer.singleShot(delay_ms, self._trigger_main_page_refresh)
 
     def _close_observed_popup(self):
-        try:
-            if self._observed_popup_view is not None:
-                self._observed_popup_view.close()
-        except Exception:
-            pass
+        popup = self._observed_popup_view
         self._observed_popup_view = None
         self._observed_popup_page = None
+        self._pending_observed_callback = None
+        try:
+            if popup is not None:
+                popup.close()
+        except Exception:
+            pass
 
     def on_popup_closed(self, page):
         if page is not None and page is self._observed_popup_page:
@@ -73,13 +76,36 @@ class OppoBrowser(WebBrowser):
             self._observed_popup_page = None
             self._pending_call_executor_callback_id = None
             self._pending_call_executor_business_id = ""
-            self._schedule_main_page_refresh()
+            if self._pending_observed_callback is not None:
+                self._emit_observed_result({})
+            else:
+                self._schedule_main_page_refresh()
 
     def _finish_popup_verify(self):
         self._close_observed_popup()
         self._schedule_main_page_refresh()
 
-    def _emit_main_page_callback(self, callback_id: str, payload: Dict[str, Any]):
+    def _emit_observed_result(self, param: Any):
+        pending = self._pending_observed_callback
+        self._pending_observed_callback = None
+        if pending is not None:
+            source_page, callback_id = pending
+            self._emit_main_page_callback(callback_id, {
+                "code": 0,
+                "msg": "success!",
+                "data": param if isinstance(param, dict) else {},
+            }, page=source_page)
+
+    def _finish_observed_popup(self, page, param: Any):
+        if page is not self._observed_popup_page:
+            return
+        # Native openAndObserveWebview returns the full onFinish object to its
+        # original caller before popping the child; it is not a refresh signal.
+        self._emit_observed_result(param)
+        if page is self._observed_popup_page:
+            self._close_observed_popup()
+
+    def _emit_main_page_callback(self, callback_id: str, payload: Dict[str, Any], page=None):
         if not callback_id:
             return
         payload_str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -94,7 +120,8 @@ class OppoBrowser(WebBrowser):
             "}catch(e){}"
             "})();"
         )
-        self.page.runJavaScript(script)
+        target_page = self.page if page is None else page
+        target_page.runJavaScript(script)
 
     def _build_verify_url_from_call_executor(self, param: Dict[str, Any]) -> str:
         session = OppoSecureSession(base_url="https://client-uc.heytapmobi.com/", consts=self.consts)
@@ -230,9 +257,23 @@ class OppoBrowser(WebBrowser):
             content = ""
             if isinstance(param, dict):
                 content = str(param.get("content", "") or "")
+            callback_id = str(callback_id) if callback_id is not None else None
+            if not content:
+                self._emit_main_page_callback(callback_id, {
+                    "code": 5999,
+                    "msg": "apiObject param content is null or empty" if isinstance(param, dict) else "apiObject is null",
+                    "data": {},
+                }, page=page)
+                return
             self._open_observed_webview(content)
+            self._pending_observed_callback = (
+                self.page if page is None else page, callback_id,
+            )
             return
         if method == "vip.onFinish" and page is self._observed_popup_page:
+            if self._pending_observed_callback is not None:
+                QTimer.singleShot(0, lambda: self._finish_observed_popup(page, param))
+                return
             ticket = self._extract_verify_ticket(param)
             if self._is_popup_verify_success(param) and ticket and self._pending_call_executor_callback_id:
                 callback_payload = {
