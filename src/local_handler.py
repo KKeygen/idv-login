@@ -120,6 +120,7 @@ class LocalRequestHandler:
             "/_idv-login/rename": self._rename_channel,
             "/_idv-login/import": self._import_channel,
             "/_idv-login/import-status": self._import_status,
+            "/_idv-login/relogin": self._relogin_channel,
             "/_idv-login/setDefault": self._set_default,
             "/_idv-login/clearDefault": self._clear_default,
             "/_idv-login/get-auto-close-state": self._get_auto_close_state,
@@ -404,7 +405,16 @@ class LocalRequestHandler:
         """通用二维码状态接口，支持 myapp（微信）和 bilibili_sdk。"""
         game_id = args.get("game_id", "")
         channel = args.get("channel", "myapp")
-        data = self._pick_qrcode_data(channel, game_id)
+        task_id = args.get("task_id")
+        if task_id:
+            sync = getattr(app_state.channels_helper, 'db_sync', None)
+            attempt = getattr(sync, '_relogin_tasks', {}).get(task_id)
+            if (attempt is None or not cmp_game_id(str(game_id), attempt.game)
+                    or channel != attempt.record.channel_name):
+                return self._json_response(404, {'error': '重新登录任务已失效。'})
+            data = attempt.qrcode_state
+        else:
+            data = self._pick_qrcode_data(channel, game_id)
         if not data:
             return self._json_response(200, {
                 "success": False, "status": "idle", "qrcode_base64": "",
@@ -525,6 +535,25 @@ class LocalRequestHandler:
             if record:
                 record.report_login_failure(record.game_id, 'rename', message, error)
             return self._json_response(500, {'success': False, 'error': message})
+
+    def _relogin_channel(self, args, body, method):
+        values = body if method == 'POST' and isinstance(body, dict) else args
+        sync = getattr(app_state.channels_helper, 'db_sync', None)
+        attempt = getattr(sync, '_relogin_tasks', {}).get(values.get('task_id', ''))
+        if attempt is None or not cmp_game_id(str(values.get('game_id', '')), attempt.game):
+            return self._json_response(404, {'error': '重新登录任务已失效，请返回游戏重试。'})
+        if method == 'POST':
+            if values.get('uuid') != attempt.record.uuid:
+                return self._json_response(409, {'error': '重新登录账号不匹配。'})
+            action = values.get('action')
+            if action not in ('start', 'cancel'):
+                return self._json_response(400, {'error': '无效的重新登录操作。'})
+            if action == 'cancel':
+                attempt.cancel_event.set()
+            app_state.run_on_main_thread(attempt.begin if action == 'start' else attempt.cancel)
+        elif method != 'GET':
+            return self._json_response(405, {'error': '不支持的请求方法。'})
+        return self._json_response(200, attempt.public_state())
 
     def _import_channel(self, args, body, method):
         try:

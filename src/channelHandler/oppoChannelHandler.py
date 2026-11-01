@@ -593,8 +593,12 @@ class oppoChannel(channelmgr.channel):
             buttons.rejected.connect(dialog.reject)
             layout.addWidget(buttons)
 
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return None
+            self._active_dialog = dialog
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return None
+            finally:
+                self._active_dialog = None
 
             row = lst.currentRow()
             if row < 0:

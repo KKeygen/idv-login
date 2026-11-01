@@ -135,6 +135,7 @@ class MpayDBSync:
         # No DB addresses, credentials, display-name copies or Channel bindings.
         self.projected = set()
         self._relogins = {}
+        self._relogin_tasks = {}
         self._order_states = {}
 
     def paths(self, game):
@@ -655,7 +656,10 @@ class MpayDBSync:
         from channel_relogin import ExpiredChannelLogin
         attempt = ExpiredChannelLogin(self, record, game,
             lambda: self._relogins.pop(record.uuid, None))
+        self._relogin_tasks = {key: value for key, value in self._relogin_tasks.items()
+                               if value.record.uuid != record.uuid}
         self._relogins[record.uuid] = attempt
+        self._relogin_tasks[attempt.task_id] = attempt
         attempt.start()
 
     def reconcile_game_changes(self):
@@ -757,6 +761,8 @@ class MpayDBSync:
     def shutdown(self):
         with self.lock:
             self.stopping = True
+            for attempt in tuple(self._relogins.values()):
+                attempt.cancel()
             self.reconcile_game_changes()
             for game in {key[0] for _, key, _ in self.projected}:
                 self._clear_projection(game)

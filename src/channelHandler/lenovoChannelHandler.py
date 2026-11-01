@@ -84,9 +84,9 @@ class lenovoChannel(channelmgr.channel):
         self._lenovo_packet_ready = True
         return result
 
-    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False):
+    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False, cancel_event=None):
         self._lenovo_packet_ready = False
-        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True)
+        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True, cancel_event=cancel_event)
 
     def request_user_login(self, on_complete=None, *, interactive=True, force=False):
         self._check_game(self.game_id)

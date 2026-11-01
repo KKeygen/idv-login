@@ -39,7 +39,7 @@ from PyQt6.QtWidgets import (
 )
 
 
-def _show_account_selector(accounts: list) -> str:
+def _show_account_selector(accounts: list, owner=None) -> str:
     """弹出账号选择对话框（阻塞式，使用 exec() 嵌套事件循环）。
 
     Args:
@@ -77,9 +77,15 @@ def _show_account_selector(accounts: list) -> str:
     layout.addWidget(buttons)
 
     # exec() 会启动嵌套事件循环，不会阻塞 UI
-    if dialog.exec() != QDialog.DialogCode.Accepted:
-        parent.deleteLater()
-        return None
+    if owner is not None:
+        owner._active_dialog = dialog
+    try:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            parent.deleteLater()
+            return None
+    finally:
+        if owner is not None:
+            owner._active_dialog = None
 
     row = lst.currentRow()
     if row < 0 or row >= len(accounts):
@@ -229,7 +235,7 @@ class vivoChannel(channelmgr.channel):
         if selected is None:
             if not interactive:
                 return False
-            choice = _show_account_selector(candidate.subAccounts)
+            choice = _show_account_selector(candidate.subAccounts, owner=self)
             if choice is None:
                 return None
             chosen_id = choice[0] if isinstance(choice, tuple) else choice

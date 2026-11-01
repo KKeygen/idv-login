@@ -76,9 +76,9 @@ class guopanChannel(channelmgr.channel):
         self._guopan_packet_ready = True
         return result
 
-    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False):
+    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False, cancel_event=None):
         self._guopan_packet_ready = False
-        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True)
+        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True, cancel_event=cancel_event)
 
     def _client(self):
         return GuopanClient(self.channelConfig["app_id"], self.channelConfig["app_key"],

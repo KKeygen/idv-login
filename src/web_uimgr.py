@@ -386,7 +386,7 @@ class _UISignalRouter(QObject):
     when emitted from a background thread, guaranteeing execution
     on the main (GUI) thread.
     """
-    open_game_sig = pyqtSignal(str, str)
+    open_game_sig = pyqtSignal(str, str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -396,10 +396,17 @@ class _UISignalRouter(QObject):
     def set_callback(self, callback):
         self._callback = callback
 
-    @pyqtSlot(str, str)
-    def _on_open_game(self, game_id: str, initial_view: str):
+    @pyqtSlot(str, str, str)
+    def _on_open_game(self, game_id: str, initial_view: str, relogin_task: str):
         if self._callback:
-            self._callback(game_id, initial_view)
+            self._callback(game_id, initial_view, relogin_task)
+
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Close:
+            from channel_relogin import cancel_web_login
+            cancel_web_login(getattr(watched, '_relogin_task', ''))
+        return super().eventFilter(watched, event)
 
 
 class _MainThreadDispatcher(QObject):
@@ -746,9 +753,9 @@ class UIManager:
         self._router.set_callback(self._do_open_for_game)
         self._dispatcher = _MainThreadDispatcher()
 
-    def open_for_game(self, game_id: str = "", initial_view: str = ""):
+    def open_for_game(self, game_id: str = "", initial_view: str = "", relogin_task: str = ""):
         """Show the UI window for the given *game_id*. (Thread-safe)"""
-        self._router.open_game_sig.emit(game_id, initial_view)
+        self._router.open_game_sig.emit(game_id, initial_view, relogin_task)
 
     def start_system_move(self) -> bool:
         """Start the OS-native move operation for the embedded launcher."""
@@ -786,6 +793,7 @@ class UIManager:
             self._window = _WindowsFramelessWindow()
         else:
             self._window = QMainWindow()
+        self._window.installEventFilter(self._router)
         self._window.setWindowTitle("渠道服账号管理")
         self._window.setWindowIcon(app.windowIcon())
         if isinstance(self._window, _WindowsFramelessWindow):
@@ -829,7 +837,7 @@ class UIManager:
         )
         self._profile.installUrlSchemeHandler(SCHEME_NAME, self._scheme_handler)
 
-    def _do_open_for_game(self, game_id: str = "", initial_view: str = ""):
+    def _do_open_for_game(self, game_id: str = "", initial_view: str = "", relogin_task: str = ""):
         """Show the UI window for the given *game_id*."""
         self._ensure_window()
         import app_state
@@ -843,7 +851,14 @@ class UIManager:
             if is_compat
             else "idvlogin://app/_idv-login/index"
         )
+        from channel_relogin import cancel_web_login
+        previous = getattr(self._window, '_relogin_task', '')
+        if previous != relogin_task:
+            cancel_web_login(previous)
+        self._window._relogin_task = relogin_task
         query = QUrlQuery()
+        if relogin_task:
+            query.addQueryItem("relogin", relogin_task)
         if game_id:
             query.addQueryItem("game_id", game_id)
         if initial_view:
