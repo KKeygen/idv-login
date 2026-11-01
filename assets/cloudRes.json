@@ -1,5 +1,5 @@
 {
-  "lastModified": 1793508094,
+  "lastModified": 1793511371,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -3233,6 +3233,24 @@
       "game_id": "g85",
       "oppo": "com.netease.EVE.nearme.gamecenter",
       "channel": "oppo"
+    },
+    {
+      "package_name": "com.netease.dwrg.baidu",
+      "app_channel": "baidu",
+      "game_id": "h55",
+      "log_key": "SvShWXDcmogbZJoU3YWe3Su3Ci-mCRcw",
+      "channel": "baidu",
+      "name": "百度（旧版渠道）",
+      "baidu": {
+        "sdk_channel_id": "13744",
+        "app_id": 10670037,
+        "app_key": "QoErY2knn90rmApUbsdCPEqK",
+        "protocol_app_channel": "allysdk.baidu",
+        "sdk_ver": "4.4.9",
+        "version_name": "2025.0219.1937",
+        "version_code": 250501937
+      },
+      "min_version": "6.3.3-beta"
     }
   ],
   "netease_qrcode_login_game_list": [

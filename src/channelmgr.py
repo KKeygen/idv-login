@@ -51,6 +51,7 @@ def legacy_record_source(data: dict) -> str:
         "oppo": "loginResp", "bilibili_sdk": "loginResp",
         "honor_sdk": "unionToken", "uc_platform": "ucSession",
         "4399com": "loginResp", "360_assistant": "qt_cookie",
+        "baidu": "baiduSession",
     }
     field = credential_fields.get(login_channel)
     # v5 的华为适配器保存 refreshToken；当前版本改为 serviceToken。
@@ -197,6 +198,8 @@ class channel:
             data = attrs.get('loginResp') or {}
             data = data.get('data' if name == 'bilibili_sdk' else 'result') or data
             return str(data.get('uid') or '')
+        if name == 'baidu':
+            return str((attrs.get('baiduSession') or {}).get('uid') or '')
         if name in ('qihoo', '360_assistant'):
             return str((attrs.get('userInfo') or {}).get('qid') or '')
         return str(attrs.get('active_sdkuid') or '')
@@ -490,6 +493,9 @@ class ChannelManager:
                         from channelHandler.m4399ChannelHandler import m4399Channel
                         tmpChannel: m4399Channel = m4399Channel.from_dict(item)
                         self.channels.append(tmpChannel)
+                    elif channel_name == "baidu" and item["uuid"].removeprefix("idv-").startswith("baidu-"):
+                        from channelHandler.baiduChannelHandler import baiduChannel
+                        self.channels.append(baiduChannel.from_dict(item))
                     elif channel_name == "360_assistant" and item["uuid"].removeprefix("idv-").startswith("360-"):
                         from channelHandler.qihooChannelHandler import qihooChannel
                         tmpChannel: qihooChannel = qihooChannel.from_dict(item)
@@ -676,6 +682,10 @@ class ChannelManager:
                 from channelHandler.m4399ChannelHandler import m4399Channel
                 tmp_channel: m4399Channel = m4399Channel(tmpData, game_id=game_id)
                 tmp_channel.uuid = f"4399-{tmp_channel.uuid}"
+            elif channle_name == "baidu":
+                from channelHandler.baiduChannelHandler import baiduChannel
+                tmp_channel = baiduChannel(tmpData, game_id=game_id)
+                tmp_channel.uuid = f"baidu-{tmp_channel.uuid}"
             elif channle_name == "360_assistant":
                 from channelHandler.qihooChannelHandler import qihooChannel
                 tmp_channel: qihooChannel = qihooChannel(tmpData, game_id=game_id)
