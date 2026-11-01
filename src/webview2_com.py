@@ -1,5 +1,4 @@
 from __future__ import annotations
-import base64
 import ctypes as C
 from ctypes import wintypes as W
 from dataclasses import dataclass, field
@@ -94,7 +93,6 @@ class Page:
     widget:object=None
     controller:object=None
     web:object=None
-    web2:object=None
     web3:object=None
     web4:object=None
     web13:object=None
@@ -113,7 +111,7 @@ class ComHost:
         if not user32.IsWindow(parent):check(0x80070057)
         self.parent,self.folder,self.agent,self.script,self.notify=parent,folder,agent,script,notify
         self.pages={};self.next_page=2;self.callbacks={};self.next_callback=1
-        self.resources={};self.next_resource=1;self.next_response=1
+        self.resources={};self.next_resource=1
         self.mappings={};self.filters=[];self.environment=None;self.environment5=None
         self.environment_pending=False;self.controller_pending=0;self.controller_attempted=False
         self.closing=False;self.closed=False;self.browser_pid=0;self.exited=set()
@@ -207,16 +205,15 @@ class ComHost:
         self.emit('message',page_id=page.id,source=text(args,'get_Source'),
                   value=json_value(text(args,'get_WebMessageAsJson')),is_frame=frame)
 
-    def track_frame(self,page,frame,nested=False):
+    def track_frame(self,page,frame):
         f=frame.QueryInterface(I.ICoreWebView2Frame2);f7=frame.QueryInterface(I.ICoreWebView2Frame7)
         subscriptions=[];page.frames.append(subscriptions)
-        if nested:
-            self.subscribe(f,'NavigationStarting','ICoreWebView2FrameNavigationStartingEventHandler',
-                lambda s,a:self.navigation(page,a,True),subscriptions,page.id)
+        self.subscribe(f,'NavigationStarting','ICoreWebView2FrameNavigationStartingEventHandler',
+            lambda s,a:self.navigation(page,a,True),subscriptions,page.id)
         self.subscribe(f,'WebMessageReceived','ICoreWebView2FrameWebMessageReceivedEventHandler',
             lambda s,a:self.message(page,a,True),subscriptions,page.id)
         self.subscribe(f7,'FrameCreated','ICoreWebView2FrameChildFrameCreatedEventHandler',
-            lambda s,a:self.track_frame(page,a.get_Frame(),True),subscriptions,page.id)
+            lambda s,a:self.track_frame(page,a.get_Frame()),subscriptions,page.id)
         def destroyed(sender,args):
             def remove():
                 self.revoke(subscriptions)
@@ -226,7 +223,7 @@ class ComHost:
 
     def configure(self,page):
         web=page.controller.get_CoreWebView2();page.web=web
-        for n in (2,3,4,13,18):setattr(page,'web'+str(n),web.QueryInterface(getattr(I,'ICoreWebView2_'+str(n))))
+        for n in (3,4,13,18):setattr(page,'web'+str(n),web.QueryInterface(getattr(I,'ICoreWebView2_'+str(n))))
         settings=web.get_Settings();settings2=settings.QueryInterface(I.ICoreWebView2Settings2)
         settings4=settings.QueryInterface(I.ICoreWebView2Settings4)
         settings.put_IsWebMessageEnabled(True);settings.put_AreHostObjectsAllowed(False)
@@ -242,7 +239,6 @@ class ComHost:
             if not page.widget:self.emit('focus_requested',page_id=page.id,reason='previous' if args.get_Reason()==2 else 'next')
         sub(page.controller,'MoveFocusRequested','ICoreWebView2MoveFocusRequestedEventHandler',focus)
         sub(web,'NavigationStarting','ICoreWebView2NavigationStartingEventHandler',lambda s,a:self.navigation(page,a))
-        sub(web,'FrameNavigationStarting','ICoreWebView2NavigationStartingEventHandler',lambda s,a:self.navigation(page,a,True))
         def external(sender,args):
             args.put_Cancel(True)
             self.emit('navigation',page_id=page.id,url=text(args,'get_Uri'),is_frame=False,allowed=False,kind='external',navigation_id=page.navigation)
@@ -341,8 +337,6 @@ class ComHost:
             if document:page.web.AddWebResourceRequestedFilter(pattern+'?*',1)
         if self.filters:self.subscribe(page.web,'WebResourceRequested','ICoreWebView2WebResourceRequestedEventHandler',
             lambda s,a:self.resource_request(page,a),page.subscriptions,page.id)
-        self.subscribe(page.web2,'WebResourceResponseReceived','ICoreWebView2WebResourceResponseReceivedEventHandler',
-            lambda s,a:self.response_received(page,a),page.subscriptions,page.id)
 
     def resource_request(self,page,args):
         rid=self.next_resource;self.next_resource+=1
@@ -365,7 +359,7 @@ class ComHost:
                 self.respond(rid,403,'Forbidden','',b'');return
             body=stream_bytes(request.get_Content())
             self.emit('resource_request',page_id=page.id,request_id=rid,url=url,method=method,source_origin=supplied,
-                      resource_context=context,is_document_entry=bool(document),headers=pairs,body_base64=base64.b64encode(body).decode())
+                      resource_context=context,is_document_entry=bool(document),headers=pairs,body=body)
         except Exception as error:
             self.respond(rid,400,'Bad Request','',b'');self.error('resource_request',error,page.id)
 
@@ -394,22 +388,6 @@ class ComHost:
         headers=f'Content-Type: {mime}\r\nContent-Length: {len(body)}\r\nX-Content-Type-Options: nosniff\r\n'
         self.respond(rid,200,'OK',headers,body if method=='GET' else b'')
 
-    def response_received(self,page,args):
-        if self.closing or page.closed:return
-        request=args.get_Request();response=args.get_Response();url=text(request,'get_Uri')
-        rid=self.next_response;self.next_response+=1
-        data=dict(page_id=page.id,url=url,status=response.get_StatusCode(),response_id=rid,observed_navigation_id=page.navigation)
-        if self.emit('response_check',**data)!=1:return
-        def done(hr,stream):
-            if self.closed or page.closed:return
-            body=b''
-            if hr>=0:
-                try:body=stream_bytes(stream)
-                except Exception as error:hr=getattr(error,'hresult',E_FAIL)
-            self.emit('response',**data,hresult=hr,body_base64=base64.b64encode(body).decode())
-        cb=self.handler('ICoreWebView2WebResourceResponseViewGetContentCompletedHandler',done,once=True,page=page.id)
-        response.GetContent(cb)
-
     def page(self,pid):
         page=self.pages.get(pid)
         if not page or page.closed or not page.ready:check(0x8000000a)
@@ -432,8 +410,6 @@ class ComHost:
             lambda s,a:self.emit('devtools',page_id=pid,event=event,params=json_value(text(a,'get_ParameterObjectAsJson'))),page.subscriptions,pid)
 
     def navigate(self,pid,url):self.page(pid).web.Navigate(url)
-    def post_message(self,pid,value):self.page(pid).web.PostWebMessageAsJson(value)
-    def stop(self,pid):self.page(pid).web.Stop()
     def new_page(self,url):
         self.page(1);pid=self.next_page;self.next_page+=1;self.create_page(pid,url);return pid
     def bounds(self,page):
@@ -457,7 +433,7 @@ class ComHost:
         def done(hr):
             result=None
             if hr>=0:
-                stream.Seek(0,0);result=base64.b64encode(stream_bytes(stream)).decode()
+                stream.Seek(0,0);result=stream_bytes(stream)
             self.complete(rid,hr,result)
         self.page(pid).web.CapturePreview(0,stream,self.handler('ICoreWebView2CapturePreviewCompletedHandler',done,once=True,page=pid))
     def virtual_host(self,name,folder):self.mappings[name]=folder
@@ -481,7 +457,7 @@ class ComHost:
         for frames in page.frames:self.revoke(frames)
         page.frames.clear();self.revoke(page.subscriptions)
         if page.controller:page.controller.Close()
-        for name in ('web18','web13','web4','web3','web2','web','controller'):setattr(page,name,None)
+        for name in ('web18','web13','web4','web3','web','controller'):setattr(page,name,None)
         if page.widget:page.widget.close();page.widget.deleteLater();page.widget=None
 
     def close_page(self,pid):
