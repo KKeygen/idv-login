@@ -11,7 +11,7 @@ Requests==2.33.1
 requests_toolbelt==1.0.0
 dnspython==2.6.1
 PyQt6==6.11.0
-PyQt6-WebEngine==6.11.0
+PyQt6-WebEngine==6.11.0; sys_platform != "win32"
 loguru==0.7.2
 aiohttp==3.9.5
 aiofiles==23.2.1
@@ -19,3 +19,4 @@ xxhash==3.5.0
 pyzmq>=25.0.0
 protobuf==5.29.6
 wasmtime==49.0.0; sys_platform == "win32"
+comtypes==1.4.16; sys_platform == "win32"

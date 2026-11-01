@@ -1,4 +1,4 @@
-#ifndef AppName
+﻿#ifndef AppName
 #define AppName "IDV Login"
 #endif
 
@@ -45,7 +45,7 @@ Name: "chinesesimplified"; MessagesFile: "{#LangFile}"
 
 [Messages]
 ErrorReplacingExistingFile=尝试替换现有文件时出错，很可能是您更新前还未关闭旧版本工具。请关闭正在运行的旧版工具后点击重试。原始信息：
-SelectDirLabel3=安装程序会将 [name] 放入下列文件夹。此工具为绿色版，安装工具过程不会写入注册表项目。
+SelectDirLabel3=安装程序会将 [name] 放入下列文件夹。工具文件以绿色版方式部署；缺少所需 WebView2 时，将联网安装微软共享运行库。
 
 [Tasks]
 Name: "desktopiconmgr"; Description: "创建用户界面快捷方式（启动器界面）"; GroupDescription: "附加图标"
@@ -72,10 +72,20 @@ Name: "{autodesktop}\IDV Login(传统模式)"; Filename: "{app}\点我启动工�
 Name: "{autodesktop}\IDV Login"; Filename: "{app}\点我启动工具.bat"; Parameters: "--open-ui"; Tasks: desktopiconmgr; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login.lnk'))
 
 [Run]
-Filename: "{app}\点我启动工具.bat"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\点我启动工具.bat"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent; Check: CanLaunchApplication
 Filename: "https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e"; Description: "查看教程"; Flags: postinstall shellexec runasoriginaluser
 
 [Code]
+
+var
+  RuntimePrepared: Boolean;
+  RuntimeRestartNeeded: Boolean;
+  RuntimeFailure: String;
+
+function CanLaunchApplication: Boolean;
+begin
+  Result := RuntimePrepared;
+end;
 
 function GetInstallerLogPath: string;
 begin
@@ -94,6 +104,64 @@ begin
     SaveStringToFile(LogPath, Line, True);
   except
   end;
+end;
+
+
+procedure PrepareWebView2;
+var
+  ScriptPath: String;
+  ExitCode: Integer;
+  Progress: TOutputProgressWizardPage;
+begin
+  RuntimePrepared := False;
+  RuntimeRestartNeeded := False;
+  ScriptPath := ExpandConstant('{app}\src\webview2_setup.pyc');
+  if not FileExists(ScriptPath) then
+    ScriptPath := ExpandConstant('{app}\src\webview2_setup.py');
+  Progress := CreateOutputProgressPage('准备运行环境', '正在准备 Microsoft Edge WebView2 Runtime');
+  Progress.SetText('已安装的运行库会直接使用；缺失时将自动下载并安装。', '请保持网络连接，每次安装最多等待 10 分钟。');
+  Progress.SetProgress(0, 0);
+  Progress.Show;
+  try
+    if Exec(ExpandConstant('{app}\python-embed\python.exe'),
+      '-B "' + ScriptPath + '"', ExpandConstant('{app}'), SW_HIDE,
+      ewWaitUntilTerminated, ExitCode) then
+    begin
+      RuntimePrepared := ExitCode = 0;
+      RuntimeRestartNeeded := ExitCode = 3010;
+      WriteInstallerLog(Format('Shared WebView2 preparation exit=%d', [ExitCode]));
+    end
+    else
+      WriteInstallerLog(Format('Shared WebView2 preparation could not start: %d', [ExitCode]));
+  finally
+    Progress.Hide;
+    Progress.Free;
+  end;
+  if not RuntimePrepared then
+  begin
+    if RuntimeRestartNeeded then
+      RuntimeFailure := '微软 WebView2 安装程序要求重启系统后才能使用运行库。'
+    else
+      RuntimeFailure := '工具文件已安装，但 WebView2 运行库尚未准备完成。请检查网络和安装权限后重试，或从微软官网安装运行库。';
+    RuntimeFailure := RuntimeFailure + #13#10 + '日志：' + GetInstallerLogPath;
+    SuppressibleMsgBox(RuntimeFailure, mbError, MB_OK, IDOK);
+  end;
+end;
+
+function GetCustomSetupExitCode: Integer;
+begin
+  if RuntimePrepared then Result := 0 else Result := 1;
+end;
+
+function NeedRestart: Boolean;
+begin
+  Result := RuntimeRestartNeeded;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and not RuntimePrepared then
+    WizardForm.FinishedLabel.Caption := RuntimeFailure;
 end;
 
 procedure CopyInstallerLogToAppDir;
@@ -197,6 +265,9 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    // All [Files] entries, including embedded Python and the shared module,
+    // are available at ssPostInstall. No browser is used during file setup.
+    PrepareWebView2;
     WriteInstallerLog('CurStepChanged=ssPostInstall (copy log to {app})');
     CopyInstallerLogToAppDir;
   end;
