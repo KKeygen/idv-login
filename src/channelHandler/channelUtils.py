@@ -33,9 +33,9 @@ def calcSign(url,method,data,key):
     #sha256
     return hmac.new(key.encode(), src.encode(), hashlib.sha256).hexdigest()
 
-def buildSAUTH(login_channel, app_channel,uid,session,game_id,sdk_version,custom_data={}):
+def buildSAUTH(login_channel, app_channel,uid,session,game_id,sdk_version,custom_data={}, *, ip_address=None):
     fakeData = app_state.fake_device
-    ip=_get_my_ip()
+    ip=_get_my_ip() if ip_address is None else ip_address
     data = {
         "gameid": game_id,#maybe works for all games
         "login_channel": login_channel,
