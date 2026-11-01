@@ -1481,9 +1481,11 @@ class Game:
         installation_id: str = "",
         progress_file: str = "",
         control_file: str = "",
+        is_update: bool = True,
     ) -> bool:
         """尝试将游戏更新到指定分发ID的版本"""
         self.last_update_async = False
+        self.last_post_update_actions = None
         installation = self.get_installation(installation_id)
         if installation is None:
             self.logger.error("未找到要更新的游戏安装记录")
@@ -1505,7 +1507,12 @@ class Game:
         files = file_distribution_info.get("files", [])
         directories = file_distribution_info.get("directories", [])
         check_result, to_update = self.version_check(files, installation.installation_id)
-        if check_result:
+        if check_result or not to_update:
+            if is_update:
+                from install_actions import apply_post_update_actions
+                self.last_post_update_actions = apply_post_update_actions(
+                    download_root, file_distribution_info.get("install_script"), self.logger
+                )
             installation.distribution_id = dist_id
             installation.installed_version = file_distribution_info.get(
                 "version_code", installation.installed_version
@@ -1516,14 +1523,6 @@ class Game:
             installation.updated_at = int(time.time())
             installation.write_marker(self.game_id)
             self.logger.info(f"游戏已是最新版本，无需更新")
-            return True
-        if not to_update:
-            installation.distribution_id = dist_id
-            installation.installed_version = file_distribution_info.get(
-                "version_code", installation.installed_version
-            )
-            installation.updated_at = int(time.time())
-            installation.write_marker(self.game_id)
             return True
         
         repair_paths = []
@@ -1553,6 +1552,8 @@ class Game:
             "progress_file": os.path.abspath(progress_file) if progress_file else "",
             "control_file": os.path.abspath(control_file) if control_file else "",
             "original_version": installation.installed_version,
+            "is_update": bool(is_update),
+            "install_script": file_distribution_info.get("install_script"),
             "start_args": installation.startup_args
             or CloudRes().get_start_argument(getShortGameId(self.game_id))
             or ""

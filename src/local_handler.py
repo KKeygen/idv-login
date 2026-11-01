@@ -1215,6 +1215,7 @@ class LocalRequestHandler:
                             installation.installation_id,
                             progress_file=progress_file,
                             control_file=control_file,
+                            is_update=False,
                         )
                         if not updated:
                             raise RuntimeError("启动游戏下载失败")
@@ -1317,7 +1318,8 @@ class LocalRequestHandler:
                         if installation is None:
                             raise RuntimeError("创建游戏安装记录失败")
                         updated = game.try_update(
-                            dist_id, max_conc, installation.installation_id
+                            dist_id, max_conc, installation.installation_id,
+                            is_update=False,
                         )
                         if not updated and installation.installation_id not in existing_installation_ids:
                             game.remove_installation(installation.installation_id)
@@ -1382,7 +1384,9 @@ class LocalRequestHandler:
             if installation is None:
                 return self._json_response(500, {"success": False, "error": "创建游戏安装记录失败"})
             max_conc = int(args.get("concurrent", "4"))
-            updated = game.try_update(dist_id, max_conc, installation.installation_id)
+            updated = game.try_update(
+                dist_id, max_conc, installation.installation_id, is_update=False
+            )
             if not updated and installation.installation_id not in existing_installation_ids:
                 game.remove_installation(installation.installation_id)
                 self.game_helper._save_games()
@@ -1458,6 +1462,7 @@ class LocalRequestHandler:
                         "installation_id": installation.installation_id,
                         "version": installation.installed_version,
                         "download_async": bool(game.last_update_async),
+                        "post_update_actions": game.last_post_update_actions,
                     }
                     if game.last_update_async:
                         NativeTaskRegistry.update(task_id, **values)

@@ -760,7 +760,8 @@ def handle_download_task(task_file_path):
     progress_file = task_data.get("progress_file", "")
     control_file = task_data.get("control_file", "")
     start_args = task_data.get("start_args", "")
-    result = True
+    result = False
+    post_update_actions = None
     ui_server_process = None
     ui_server_thread = None
     stop_event = None
@@ -863,7 +864,18 @@ def handle_download_task(task_file_path):
                         f"installation={installation.distribution_id}, task={distribution_id}"
                     )
                     result = False
+                elif os.path.normcase(
+                    os.path.realpath(game.get_root_path(installation_id))
+                ) != os.path.normcase(os.path.realpath(download_root)):
+                    logger_local.error("下载期间安装根目录已变更，拒绝执行收尾和回写")
+                    core_error["value"] = "安装根目录已变更，请重新发起更新"
+                    result = False
                 else:
+                    if task_data.get("is_update", False):
+                        from install_actions import apply_post_update_actions
+                        post_update_actions = apply_post_update_actions(
+                            download_root, task_data.get("install_script"), logger_local
+                        )
                     installation.installed_version = version_code
                     installation.distribution_id = distribution_id
                     installation.content_id = content_id
@@ -878,7 +890,7 @@ def handle_download_task(task_file_path):
                     game.create_tool_launch_shortcut(
                         installation.path, installation.installation_id
                     )
-            elif game:
+            else:
                 logger_local.error(
                     f"下载完成但安装记录不存在，拒绝覆盖其他安装: {installation_id}"
                 )
@@ -931,6 +943,7 @@ def handle_download_task(task_file_path):
             "distribution_id": distribution_id,
             "target_version": version_code,
             "content_id": content_id,
+            "post_update_actions": post_update_actions,
         })
         return result
     except Exception as e:
