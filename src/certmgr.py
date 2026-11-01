@@ -133,6 +133,40 @@ class certmgr:
             .sign(ca_key, hashes.SHA256())
         )
 
+    def is_root_installed(self, cert_path):
+        if sys.platform == "win32":
+            with open(cert_path, "rb") as source:
+                cert = x509.load_pem_x509_certificate(source.read())
+            command = ['certutil', '-store', 'Root', cert.fingerprint(hashes.SHA1()).hex()]
+        elif sys.platform == "darwin":
+            command = ['security', 'verify-cert', '-c', cert_path, '-p', 'basic', '-l', '-L']
+        elif sys.platform.startswith("linux"):
+            command = ['openssl', 'verify', '-purpose', 'sslserver', cert_path]
+        else:
+            raise NotImplementedError("当前系统不支持CA证书安装检查")
+        env = os.environ.copy()
+        env.pop('SSL_CERT_FILE', None)
+        env.pop('SSL_CERT_DIR', None)
+        result = subprocess.run(command, capture_output=True, timeout=15, env=env)
+        if result.returncode == 0:
+            return True
+        if sys.platform == "win32" and result.returncode & 0xffffffff == 0x80092004:
+            return False
+        if sys.platform == "darwin" and result.returncode == 1 and b'CSSMERR_TP_NOT_TRUSTED' in result.stderr:
+            return False
+        if sys.platform.startswith("linux") and result.returncode == 2 and b'error 18 at 0 depth lookup:' in result.stderr:
+            return False
+        raise subprocess.CalledProcessError(result.returncode, command)
+
+    def ensure_root_installed(self, cert_path):
+        try:
+            if self.is_root_installed(cert_path):
+                return True
+            return self.import_to_root(cert_path) and self.is_root_installed(cert_path)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            self.logger.error("检查CA证书安装状态失败。", exc_info=True)
+            return False
+
     def import_to_root(self, cert_path):
         try:
             if sys.platform == "win32":
@@ -157,8 +191,10 @@ class certmgr:
                         ['sudo', 'trust', 'extract-compat']
                     )
                 else:
+                    destination = os.path.join('/usr/local/share/ca-certificates/',
+                                               os.path.splitext(os.path.basename(cert_path))[0] + '.crt')
                     subprocess.check_call(
-                        ['sudo', 'cp', cert_path, '/usr/local/share/ca-certificates/']
+                        ['sudo', 'cp', cert_path, destination]
                     )
                     subprocess.check_call(
                         ['sudo', 'update-ca-certificates']

@@ -1036,15 +1036,6 @@ def generate_certificates_if_needed():
         with open(mitm_ca_cert_pem, "wb") as f:
             f.write(cert_pem)
 
-        # ── 导入 CA 证书到系统根证书存储 ──
-        if m_certmgr.import_to_root(genv.get("FP_CACERT")) == False:
-            logger.error("导入CA证书失败!")
-            if sys.platform == 'win32':
-                os.system("pause")
-            else:
-                input("导入CA证书失败，请按回车键退出。")
-            sys.exit(-1)
-
         # ── 生成服务器证书 (仍用于某些内部流程) ──
         srv_key = m_certmgr.generate_private_key(bits=2048)
         srv_cert = m_certmgr.generate_cert(
@@ -1052,9 +1043,18 @@ def generate_certificates_if_needed():
         )
         m_certmgr.export_cert(genv.get("FP_WEBCERT"), srv_cert)
         m_certmgr.export_key(genv.get("FP_WEBKEY"), srv_key)
-        logger.info("证书初始化成功!")
     else:
         logger.info("证书已存在且有效，跳过生成。")
+
+    if not m_certmgr.ensure_root_installed(genv.get("FP_CACERT")):
+        logger.error("导入或检查CA证书失败!")
+        if sys.platform == 'win32':
+            os.system("pause")
+        else:
+            input("导入或检查CA证书失败，请按回车键退出。")
+        sys.exit(-1)
+    if need_regen:
+        logger.info("证书初始化成功!")
 
 
 def setup_shortcuts():
