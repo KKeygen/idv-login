@@ -17,6 +17,14 @@
  """
 
 import sys
+import os
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(script_dir)
+from crash_recording import enable_crash_recording
+
+NATIVE_CRASH_LOG_PATH = enable_crash_recording()
+
 import argparse
 import subprocess
 import time
@@ -31,6 +39,7 @@ def parse_command_line_args():
     arg_parser.add_argument('--open-ui', action='store_true', help='启动后直接打开渠道服管理界面')
     arg_parser.add_argument('--proxy-port', type=int, default=10717, help='mitmproxy 监听端口 (默认 10717)')
     arg_parser.add_argument('--debug', action='store_true', help='开发调试：使用 mitmweb 打开 Web 代理界面 (默认 http://127.0.0.1:8081/)')
+    arg_parser.add_argument('--mock-version', default=None, help='源码调试时向前端模拟工具版本（默认 v6.3.3-beta，不影响更新策略）')
     return arg_parser.parse_args()
 
 
@@ -38,7 +47,6 @@ CLI_ARGS = parse_command_line_args()
 
 
 import socket
-import os
 import ctypes
 import atexit
 import requests
@@ -47,8 +55,6 @@ import json
 import random
 import string
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(script_dir)
 from envmgr import genv
 import hotfixmgr
 import app_state
@@ -140,6 +146,22 @@ def handle_exit():
     else:
         print("程序关闭，正在清理！ (logger 未初始化)")
 
+    browser_module = sys.modules.get("browser_runtime")
+    if browser_module is not None:
+        try:
+            browser_module.BrowserRuntime.shutdown()
+        except Exception:
+            if logger:
+                logger.warning("独立登录窗口清理未完成")
+
+    webview_module = sys.modules.get("webview2_host")
+    if webview_module is not None:
+        try:
+            webview_module.shutdown_hosts()
+        except Exception:
+            if logger:
+                logger.warning("WebView2 独立资料释放尚未确认")
+
     if app_state.fever_bridge is not None:
         try:
             app_state.fever_bridge.stop()
@@ -223,84 +245,45 @@ def handle_exit():
     print("再见!")
 
 def handle_update():
-
+    version = str(genv.get("VERSION", "") or "").strip().lower()
+    if not version or "dev" in version or "main" in version:
+        print("【在线更新】当前版本为开发版本，更新功能已关闭。")
+        return
     # 延后导入：避免在工作目录切换前导入 cloudRes/logutil 导致 log.txt 写入启动目录（如 bat 文件夹）
     from cloudRes import CloudRes
 
-    from PyQt6.QtGui import QAction
-    from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTextBrowser, QPushButton, QToolButton, QMenu, QSizePolicy, QApplication
-    from PyQt6.QtCore import Qt
-    
+    from PyQt6.QtWidgets import QMessageBox, QDialog
+    from updater_dialog import UpdateDialog, web_url
+
     ignoredVersions=genv.get("ignoredVersions",[])
     #ignoredVersions=[]
-    if "dev" in genv.get("VERSION","v5.4.0").lower() or "main" in genv.get("VERSION","v5.4.0").lower():
-        print("【在线更新】当前版本为开发版本，更新功能已关闭。")
-        return
     if genv.get("CLOUD_VERSION")==genv.get("VERSION"):
         print("【在线更新】当前版本已是最新版本。")
         return
     elif not genv.get("CLOUD_VERSION") in ignoredVersions:
         print(f"【在线更新】工具有新版本：{genv.get('CLOUD_VERSION')}。")
-        details=CloudRes().get_detail_html()
-        
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
-        dialog = QDialog()
-        dialog.setWindowTitle(f"新版本！")
-        dialog.setSizeGripEnabled(True)
-        dialog_layout = QVBoxLayout(dialog)
-        title_label = QLabel(f"{genv.get('VERSION')} -> {genv.get('CLOUD_VERSION')}")
-        dialog_layout.addWidget(title_label)
-        formatted_details = details.replace('\n', '<br>')
-        details_view = QTextBrowser()
-        details_view.setHtml(formatted_details)
-        details_view.setOpenExternalLinks(True)
-        details_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        dialog_layout.addWidget(details_view, 1)
-        screen = QApplication.primaryScreen()
-        if screen:
-            available = screen.availableGeometry()
-            dialog.resize(int(available.width() * 0.4), int(available.height() * 0.6))
-            dialog.setMaximumSize(int(available.width() * 0.8), int(available.height() * 0.8))
-        dialog.setMinimumSize(520, 420)
-        
-        button_layout = QHBoxLayout()
-        button_layout.addStretch(1)
-        yes_btn = QPushButton("现在更新")
-        
-        no_btn = QToolButton()
-        no_btn.setText("下次提醒我")
-        no_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        no_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        no_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        no_btn.setMinimumHeight(23)
-        if CloudRes().is_update_critical():
-            pass
-        else:
-            ignore_action = QAction("忽略此版本", dialog)
-            def on_ignore(checked=False):
-                print(f"【在线更新】用户选择忽略版本{genv.get('CLOUD_VERSION')}。")
-                ignoredVersions.append(genv.get("CLOUD_VERSION"))
-                genv.set("ignoredVersions",ignoredVersions,True)
-                dialog.reject()
-
-            ignore_action.triggered.connect(on_ignore)
-        
-            menu = QMenu()
-            menu.addAction(ignore_action)
-            no_btn.setMenu(menu)
-        
-        no_btn.clicked.connect(dialog.reject)
-        yes_btn.clicked.connect(dialog.accept)
-        button_layout.addWidget(no_btn)
-        button_layout.addWidget(yes_btn)
-        dialog_layout.addLayout(button_layout)
-        
+        cloud = CloudRes()
+        dialog = UpdateDialog(
+            genv.get("VERSION"), genv.get("CLOUD_VERSION"),
+            html=cloud.local_data.get("detail_html", ""), markdown=cloud.get_detail(),
+            download_url=cloud.get_downloadUrl(), critical=cloud.is_update_critical(),
+        )
         result = dialog.exec()
-       
+        if dialog.ignore_version:
+            print(f"【在线更新】用户选择忽略版本{genv.get('CLOUD_VERSION')}。")
+            ignoredVersions.append(genv.get("CLOUD_VERSION"))
+            genv.set("ignoredVersions", ignoredVersions, True)
+
         def go_to_update():
-            url=CloudRes().get_downloadUrl()
+            url = web_url(cloud.get_downloadUrl())
             import webbrowser
-            webbrowser.open(url)
+            try:
+                opened = url.isValid() and webbrowser.open(url.toString())
+            except (webbrowser.Error, OSError):
+                opened = False
+            if not opened:
+                QMessageBox.warning(None, "无法打开更新页面", "下载地址不可用，或系统浏览器未能打开。请稍后重试。")
+                return
             QMessageBox.information(None, "提示", "请按照打开的网页指引下载更新。\n程序将自动退出。")
             sys.exit(0)
         if result == QDialog.DialogCode.Accepted:
@@ -312,7 +295,8 @@ def handle_update():
                 info_box.setText("本次更新为安全相关更新，为了保护你的账号安全，请及时更新。")
                 update_btn = info_box.addButton("现在更新", QMessageBox.ButtonRole.AcceptRole)
                 remind_btn = info_box.addButton("我知道了，下次提醒我", QMessageBox.ButtonRole.RejectRole)
-                info_box.setDefaultButton(update_btn)
+                update_btn.setEnabled(dialog.update_button.isEnabled())
+                info_box.setDefaultButton(update_btn if update_btn.isEnabled() else remind_btn)
                 info_box.exec()
                 if info_box.clickedButton() == update_btn:
                     go_to_update()
@@ -388,8 +372,8 @@ def initialize():
         self.trust_env = False
 
     _requests_mod.Session.__init__ = _no_trust_env_init
-    #Refer to https://forum.qt.io/post/833203. LGTM, yet potentially risky.
-    os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+    if sys.platform != "win32":
+        os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
     genv.set("DOMAIN_TARGET", "service.mkey.163.com")
     genv.set("DOMAIN_TARGET_OVERSEA","sdk-os.mpsdk.easebar.com")
     genv.set("DOMAIN_TARGET_AUTH_STATUS", "mgbsdk.matrix.netease.com")
@@ -488,7 +472,7 @@ def initialize():
     migrate_channel_records()
     app_state.channels_helper = ChannelManager()
 
-    logger.info("初始化内置浏览器")
+    logger.info("初始化原生界面" if sys.platform == "win32" else "初始化内置浏览器")
     os.environ.pop('QT_QPA_PLATFORM_PLUGIN_PATH', None)
     os.environ.pop('QT_PLUGIN_PATH', None)
     os.environ.pop('LD_LIBRARY_PATH', None)   # Linux/macOS 下动态库搜索路径
@@ -498,14 +482,14 @@ def initialize():
     for _pvar in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
                   "NO_PROXY", "no_proxy"):
         os.environ.pop(_pvar, None)
-    # 双保险: 通过 Chromium 命令行参数显式禁用代理
-    _chromium_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-    if "--no-proxy-server" not in _chromium_flags:
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-            (_chromium_flags + " " if _chromium_flags else "") + "--no-proxy-server"
-        )
+    if sys.platform != "win32":
+        _chromium_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+        if "--no-proxy-server" not in _chromium_flags:
+            os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+                (_chromium_flags + " " if _chromium_flags else "") + "--no-proxy-server"
+            )
+        from PyQt6.QtNetwork import QNetworkProxyFactory, QNetworkProxy
     from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtNetwork import QNetworkProxyFactory, QNetworkProxy
     from uimgr import (
         configure_application_icon,
         configure_windows_app_identity,
@@ -532,10 +516,11 @@ def initialize():
     # 显式告知 Qt (及其内嵌 Chromium) 不使用任何代理。
     # Qt 文档: "If QNetworkProxy::applicationProxy is set, it will also be
     # used for Qt WebEngine." 这是控制 Chromium 代理行为的官方 API。
-    QNetworkProxyFactory.setUseSystemConfiguration(False)
-    QNetworkProxy.setApplicationProxy(
-        QNetworkProxy(QNetworkProxy.ProxyType.NoProxy)
-    )
+    if sys.platform != "win32":
+        QNetworkProxyFactory.setUseSystemConfiguration(False)
+        QNetworkProxy.setApplicationProxy(
+            QNetworkProxy(QNetworkProxy.ProxyType.NoProxy)
+        )
 
     if genv.get(f"{genv.get('VERSION')}_first_use",True):
         # 记录安装根目录
@@ -607,6 +592,7 @@ def handle_announcement():
     if genv.get("CLOUD_ANNO")!="":
         print(f"【公告】{genv.get('CLOUD_ANNO')}")
 def cloudBuildInfo():
+    genv.set("VERSION", "")
     try:
         from buildinfo import BUILD_INFO,VERSION
         message=BUILD_INFO
@@ -776,7 +762,8 @@ def handle_download_task(task_file_path):
     progress_file = task_data.get("progress_file", "")
     control_file = task_data.get("control_file", "")
     start_args = task_data.get("start_args", "")
-    result = True
+    result = False
+    post_update_actions = None
     ui_server_process = None
     ui_server_thread = None
     stop_event = None
@@ -879,7 +866,18 @@ def handle_download_task(task_file_path):
                         f"installation={installation.distribution_id}, task={distribution_id}"
                     )
                     result = False
+                elif os.path.normcase(
+                    os.path.realpath(game.get_root_path(installation_id))
+                ) != os.path.normcase(os.path.realpath(download_root)):
+                    logger_local.error("下载期间安装根目录已变更，拒绝执行收尾和回写")
+                    core_error["value"] = "安装根目录已变更，请重新发起更新"
+                    result = False
                 else:
+                    if task_data.get("is_update", False):
+                        from install_actions import apply_post_update_actions
+                        post_update_actions = apply_post_update_actions(
+                            download_root, task_data.get("install_script"), logger_local
+                        )
                     installation.installed_version = version_code
                     installation.distribution_id = distribution_id
                     installation.content_id = content_id
@@ -894,7 +892,7 @@ def handle_download_task(task_file_path):
                     game.create_tool_launch_shortcut(
                         installation.path, installation.installation_id
                     )
-            elif game:
+            else:
                 logger_local.error(
                     f"下载完成但安装记录不存在，拒绝覆盖其他安装: {installation_id}"
                 )
@@ -947,6 +945,7 @@ def handle_download_task(task_file_path):
             "distribution_id": distribution_id,
             "target_version": version_code,
             "content_id": content_id,
+            "post_update_actions": post_update_actions,
         })
         return result
     except Exception as e:
@@ -1635,9 +1634,14 @@ def main(cli_args=None):
     # Initialize logger (assign to global logger variable)
     from logutil import setup_logger
     logger = setup_logger() 
+    if NATIVE_CRASH_LOG_PATH:
+        logger.info(f"原生故障记录文件: {NATIVE_CRASH_LOG_PATH}")
+    else:
+        logger.warning("无法启用原生故障文件记录，请检查用户目录/临时目录是否可写")
 
     try:
         cloudBuildInfo()
+        genv.set("MOCK_VERSION", getattr(cli_args, "mock_version", None))
         # hotfix gate: verify config cache can be written before importing most app modules.
         # macOS PyInstaller hotfixes are loaded via an import hook, so it must be installed
         # before initialize() pulls in channel/proxy/UI modules.
@@ -1683,10 +1687,11 @@ def main(cli_args=None):
 
         # setup_network_proxy → _set_proxy → _broadcast_env_change 可能导致
         # Qt 重新读取系统代理。必须在此之后再次显式设置 NoProxy。
-        from PyQt6.QtNetwork import QNetworkProxy
-        QNetworkProxy.setApplicationProxy(
-            QNetworkProxy(QNetworkProxy.ProxyType.NoProxy)
-        )
+        if sys.platform != "win32":
+            from PyQt6.QtNetwork import QNetworkProxy
+            QNetworkProxy.setApplicationProxy(
+                QNetworkProxy(QNetworkProxy.ProxyType.NoProxy)
+            )
         
         # The proxy runs in a background thread.
         # Keep the main thread alive (for Qt event loop or simple wait).

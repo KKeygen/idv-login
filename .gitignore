@@ -25,3 +25,6 @@ _sdk_ref/*
 .trae/
 .windsurf/
 skills-lock.json
+
+# Generated signed WebView2 loader from the pinned Microsoft SDK.
+/src/native/webview2/

@@ -125,6 +125,52 @@ class NativeTaskRegistry:
         return max(pending, key=lambda item: int(item.get("created_at", 0))) if pending else None
 
     @classmethod
+    def create_import(cls, key: str, **values) -> tuple[str, bool]:
+        with cls._lock:
+            cls._cleanup_locked(int(time.time()))
+            for task in cls._tasks.values():
+                if (task.get("kind") == "game-import" and task.get("import_key") == key
+                        and not task.get("acknowledged")):
+                    return task["task_id"], False
+            task_id = cls.create("game-import")
+            cls.update(task_id, import_key=key, cancelable=True, phase="preparing",
+                       results=[], **values)
+            return task_id, True
+
+    @classmethod
+    def import_tasks(cls) -> list[dict]:
+        with cls._lock:
+            cls._cleanup_locked(int(time.time()))
+            return [dict(task) for task in cls._tasks.values()
+                    if task.get("kind") == "game-import"]
+
+    @classmethod
+    def control_import(cls, task_id: str, action: str) -> dict:
+        with cls._lock:
+            task = cls._tasks.get(task_id)
+            if not task or task.get("kind") != "game-import":
+                raise KeyError("未找到导入任务")
+            if action == "cancel":
+                if task.get("status") != "pending" or not task.get("cancelable"):
+                    raise ValueError("导入已经提交或结束，无法取消")
+                cls.update(task_id, cancel_requested=True)
+            elif action == "acknowledge":
+                if task.get("status") != "done":
+                    raise ValueError("导入仍在后台进行，关闭向导不会取消任务")
+                cls.update(task_id, acknowledged=True)
+            else:
+                raise ValueError("不支持的导入控制操作")
+            return dict(cls._tasks[task_id])
+
+    @classmethod
+    def begin_import_commit(cls, task_id: str) -> None:
+        with cls._lock:
+            task = cls._tasks[task_id]
+            if task.get("cancel_requested"):
+                raise InterruptedError("导入已取消")
+            cls.update(task_id, cancelable=False, phase="saving")
+
+    @classmethod
     def _cleanup_locked(cls, now: int) -> None:
         expired = [
             task_id
@@ -154,6 +200,7 @@ def capabilities() -> dict:
         "task_polling": True,
         "download_progress": True,
         "download_pause_resume": True,
+        "import_tasks_v1": True,
         "platform": sys.platform,
     }
 

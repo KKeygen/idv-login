@@ -9,6 +9,7 @@ import base64
 import hashlib
 import io
 import json
+import sys
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
@@ -310,7 +311,8 @@ class BilibiliBrowser(WebBrowser):
         # 网络日志（调试用）
         if message.startswith(BILI_NET_PREFIX):
             payload = message[len(BILI_NET_PREFIX):]
-            self.logger.debug(f"[bili-net] {payload[:500]}")
+            if sys.platform != "win32":
+                self.logger.debug(f"[bili-net] {payload[:500]}")
             return
 
         # 登录成功
@@ -319,7 +321,10 @@ class BilibiliBrowser(WebBrowser):
             try:
                 data = json.loads(payload)
             except Exception:
-                self.logger.warning(f"[bili-login] JSON 解析失败: {payload[:200]}")
+                if sys.platform == "win32":
+                    self.logger.warning("[bili-login] JSON 解析失败")
+                else:
+                    self.logger.warning(f"[bili-login] JSON 解析失败: {payload[:200]}")
                 return
 
             # 密码登录响应可能嵌套在 data 字段下，统一展平到根级
@@ -408,7 +413,10 @@ class BilibiliLogin:
         qr_content = f"{redirect_url}?ticket={ticket}&fromNative=false&id={game_base_id}"
         qr_b64 = _render_qr_base64(qr_content)
 
-        self.logger.info(f"Bilibili QR 二维码已生成, ticket={ticket[:20]}...")
+        if sys.platform == "win32":
+            self.logger.info("Bilibili QR 二维码已生成")
+        else:
+            self.logger.info(f"Bilibili QR 二维码已生成, ticket={ticket[:20]}...")
         self._update_qrcode_cache("ready", qrcode_base64=qr_b64, ticket=ticket)
 
         # 3) 轮询扫码状态
