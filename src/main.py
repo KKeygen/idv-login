@@ -1295,7 +1295,7 @@ def setup_network_proxy(proxy_port):
         genv.set("URI_STARTUP_VIEW", "")
     elif proxy_mode == "global":
         # 次优先级：全局模式 → 设置系统/用户级代理
-        _set_proxy(proxy_port)
+        _set_proxy(app_state.proxy_mgr.port)
         logger.info("提示：当前使用全局代理模式，会处理本机所有网络连接。")
         if auto_games:
             # 全局模式下也启动自启游戏（它们会继承代理环境变量）
@@ -1321,8 +1321,8 @@ def setup_network_proxy(proxy_port):
     if proxy_mode == "compat":
         logger.info("兼容模式已就绪！DNS 劫持和反向代理已启动。")
     else:
-        logger.info(f"mitmproxy 代理模式已就绪！监听端口: {proxy_port}")
-    logger.info("拦截成功，您现在可以打开游戏了。游戏将通过代理自动路由。")
+        logger.info(f"mitmproxy 代理模式已就绪！监听端口: {app_state.proxy_mgr.port}")
+    logger.info("代理已就绪，等待游戏请求；尚未确认游戏流量拦截或响应改写。")
     logger.warning("如果您在之前已经打开了游戏，请关闭游戏后重新打开，否则工具不会生效！")
     logger.info("登入账号且已经··进入游戏··后，您可以关闭本工具。")
 
