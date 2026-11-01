@@ -51,6 +51,7 @@ def legacy_record_source(data: dict) -> str:
         "oppo": "loginResp", "bilibili_sdk": "loginResp",
         "honor_sdk": "unionToken", "uc_platform": "ucSession",
         "4399com": "loginResp", "360_assistant": "qt_cookie",
+        "lenovo_open": "lenovoSession",
         "baidu": "baiduSession",
     }
     field = credential_fields.get(login_channel)
@@ -496,6 +497,9 @@ class ChannelManager:
                     elif channel_name == "baidu" and item["uuid"].removeprefix("idv-").startswith("baidu-"):
                         from channelHandler.baiduChannelHandler import baiduChannel
                         self.channels.append(baiduChannel.from_dict(item))
+                    elif channel_name == "lenovo_open":
+                        from channelHandler.lenovoChannelHandler import lenovoChannel
+                        self.channels.append(lenovoChannel.from_dict(item))
                     elif channel_name == "360_assistant" and item["uuid"].removeprefix("idv-").startswith("360-"):
                         from channelHandler.qihooChannelHandler import qihooChannel
                         tmpChannel: qihooChannel = qihooChannel.from_dict(item)
@@ -686,6 +690,10 @@ class ChannelManager:
                 from channelHandler.baiduChannelHandler import baiduChannel
                 tmp_channel = baiduChannel(tmpData, game_id=game_id)
                 tmp_channel.uuid = f"baidu-{tmp_channel.uuid}"
+            elif channle_name == "lenovo_open":
+                from channelHandler.lenovoChannelHandler import lenovoChannel
+                tmp_channel = lenovoChannel(tmpData, game_id=game_id)
+                tmp_channel.uuid = f"lenovo-{tmp_channel.uuid}"
             elif channle_name == "360_assistant":
                 from channelHandler.qihooChannelHandler import qihooChannel
                 tmp_channel: qihooChannel = qihooChannel(tmpData, game_id=game_id)
@@ -840,27 +848,51 @@ class ChannelManager:
                 return data
         return False
 
+    def _sauth_matches(self, data, game):
+        key = (game, data.get('login_channel'), str(data.get('sdkuid', '')))
+        lenovo = key[1] == 'lenovo_open'
+        session = data.get('sessionid')
+        if lenovo and (not isinstance(session, str) or not session):
+            return []
+        matches = []
+        for record in self.channels:
+            try:
+                if record.sdk_identity(game) != key:
+                    continue
+            except ValueError as error:
+                record.report_login_failure(game, 'sauth.match', '已跳过身份字段无效的记录', error, detail=str(error))
+                continue
+            if lenovo:
+                import base64
+                from urllib.parse import unquote
+                try:
+                    if record.record_source == 'scan':
+                        extra = (record.user_info.get('pc_ext_info') or record.ext_info).get('extra_unisdk_data')
+                    else:
+                        extra = record.unisdk_cache[game]['packet']['extra_unisdk_data']
+                    extra = json.loads(extra) if isinstance(extra, str) else extra
+                    auth = json.loads(base64.b64decode(unquote(extra['SAUTH_JSON'])))
+                    if session != auth.get('sessionid'):
+                        continue
+                except (KeyError, TypeError, ValueError, UnicodeError, AttributeError) as error:
+                    record.report_login_failure(game, 'sauth.match', '已跳过登录凭据无效的记录', error)
+                    continue
+            matches.append(record)
+        return [] if lenovo and len(matches) != 1 else matches
+
     def record_sauth(self, data, success):
         """Login state belongs to Channel, with or without the optional DB plugin."""
         if not isinstance(data, dict) or data.get('login_channel') == 'netease':
             return False
         from channelHandler.channelUtils import getShortGameId
         game = getShortGameId(str(data.get('gameid', '')))
-        key = (game, data.get('login_channel'), str(data.get('sdkuid', '')))
-        matches = []
-        for record in self.channels:
-            try:
-                if record.sdk_identity(game) == key:
-                    matches.append(record)
-            except ValueError as error:
-                record.report_login_failure(game, 'sauth.match', '已跳过身份字段无效的记录', error, detail=str(error))
-                continue
+        matches = self._sauth_matches(data, game)
         if not matches:
             return False
         if success:
             from account_list_policy import AccountListPolicy
             policy = AccountListPolicy(self)
-            canonical = policy.canonical_uuid(matches[0], game)
+            canonical = None if data.get('login_channel') == 'lenovo_open' else policy.canonical_uuid(matches[0], game)
             record = self.query_channel(canonical) if canonical else matches[0]
             record.last_login_time = time.time()
             try:

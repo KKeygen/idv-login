@@ -536,7 +536,9 @@ class MpayDBSync:
         role = self._menu_role(key)
         expired = False
         if role is None:
-            for record in self.manager.channels:
+            records = (self.manager._sauth_matches(data, game)
+                       if key[1] == 'lenovo_open' else self.manager.channels)
+            for record in records:
                 try:
                     if self._target(record, game) == key and self.is_expired(record.uuid, game):
                         expired = True
