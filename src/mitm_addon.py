@@ -179,12 +179,14 @@ class IDVLoginAddon:
                 except (TypeError, ValueError, UnicodeDecodeError):
                     data = None
                 sync = getattr(app_state.channels_helper, "db_sync", None)
-                if isinstance(data, dict) and sync and sync.intercept_auth(data):
+                action = sync.intercept_auth(data) if isinstance(data, dict) and sync else None
+                if action:
                     key = (getShortGameId(str(data.get('gameid', ''))),
                            str(data.get('login_channel', '')), str(data.get('sdkuid', '')))
                     self._pending_tool_auth.discard(key)
                     flow.metadata["idv_local_auth_cancel"] = True
                     self._cancel_login(flow)
+                    app_state.run_on_main_thread(action)
             return
 
         # Overseas MPay uses a different API namespace.  Keep its
