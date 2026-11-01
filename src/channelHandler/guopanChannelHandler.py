@@ -177,6 +177,12 @@ class guopanChannel(channelmgr.channel):
                 return self._require_profile(self._protocol("login", username, password))
             self._network(operation, callback)
 
+        def send_sms(phone, callback):
+            self._network(lambda: self._protocol("request_sms", phone), callback)
+
+        def sms_authenticate(phone, code, callback):
+            self._network(lambda: self._require_profile(self._protocol("login_sms", phone, code)), callback)
+
         def select_account(session, game_uin, callback):
             self._network(lambda: self._protocol("select_account", session, game_uin), callback)
 
@@ -195,7 +201,8 @@ class guopanChannel(channelmgr.channel):
             return on_complete(result) if on_complete else result
 
         try:
-            dialog = GuopanLoginDialog(authenticate, select_account, finished if on_complete else None)
+            dialog = GuopanLoginDialog(authenticate, select_account, finished if on_complete else None,
+                                       send_sms=send_sms, sms_authenticate=sms_authenticate)
             self._active_dialog = dialog
             if on_complete:
                 dialog.show()

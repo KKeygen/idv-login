@@ -330,13 +330,17 @@ class GuopanClient:
         code = _int32(result, 1, required=True)
         _int32(result, 2, required=True)
         if code:
-            _fail(stage, code=code, kind="server")
+            kind = ("account_cancellation" if code == 1035 and
+                    stage in ("login102", "login105") else "server")
+            _fail(stage, code=code, kind=kind)
         return result
 
-    def _login_request(self, subtype, username, password_hash=None):
+    def _login_request(self, subtype, username, password_hash=None, *, sms_code=None):
         body = _uint(1, subtype) + _blob(2, self._common()) + _blob(3, username)
         if password_hash is not None:
             body += _blob(4, password_hash)
+        if sms_code is not None:
+            body += _blob(5, sms_code)
         fields = _message(self._request(15, 17, body, f"login{subtype}"), 18)
         _int32(fields, 1, required=True)
         return fields
@@ -389,6 +393,25 @@ class GuopanClient:
             self._username = username
             digest = hashlib.md5((salt + password).encode("utf-8")).hexdigest()
             self._adopt_auth(self._login_request(102, username, digest))
+            return self._profile_accounts()
+        except Exception:
+            self._reset()
+            raise
+
+    def request_sms(self, phone):
+        self._reset()
+        phone = _input_text(phone, "sms_send", maximum=64)
+        self._request(3, 5, _blob(1, self._common()) + _blob(2, phone) +
+                      _uint(3, 108), "sms_send")
+        return {"sent": True}
+
+    def login_sms(self, phone, code):
+        self._reset()
+        phone = _input_text(phone, "sms_login", maximum=64)
+        code = _input_text(code, "sms_login", maximum=64)
+        try:
+            self._adopt_auth(self._login_request(105, phone, sms_code=code))
+            self._username = phone
             return self._profile_accounts()
         except Exception:
             self._reset()
