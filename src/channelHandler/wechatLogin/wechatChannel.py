@@ -35,8 +35,22 @@ class WechatLogin:
         }
         genv.set("WECHAT_QRCODE_CACHE", cache)
 
-    def webLogin(self):
-        self._update_qrcode_cache("loading")
+    def webLogin(self, *, cancel_event=None, on_qrcode=None):
+        def cancelled():
+            return cancel_event is not None and cancel_event.is_set()
+
+        def publish(status, qrcode_base64="", uuid=""):
+            if cancelled():
+                return
+            if on_qrcode is not None:
+                on_qrcode({"status": status, "qrcode_base64": qrcode_base64,
+                           "uuid": uuid, "timestamp": int(time.time())})
+            else:
+                self._update_qrcode_cache(status, qrcode_base64, uuid)
+
+        if cancelled():
+            return None
+        publish("loading")
         ts=str(int(time.time()*1000))
         qrcodeData = {
             "noncestr":"!!freeSoftwareDoNOTSell-idv-login!!"+ts,
@@ -48,7 +62,10 @@ class WechatLogin:
             "timestamp":ts
         }
         
-        r=requests.get(f"https://ysdk.qq.com/auth/wx_scan_code_login",params=qrcodeData,verify=should_verify_ssl())
+        r=requests.get(f"https://ysdk.qq.com/auth/wx_scan_code_login",params=qrcodeData,
+                       verify=should_verify_ssl(), timeout=(5, 15))
+        if cancelled():
+            return None
         if not r.status_code==200 or not r.json()['ret']==0:
             self.logger.error(f"微信扫码请求创建失败, status={r.status_code}, ret={r.json().get('ret')}")
             return False
@@ -58,34 +75,45 @@ class WechatLogin:
         rjson.pop("ret")
         #https://open.weixin.qq.com/connect/sdk/qrconnect
         r=requests.get(f"https://open.weixin.qq.com/connect/sdk/qrconnect",params=rjson,
-                       headers={"accept-encoding":"gzip",},verify=should_verify_ssl())
+                       headers={"accept-encoding":"gzip",},verify=should_verify_ssl(), timeout=(5, 15))
+        if cancelled():
+            return None
         #use utf-8
         r.encoding="utf-8"
 
         #get qrcode img
         qrcode=r.json().get("qrcode").get("qrcodebase64")
         uuid=r.json().get("uuid")
-        self._update_qrcode_cache("ready", qrcode_base64=qrcode, uuid=uuid)
+        publish("ready", qrcode_base64=qrcode, uuid=uuid)
 
 
         while True:
-            r=requests.get(f"https://long.open.weixin.qq.com/connect/l/qrconnect?f=json&uuid={uuid}",verify=should_verify_ssl())
+            if cancelled():
+                return None
+            r=requests.get(f"https://long.open.weixin.qq.com/connect/l/qrconnect?f=json&uuid={uuid}",
+                           verify=should_verify_ssl(), timeout=(5, 35))
+            if cancelled():
+                return None
             poll = r.json()
             status = str(poll.get("wx_errcode", ""))
             if status == "403":
-                self._update_qrcode_cache("cancelled", uuid=uuid)
+                publish("cancelled", uuid=uuid)
                 return None
             if status == "402":
-                self._update_qrcode_cache("failed", uuid=uuid)
+                publish("failed", uuid=uuid)
                 return False
             if r.status_code != 200:
-                self._update_qrcode_cache("failed", uuid=uuid)
+                publish("failed", uuid=uuid)
                 return False
             if poll.get("wx_code"):
                 self.logger.info("微信扫码成功")
-                self._update_qrcode_cache("scanned", uuid=uuid)
+                publish("scanned", uuid=uuid)
                 break
-            time.sleep(1)
+            if cancel_event is not None:
+                if cancel_event.wait(1):
+                    return None
+            else:
+                time.sleep(1)
 
         verifyData={
             "channel":"00000000",
@@ -100,12 +128,17 @@ class WechatLogin:
             "appid":self.wx_appid,
             "timestamp":ts
         }
-        r=requests.get("https://ysdk.qq.com/auth/wx_verify_code",params=verifyData,verify=should_verify_ssl())
+        if cancelled():
+            return None
+        r=requests.get("https://ysdk.qq.com/auth/wx_verify_code",params=verifyData,
+                       verify=should_verify_ssl(), timeout=(5, 15))
+        if cancelled():
+            return None
         if not r.status_code==200 or not r.json()['ret']==0:
             self.logger.error(f"扫码校验失败, status={r.status_code}, ret={r.json().get('ret')}")
-            self._update_qrcode_cache("failed", uuid=uuid)
+            publish("failed", uuid=uuid)
             return False
-        self._update_qrcode_cache("verified", uuid=uuid)
+        publish("verified", uuid=uuid)
         return r.json()
 
 

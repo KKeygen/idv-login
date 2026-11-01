@@ -134,6 +134,7 @@ class MpayDBSync:
         # Successful writes only: (path, SDK identity, created by this process).
         # No DB addresses, credentials, display-name copies or Channel bindings.
         self.projected = set()
+        self._relogins = {}
 
     def paths(self, game):
         return sorted(self.root.glob(f'*-g-{getShortGameId(game)}-64-mpay.db'))
@@ -534,29 +535,38 @@ class MpayDBSync:
         if not any(projected == key for _, projected, _ in self.projected):
             return False
         role = self._menu_role(key)
-        expired = False
+        expired_record = None
         if role is None:
             records = (self.manager._sauth_matches(data, game)
                        if key[1] == 'lenovo_open' else self.manager.channels)
             for record in records:
                 try:
                     if self._target(record, game) == key and self.is_expired(record.uuid, game):
-                        expired = True
+                        expired_record = record
                         break
                 except ValueError as error:
                     self._record_error(record, game, error, stage='menu.identity')
                     continue
-        if role is None and not expired:
+        if role is None and expired_record is None:
             return False
         import app_state
         if role == 'help':
             import webbrowser
             cloud = app_state.cloud_res
             url = cloud.get_by_game_id_and_key(game, 'account_help_url') if cloud else None
-            app_state.run_on_main_thread(lambda: webbrowser.open(url or 'https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e'))
-        else:
-            app_state.run_on_main_thread(lambda: app_state.ui_mgr.open_for_game(game, 'accounts') if app_state.ui_mgr else None)
-        return True
+            return lambda: webbrowser.open(url or 'https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e')
+        if role is not None:
+            return lambda: app_state.ui_mgr.open_for_game(game, 'accounts') if app_state.ui_mgr else None
+        return lambda: self._relogin_expired(expired_record, game)
+
+    def _relogin_expired(self, record, game):
+        if record.uuid in self._relogins or not self.is_expired(record.uuid, game):
+            return
+        from channel_relogin import ExpiredChannelLogin
+        attempt = ExpiredChannelLogin(self, record, game,
+            lambda: self._relogins.pop(record.uuid, None))
+        self._relogins[record.uuid] = attempt
+        attempt.start()
 
     def reconcile_game_changes(self):
         missing = set()

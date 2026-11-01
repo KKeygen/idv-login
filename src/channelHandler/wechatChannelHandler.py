@@ -116,41 +116,78 @@ class wechatChannel(channelmgr.channel):
         self.uniData = None
         self.session: myappVeriftResp = myappVeriftResp(session) if session != None else None
 
-    def request_user_login(self, on_complete=None):
+    def request_user_login(self, on_complete=None, *, cancel_event=None, on_qrcode=None):
         """本次扫码登录：True 成功，False 失败，None 用户取消。"""
-        def _do_login():
+        def cancelled():
+            return cancel_event is not None and cancel_event.is_set()
+
+        def qrcode_ready(data):
+            snapshot = dict(data)
+            def deliver():
+                if not cancelled():
+                    on_qrcode(snapshot)
+            app_state.run_on_main_thread(deliver)
+
+        def fetch():
             try:
+                if cancelled():
+                    return None
                 genv.set("GLOB_LOGIN_UUID", self.uuid)
-                resp = self.wechatLogin.webLogin()
+                options = {}
+                if cancel_event is not None:
+                    options["cancel_event"] = cancel_event
+                if on_qrcode is not None:
+                    options["on_qrcode"] = qrcode_ready
+                resp = self.wechatLogin.webLogin(**options)
+                if cancelled():
+                    return None
                 if resp is None or resp is False:
                     return resp
                 if not isinstance(resp, dict) or not all(
                     resp.get(key) for key in ("atk", "openid", "atk_expire")
                 ):
                     return False
-                self.session = myappVeriftResp(resp)
-                self.token_issued_at = int(time.time())
-                self.mark_manual_login_success()
+                nickname = None
                 try:
                     r = requests.get(
-                        f"https://api.weixin.qq.com/sns/userinfo?access_token={self.session.atk}&openid={self.session.openid}",
-                        verify=should_verify_ssl()
+                        f"https://api.weixin.qq.com/sns/userinfo?access_token={resp['atk']}&openid={resp['openid']}",
+                        verify=should_verify_ssl(), timeout=(5, 15)
                     )
                     nickname = r.json().get("nickname")
-                    if nickname:
-                        self.name = nickname
                 except Exception:
                     pass
+                return None if cancelled() else (resp, nickname)
+            except Exception:
+                if cancelled():
+                    return None
+                self.logger.error("微信扫码登录失败")
+                return False
+
+        def accept(result):
+            if cancelled():
+                return None
+            if result is None or result is False:
+                return result
+            try:
+                resp, nickname = result
+                self.session = myappVeriftResp(resp)
+                self.token_issued_at = int(time.time())
+                if nickname:
+                    self.name = nickname
+                self.mark_manual_login_success()
                 return True
             except Exception:
-                self.logger.error("微信扫码登录失败")
+                self.logger.error("微信扫码登录结果保存失败")
                 return False
 
         if on_complete is not None:
             import threading
-            threading.Thread(target=lambda: on_complete(_do_login())).start()
+            def worker():
+                result = fetch()
+                app_state.run_on_main_thread(lambda: on_complete(accept(result)))
+            threading.Thread(target=worker, daemon=True).start()
             return None
-        return _do_login()
+        return accept(fetch())
 
     def _refresh_session(self):
         """仅用已有凭证续期；失败时保留原凭证。"""
