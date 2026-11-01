@@ -981,7 +981,6 @@ class Game:
                             os.environ[k] = v
 
                         import ctypes
-                        SEE_MASK_NOCLOSEPROCESS = 0x00000040
                         SEE_MASK_NOASYNC = 0x00000100
                         
                         class SHELLEXECUTEINFO(ctypes.Structure):
@@ -1005,7 +1004,7 @@ class Game:
 
                         shell_info = SHELLEXECUTEINFO()
                         shell_info.cbSize = ctypes.sizeof(shell_info)
-                        shell_info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC
+                        shell_info.fMask = SEE_MASK_NOASYNC
                         shell_info.lpVerb = "open"
                         shell_info.lpFile = game_path
                         shell_info.lpDirectory = game_dir
