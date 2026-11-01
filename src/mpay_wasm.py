@@ -7,7 +7,7 @@ from pathlib import Path
 
 import wasmtime
 
-OPERATIONS = {"rename_account": 4, "put_account": 5, "delete_account": 6, "list_accounts": 7}
+OPERATIONS = {"rename_account": 4, "put_account": 5, "delete_account": 6, "list_accounts": 7, "native_head": 8}
 MAX_DB_BYTES = 32 * 1024 * 1024
 
 
@@ -15,8 +15,8 @@ class MpayWasm:
     def __init__(self, path: Path):
         raw = path.read_bytes()
         manifest = json.loads(path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
-        if manifest["abi"] != 4:
-            raise ValueError("MPay Wasm ABI 4 is required; rebuild and promote the matching account primitive artifact")
+        if manifest["abi"] != 6:
+            raise ValueError("MPay Wasm ABI 6 is required; rebuild and promote the matching account primitive artifact")
         if hashlib.sha256(raw).hexdigest() != manifest["sha256"]:
             raise ValueError("MPay Wasm artifact hash mismatch")
         config = wasmtime.Config()

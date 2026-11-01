@@ -1181,7 +1181,6 @@ class ChannelManager:
                             if result:
                                 saved = False
                                 try:
-                                    channel.last_login_time = time.time()
                                     self.save_records()
                                     saved = True
                                     if self.db_sync:

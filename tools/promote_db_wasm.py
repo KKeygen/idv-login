@@ -12,7 +12,7 @@ manifest = json.loads((args.artifact / "idv-db.manifest.json").read_text())
 binary = (args.artifact / "idv-db.wasm").read_bytes()
 if not manifest["protected"] or manifest["source_commit"] == "local-development":
     raise SystemExit("Only protected cloud-built Wasm may be distributed")
-if manifest["abi"] != 4 or hashlib.sha256(binary).hexdigest() != manifest["sha256"]:
+if manifest["abi"] != 6 or hashlib.sha256(binary).hexdigest() != manifest["sha256"]:
     raise SystemExit("Wasm artifact hash/ABI mismatch")
 target = Path(__file__).resolve().parents[1] / "src" / "resources"
 target.mkdir(exist_ok=True)
