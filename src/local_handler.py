@@ -210,11 +210,15 @@ class LocalRequestHandler:
         return status, headers, body
 
     def _health(self, args, body, method):
+        version = genv.get("VERSION", "")
+        if not version:
+            mock_version = genv.get("MOCK_VERSION")
+            version = "v6.3.3-beta" if mock_version is None else mock_version
         return self._json_response(200, {
             "success": True,
             "status": "ok",
             "installation_model_version": 1,
-            "version": genv.get("VERSION", ""),
+            "version": version,
         })
 
     @staticmethod

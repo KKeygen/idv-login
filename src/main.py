@@ -39,6 +39,7 @@ def parse_command_line_args():
     arg_parser.add_argument('--open-ui', action='store_true', help='启动后直接打开渠道服管理界面')
     arg_parser.add_argument('--proxy-port', type=int, default=10717, help='mitmproxy 监听端口 (默认 10717)')
     arg_parser.add_argument('--debug', action='store_true', help='开发调试：使用 mitmweb 打开 Web 代理界面 (默认 http://127.0.0.1:8081/)')
+    arg_parser.add_argument('--mock-version', default=None, help='源码调试时向前端模拟工具版本（默认 v6.3.3-beta，不影响更新策略）')
     return arg_parser.parse_args()
 
 
@@ -244,7 +245,10 @@ def handle_exit():
     print("再见!")
 
 def handle_update():
-
+    version = str(genv.get("VERSION", "") or "").strip().lower()
+    if not version or "dev" in version or "main" in version:
+        print("【在线更新】当前版本为开发版本，更新功能已关闭。")
+        return
     # 延后导入：避免在工作目录切换前导入 cloudRes/logutil 导致 log.txt 写入启动目录（如 bat 文件夹）
     from cloudRes import CloudRes
 
@@ -253,9 +257,6 @@ def handle_update():
 
     ignoredVersions=genv.get("ignoredVersions",[])
     #ignoredVersions=[]
-    if "dev" in genv.get("VERSION","v5.4.0").lower() or "main" in genv.get("VERSION","v5.4.0").lower():
-        print("【在线更新】当前版本为开发版本，更新功能已关闭。")
-        return
     if genv.get("CLOUD_VERSION")==genv.get("VERSION"):
         print("【在线更新】当前版本已是最新版本。")
         return
@@ -591,6 +592,7 @@ def handle_announcement():
     if genv.get("CLOUD_ANNO")!="":
         print(f"【公告】{genv.get('CLOUD_ANNO')}")
 def cloudBuildInfo():
+    genv.set("VERSION", "")
     try:
         from buildinfo import BUILD_INFO,VERSION
         message=BUILD_INFO
@@ -1639,6 +1641,7 @@ def main(cli_args=None):
 
     try:
         cloudBuildInfo()
+        genv.set("MOCK_VERSION", getattr(cli_args, "mock_version", None))
         # hotfix gate: verify config cache can be written before importing most app modules.
         # macOS PyInstaller hotfixes are loaded via an import hook, so it must be installed
         # before initialize() pulls in channel/proxy/UI modules.
