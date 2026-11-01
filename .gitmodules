@@ -1,0 +1,3 @@
+[submodule "tools/web-tools"]
+	path = tools/web-tools
+	url = https://github.com/KKeygen/webJumper.git
