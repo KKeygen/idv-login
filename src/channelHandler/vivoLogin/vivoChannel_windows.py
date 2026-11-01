@@ -119,7 +119,7 @@ class VivoLogin:
         self.cookies = cookies_for_url(records, VIVO_GET)
         cookies_for_url(records, VIVO_USE)
         self.cookieRecords = None if self._synthetic_cookies else records
-        if self.cookies != state[0]:
+        if self.cookies != state[0] or self.cookieRecords != state[1]:
             self.logger.info("VIVO 登录 Cookie 已更新")
         self._http_state = (dict(self.cookies), None if self.cookieRecords is None else
                             [dict(cookie) for cookie in self.cookieRecords])
