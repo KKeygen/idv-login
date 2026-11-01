@@ -90,6 +90,7 @@ def handler_type(interface):
 class Page:
     id:int
     hwnd:int
+    opener:int=0
     widget:object=None
     controller:object=None
     web:object=None
@@ -256,7 +257,7 @@ class ComHost:
             args.put_Handled(True);url=text(args,'get_Uri')
             if self.closing or not self.allowed(page,url):
                 self.emit('navigation',page_id=page.id,url=url,is_frame=False,allowed=False,kind='popup',navigation_id=page.navigation);return
-            pid=self.next_page;self.next_page+=1;self.create_page(pid,'',args)
+            pid=self.next_page;self.next_page+=1;self.create_page(pid,'',args,opener=page.id)
         sub(web,'NewWindowRequested','ICoreWebView2NewWindowRequestedEventHandler',popup)
         sub(web,'WindowCloseRequested','ICoreWebView2WindowCloseRequestedEventHandler',lambda s,a:self.later(lambda:self.close_page(page.id)))
         def failed(sender,args):
@@ -265,9 +266,9 @@ class ComHost:
         sub(web,'PermissionRequested','ICoreWebView2PermissionRequestedEventHandler',lambda s,a:a.put_State(2))
         sub(page.web4,'DownloadStarting','ICoreWebView2DownloadStartingEventHandler',lambda s,a:a.put_Cancel(True))
 
-    def create_page(self,pid,url,popup=None):
+    def create_page(self,pid,url,popup=None,*,opener=1):
         if self.closing or self.closed:check(0x80004004)
-        page=Page(pid,self.parent);self.pages[pid]=page
+        page=Page(pid,self.parent,opener=opener if pid!=1 else 0);self.pages[pid]=page
         if popup:page.popup=owned(popup);page.deferral=popup.GetDeferral()
         if pid!=1:
             from PyQt6.QtWidgets import QWidget
@@ -285,7 +286,10 @@ class ComHost:
                 def moveEvent(widget,event):
                     if page.controller:page.controller.NotifyParentWindowPositionChanged()
                     super().moveEvent(event)
-            widget=Popup();widget.setWindowTitle('渠道登录');widget.resize(900,700)
+            opener_page=self.pages.get(opener)
+            owner=QWidget.find(opener_page.hwnd if opener_page else self.parent)
+            widget=Popup(owner.window() if owner else None,Qt.WindowType.Window)
+            widget.setWindowTitle('渠道登录');widget.resize(900,700)
             widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
             if popup:
                 features=popup.get_WindowFeatures()
@@ -312,8 +316,8 @@ class ComHost:
                     if page.popup:page.popup.put_NewWindow(page.web)
                     self.network(page);page.ready=True
                     if page.deferral:page.deferral.Complete();page.deferral=None;page.popup=None
-                    if page.widget:page.widget.show()
                     page.controller.put_IsVisible(True)
+                    if page.widget:self.focus(pid,0)
                     self.emit('ready' if pid==1 else 'page',page_id=pid,runtime_version=self.runtime)
                     if url:page.web.Navigate(url)
                 except Exception as error:
@@ -483,6 +487,8 @@ class ComHost:
     def close_page(self,pid):
         page=self.pages.get(pid)
         if not page:return
+        for child in tuple(self.pages.values()):
+            if child.opener==pid:self.close_page(child.id)
         for rid,item in tuple(self.resources.items()):
             if item[3]==pid:self.respond(rid,410,'Gone','',b'')
         self.dispose_page(page);self.pages.pop(pid,None)
@@ -492,7 +498,7 @@ class ComHost:
         if self.closing or self.closed:return
         self.closing=True;self.deadline=time.monotonic()+30
         for rid in tuple(self.resources):self.respond(rid,410,'Gone','',b'')
-        for page in tuple(self.pages.values()):self.dispose_page(page)
+        for page in reversed(tuple(self.pages.values())):self.dispose_page(page)
         self.pages.clear();self.later(self.maybe_closed)
 
     def maybe_closed(self):
