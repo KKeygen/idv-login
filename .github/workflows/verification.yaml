@@ -1,96 +1,56 @@
 name: Update Verification Data
 
 permissions:
-  contents: write
+  contents: read
 
 on:
   push:
     branches: [main]
     paths:
-      - 'src/**'
-      - 'tools/点我启动工具.bat'
-      - 'tools/generate_verification.py'
-  workflow_dispatch:
-
-concurrency:
-  group: verification-${{ github.ref }}
-  cancel-in-progress: true
+      - 'assets/cloudRes.json'
 
 jobs:
-  update-verification:
-    runs-on: windows-latest
-    env:
-      PYTHON_VERSION: "3.12.10"
-
+  plan-hotfix:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Cache Python Embedded
-        id: cache-python
-        uses: actions/cache@v4
+      - uses: actions/checkout@v4
         with:
-          path: python-embed
-          key: windows-python-embed-${{ env.PYTHON_VERSION }}
+          fetch-depth: 0
+      - name: Compare published hotfix references
+        id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: python3 tools/verification_publication.py plan-hotfix --before "$BEFORE" --after "$AFTER" --output hotfix-plan.json
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.changed == 'true'
+        with:
+          name: verification-hotfix-plan
+          path: hotfix-plan.json
+          retention-days: 7
 
-      - name: Download Python Embedded
-        if: steps.cache-python.outputs.cache-hit != 'true'
-        run: |
-          Invoke-WebRequest -Uri https://www.python.org/ftp/python/${{ env.PYTHON_VERSION }}/python-${{ env.PYTHON_VERSION }}-embed-amd64.zip -OutFile python-embed.zip
-          Expand-Archive python-embed.zip -DestinationPath python-embed
-
-          $pthFile = Get-ChildItem -Path python-embed -Filter "python*._pth" | Select-Object -First 1
-          $content = Get-Content $pthFile.FullName
-          if ($content -match "#\s*import site") {
-              $content = $content -replace "#\s*import site", "import site"
-          } else {
-              $content += "import site"
-          }
-          $content | Set-Content $pthFile.FullName -Encoding UTF8
-        shell: pwsh
-
-      - name: Compile Python files to .pyc
-        run: .\python-embed\python.exe -m compileall src
-        shell: pwsh
-
-      - name: Generate verification data
-        run: |
-            .\python-embed\python.exe tools/generate_verification.py `
-              --src-root src `
-              --start-bat tools/点我启动工具.bat `
-              --verification-file ext/verification.json `
-              --commit-sha "${{ github.sha }}"
-        shell: pwsh
-
-      - name: Commit verification data
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ext/verification.json
-          if (git diff --cached --quiet) {
-            echo "No verification changes to commit."
-          } else {
-            git commit -m "chore: update ext/verification.json"
-            $max_retries = 3
-            $retry_count = 0
-            $success = $false
-            while (-not $success -and $retry_count -lt $max_retries) {
-              git pull origin ${{ github.ref_name }} --rebase
-              git push origin HEAD:${{ github.ref_name }}
-              if ($LASTEXITCODE -eq 0) {
-                $success = $true
-              } else {
-                $retry_count++
-                Start-Sleep -Seconds (5 * $retry_count)
-              }
-            }
-            if (-not $success) {
-              Write-Error "Failed to push after $max_retries retries."
-              exit 1
-            }
-          }
-        shell: pwsh
-
+  update-verification:
+    needs: plan-hotfix
+    if: needs.plan-hotfix.outputs.changed == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+      - uses: actions/download-artifact@v4
+        with:
+          name: verification-hotfix-plan
+      - name: Hash only newly referenced hotfix files
+        run: python tools/verification_publication.py generate-hotfix --plan hotfix-plan.json --output hotfix-verification.json
+      - name: Accumulate verification records
+        run: python tools/verification_publication.py publish --delta hotfix-verification.json
 
   mirror:
     needs: update-verification

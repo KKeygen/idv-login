@@ -10,6 +10,10 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def source_sha256(data: bytes) -> str:
+    return sha256_bytes(data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+
+
 def module_from_py(src_root: Path, file_path: Path) -> str:
     rel = file_path.relative_to(src_root)
     return "src." + ".".join(rel.with_suffix("").parts)
@@ -48,11 +52,11 @@ def load_existing_records(path: Path) -> list:
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
-    if isinstance(data, list):
-        return data
-    return []
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid verification catalog: {path}") from exc
+    if not isinstance(data, list):
+        raise ValueError(f"Verification catalog must be a list: {path}")
+    return data
 
 
 def record_key(record: dict) -> tuple[str, str, str]:
@@ -69,6 +73,7 @@ def main() -> None:
     parser.add_argument("--start-bat", default="tools/点我启动工具.bat", help="Start bat path to record.")
     parser.add_argument("--verification-file", default="ext/verification.json", help="Output verification json path.")
     parser.add_argument("--commit-sha", required=True, help="Git commit sha for current build.")
+    parser.add_argument("--staged-root", help="Final shipped src directory; include only its pyc files.")
     args = parser.parse_args()
 
     src_root = Path(args.src_root).resolve()
@@ -78,17 +83,30 @@ def main() -> None:
     existing = load_existing_records(verification_file)
     latest_by_key: dict[tuple[str, str, str], dict] = {}
     for item in existing:
-        if isinstance(item, dict) and item.get("module") and item.get("source_sha256"):
-            latest_by_key[record_key(item)] = item
+        if not isinstance(item, dict) or not item.get("module") or not item.get("source_sha256"):
+            raise ValueError("Malformed existing verification record; refusing to replace catalog")
+        latest_by_key.setdefault(record_key(item), item)
 
-    for file_path in sorted(p for p in src_root.rglob("*.py") if p.is_file()):
+    staged_root = Path(args.staged_root).resolve() if args.staged_root else None
+    if staged_root is not None:
+        if not staged_root.is_dir():
+            raise FileNotFoundError(f"Staged source directory not found: {staged_root}")
+        source_files = [src_root / p.relative_to(staged_root).with_suffix(".py")
+                        for p in sorted(staged_root.rglob("*.pyc")) if "__pycache__" not in p.parts]
+        if not source_files:
+            raise ValueError("The staged release contains no application pyc files")
+    else:
+        source_files = sorted(p for p in src_root.rglob("*.py") if p.is_file())
+
+    for file_path in source_files:
         rel_parts = file_path.relative_to(src_root).parts
         if "__pycache__" in rel_parts:
             continue
 
-        source_hash = sha256_bytes(file_path.read_bytes())
+        source_hash = source_sha256(file_path.read_bytes())
 
-        pyc_path = pyc_path_for_source(file_path)
+        pyc_path = (staged_root / file_path.relative_to(src_root).with_suffix(".pyc")
+                    if staged_root is not None else pyc_path_for_source(file_path))
         if not pyc_path.exists():
             raise FileNotFoundError(f"Missing compiled pyc for {file_path}: expected {pyc_path}")
 
@@ -99,7 +117,7 @@ def main() -> None:
             "commit_sha": args.commit_sha,
         }
 
-        latest_by_key[record_key(record)] = record
+        latest_by_key.setdefault(record_key(record), record)
 
     if start_bat.exists() and start_bat.is_file():
         bat_record = {
@@ -107,7 +125,7 @@ def main() -> None:
             "source_sha256": sha256_bytes(start_bat.read_bytes()),
             "commit_sha": args.commit_sha,
         }
-        latest_by_key[record_key(bat_record)] = bat_record
+        latest_by_key.setdefault(record_key(bat_record), bat_record)
     else:
         raise FileNotFoundError(f"Start bat not found: {start_bat}")
 

@@ -145,6 +145,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Qt packaging smoke check failed ($LASTEXITCODE)" }
         shell: pwsh
 
+      - name: Record verification from the final staged application
+        run: |
+          $commitSha = git rev-parse HEAD
+          .\python-embed\python.exe tools/generate_verification.py `
+            --src-root src `
+            --staged-root dist/src `
+            --start-bat dist/点我启动工具.bat `
+            --verification-file build-reports/release-verification.json `
+            --commit-sha "$commitSha"
+          if ($LASTEXITCODE -ne 0) { throw "Release verification generation failed" }
+        shell: pwsh
+
+      - name: Archive release verification delta
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-verification
+          path: build-reports/release-verification.json
+          if-no-files-found: error
+
       - name: Archive Qt size report
         if: always()
         uses: actions/upload-artifact@v4
@@ -222,8 +241,24 @@ jobs:
           path: |
             dist/idv-login-${{github.ref_name}}-mac
 
+  publish-verification:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-verification
+      - name: Accumulate this release's exact build records
+        run: python3 tools/verification_publication.py publish --delta release-verification.json
+
+  mirror-verification:
+    needs: publish-verification
+    uses: ./.github/workflows/mirror.yaml
+    secrets: inherit
+
   release:
-    needs: [prepare, build-windows, build-macos]
+    needs: [prepare, build-windows, build-macos, publish-verification]
     runs-on: ubuntu-latest
 
     steps:
