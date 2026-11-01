@@ -1,5 +1,5 @@
 {
-  "lastModified": 1793513087,
+  "lastModified": 1793520265,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -3267,6 +3267,23 @@
         "version_code": 157,
         "version_name": "1.5.80",
         "certification_app_id": "202105120001"
+      },
+      "min_version": "6.3.3-beta"
+    },
+    {
+      "package_name": "com.netease.dwrg.guopan",
+      "app_channel": "guopan",
+      "game_id": "h55",
+      "log_key": "SvShWXDcmogbZJoU3YWe3Su3Ci-mCRcw",
+      "channel": "guopan",
+      "name": "果盘账号",
+      "guopan": {
+        "app_id": "115500",
+        "app_key": "H3AJ2KYPBXD1USDH",
+        "protocol_app_channel": "guopan",
+        "sdk_ver": "4.7.1.1",
+        "version_name": "1.5.200",
+        "version_code": 200
       },
       "min_version": "6.3.3-beta"
     }

@@ -264,7 +264,7 @@ class AccountListPolicy:
         channel = record.channel_name
         if channel == 'myapp' and str(record.uuid).removeprefix('idv-').startswith('qq-'):
             channel = 'myapp_qq'
-        known = {'baidu': '百度', 'huawei': '华为', 'oppo': 'OPPO', 'nearme_vivo': 'vivo', 'xiaomi_app': '小米', 'bilibili_sdk': '哔哩哔哩', 'uc_platform': '九游', '360_assistant': '360', '4399': '4399', 'm4399': '4399', 'honor_sdk': '荣耀', 'myapp_qq': 'QQ', 'myapp': '微信'}
+        known = {'guopan': '果盘', 'baidu': '百度', 'huawei': '华为', 'oppo': 'OPPO', 'nearme_vivo': 'vivo', 'xiaomi_app': '小米', 'bilibili_sdk': '哔哩哔哩', 'uc_platform': '九游', '360_assistant': '360', '4399': '4399', 'm4399': '4399', 'honor_sdk': '荣耀', 'myapp_qq': 'QQ', 'myapp': '微信'}
         original_display = self.manager._manual_channel_name(channel, self.record_game(record)) or channel
         display = known.get(channel, re.sub(r'账号$', '', original_display).strip())
         name = str(record.name or record.uuid)
