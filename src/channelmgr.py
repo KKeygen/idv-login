@@ -51,6 +51,7 @@ def legacy_record_source(data: dict) -> str:
         "oppo": "loginResp", "bilibili_sdk": "loginResp",
         "honor_sdk": "unionToken", "uc_platform": "ucSession",
         "4399com": "loginResp", "360_assistant": "qt_cookie",
+        "guopan": "guopanSession",
         "lenovo_open": "lenovoSession",
         "baidu": "baiduSession",
     }
@@ -201,6 +202,8 @@ class channel:
             return str(data.get('uid') or '')
         if name == 'baidu':
             return str((attrs.get('baiduSession') or {}).get('uid') or '')
+        if name == 'guopan':
+            return str((attrs.get('guopanSession') or {}).get('game_uin') or '')
         if name in ('qihoo', '360_assistant'):
             return str((attrs.get('userInfo') or {}).get('qid') or '')
         return str(attrs.get('active_sdkuid') or '')
@@ -500,6 +503,9 @@ class ChannelManager:
                     elif channel_name == "lenovo_open":
                         from channelHandler.lenovoChannelHandler import lenovoChannel
                         self.channels.append(lenovoChannel.from_dict(item))
+                    elif channel_name == "guopan" and item["uuid"].removeprefix("idv-").startswith("guopan-"):
+                        from channelHandler.guopanChannelHandler import guopanChannel
+                        self.channels.append(guopanChannel.from_dict(item))
                     elif channel_name == "360_assistant" and item["uuid"].removeprefix("idv-").startswith("360-"):
                         from channelHandler.qihooChannelHandler import qihooChannel
                         tmpChannel: qihooChannel = qihooChannel.from_dict(item)
@@ -694,6 +700,10 @@ class ChannelManager:
                 from channelHandler.lenovoChannelHandler import lenovoChannel
                 tmp_channel = lenovoChannel(tmpData, game_id=game_id)
                 tmp_channel.uuid = f"lenovo-{tmp_channel.uuid}"
+            elif channle_name == "guopan":
+                from channelHandler.guopanChannelHandler import guopanChannel
+                tmp_channel = guopanChannel(tmpData, game_id=game_id)
+                tmp_channel.uuid = f"guopan-{tmp_channel.uuid}"
             elif channle_name == "360_assistant":
                 from channelHandler.qihooChannelHandler import qihooChannel
                 tmp_channel: qihooChannel = qihooChannel(tmpData, game_id=game_id)
