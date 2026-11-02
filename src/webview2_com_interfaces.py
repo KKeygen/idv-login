@@ -238,18 +238,6 @@ class ICoreWebView2WebResourceRequestedEventHandler(IUnknown):
 class ICoreWebView2WebResourceResponse(IUnknown):
     _iid_ = GUID("{aafcc94f-fa27-48fd-97df-830ef75aaec9}")
 
-class ICoreWebView2WebResourceResponseReceivedEventArgs(IUnknown):
-    _iid_ = GUID("{d1db483d-6796-4b8b-80fc-13712bb716f4}")
-
-class ICoreWebView2WebResourceResponseReceivedEventHandler(IUnknown):
-    _iid_ = GUID("{7de9898a-24f5-40c3-a2de-d4f458e69828}")
-
-class ICoreWebView2WebResourceResponseView(IUnknown):
-    _iid_ = GUID("{79701053-7759-4162-8F7D-F1B3F084928D}")
-
-class ICoreWebView2WebResourceResponseViewGetContentCompletedHandler(IUnknown):
-    _iid_ = GUID("{875738e1-9fa2-40e3-8b74-2e8972dd6fe7}")
-
 class ICoreWebView2WindowCloseRequestedEventHandler(IUnknown):
     _iid_ = GUID("{5c19e9e0-092f-486b-affa-ca8231913039}")
 
@@ -322,8 +310,8 @@ ICoreWebView2._methods_ = [
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_11"),
     COMMETHOD([], HRESULT, 'add_NavigationCompleted' , (['in'], POINTER(ICoreWebView2NavigationCompletedEventHandler), 'eventHandler'), (['out'], POINTER(EventRegistrationToken), 'token')),
     COMMETHOD([], HRESULT, 'remove_NavigationCompleted' , (['in'], EventRegistrationToken, 'token')),
-    COMMETHOD([], HRESULT, 'add_FrameNavigationStarting' , (['in'], POINTER(ICoreWebView2NavigationStartingEventHandler), 'eventHandler'), (['out'], POINTER(EventRegistrationToken), 'token')),
-    COMMETHOD([], HRESULT, 'remove_FrameNavigationStarting' , (['in'], EventRegistrationToken, 'token')),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_14"),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_15"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_16"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_17"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_18"),
@@ -337,7 +325,7 @@ ICoreWebView2._methods_ = [
     COMMETHOD([], HRESULT, 'ExecuteScript' , (['in'], c_wchar_p, 'javaScript'), (['in'], POINTER(ICoreWebView2ExecuteScriptCompletedHandler), 'handler')),
     COMMETHOD([], HRESULT, 'CapturePreview' , (['in'], c_int32, 'imageFormat'), (['in'], POINTER(IStream), 'imageStream'), (['in'], POINTER(ICoreWebView2CapturePreviewCompletedHandler), 'handler')),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_28"),
-    COMMETHOD([], HRESULT, 'PostWebMessageAsJson' , (['in'], c_wchar_p, 'webMessageAsJson')),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_29"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_30"),
     COMMETHOD([], HRESULT, 'add_WebMessageReceived' , (['in'], POINTER(ICoreWebView2WebMessageReceivedEventHandler), 'handler'), (['out'], POINTER(EventRegistrationToken), 'token')),
     COMMETHOD([], HRESULT, 'remove_WebMessageReceived' , (['in'], EventRegistrationToken, 'token')),
@@ -348,7 +336,7 @@ ICoreWebView2._methods_ = [
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_37"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_38"),
     COMMETHOD([], HRESULT, 'GetDevToolsProtocolEventReceiver' , (['in'], c_wchar_p, 'eventName'), (['out'], POINTER(POINTER(ICoreWebView2DevToolsProtocolEventReceiver)), 'receiver')),
-    COMMETHOD([], HRESULT, 'Stop'),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_40"),
     COMMETHOD([], HRESULT, 'add_NewWindowRequested' , (['in'], POINTER(ICoreWebView2NewWindowRequestedEventHandler), 'eventHandler'), (['out'], POINTER(EventRegistrationToken), 'token')),
     COMMETHOD([], HRESULT, 'remove_NewWindowRequested' , (['in'], EventRegistrationToken, 'token')),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_43"),
@@ -541,7 +529,7 @@ ICoreWebView2Frame2._methods_ = [
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2Frame2_6"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2Frame2_7"),
     COMMETHOD([], HRESULT, 'ExecuteScript' , (['in'], c_wchar_p, 'javaScript'), (['in'], POINTER(ICoreWebView2ExecuteScriptCompletedHandler), 'handler')),
-    COMMETHOD([], HRESULT, 'PostWebMessageAsJson' , (['in'], c_wchar_p, 'webMessageAsJson')),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2Frame2_9"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2Frame2_10"),
     COMMETHOD([], HRESULT, 'add_WebMessageReceived' , (['in'], POINTER(ICoreWebView2FrameWebMessageReceivedEventHandler), 'handler'), (['out'], POINTER(EventRegistrationToken), 'token')),
     COMMETHOD([], HRESULT, 'remove_WebMessageReceived' , (['in'], EventRegistrationToken, 'token')),
@@ -797,7 +785,7 @@ ICoreWebView2WebResourceRequest._methods_ = [
 
 ICoreWebView2WebResourceRequestedEventArgs._methods_ = [
     COMMETHOD([], HRESULT, 'get_Request' , (['out'], POINTER(POINTER(ICoreWebView2WebResourceRequest)), 'request')),
-    COMMETHOD([], HRESULT, 'get_Response' , (['out'], POINTER(POINTER(ICoreWebView2WebResourceResponse)), 'response')),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2WebResourceRequestedEventArgs_1"),
     COMMETHOD([], HRESULT, 'put_Response' , (['in'], POINTER(ICoreWebView2WebResourceResponse), 'response')),
     COMMETHOD([], HRESULT, 'GetDeferral' , (['out'], POINTER(POINTER(ICoreWebView2Deferral)), 'deferral')),
     COMMETHOD([], HRESULT, 'get_ResourceContext' , (['out'], POINTER(c_int32), 'context')),
@@ -811,30 +799,10 @@ ICoreWebView2WebResourceResponse._methods_ = [
     COMMETHOD([], HRESULT, 'get_Content' , (['out'], POINTER(POINTER(IStream)), 'content')),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2WebResourceResponse_1"),
     COMMETHOD([], HRESULT, 'get_Headers' , (['out'], POINTER(POINTER(ICoreWebView2HttpResponseHeaders)), 'headers')),
-    COMMETHOD([], HRESULT, 'get_StatusCode' , (['out'], POINTER(c_int32), 'statusCode')),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2WebResourceResponse_3"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2WebResourceResponse_4"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2WebResourceResponse_5"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2WebResourceResponse_6"),
-]
-
-ICoreWebView2WebResourceResponseReceivedEventArgs._methods_ = [
-    COMMETHOD([], HRESULT, 'get_Request' , (['out'], POINTER(POINTER(ICoreWebView2WebResourceRequest)), 'value')),
-    COMMETHOD([], HRESULT, 'get_Response' , (['out'], POINTER(POINTER(ICoreWebView2WebResourceResponseView)), 'value')),
-]
-
-ICoreWebView2WebResourceResponseReceivedEventHandler._methods_ = [
-    COMMETHOD([], HRESULT, 'Invoke' , (['in'], POINTER(ICoreWebView2), 'sender'), (['in'], POINTER(ICoreWebView2WebResourceResponseReceivedEventArgs), 'args')),
-]
-
-ICoreWebView2WebResourceResponseView._methods_ = [
-    COMMETHOD([], HRESULT, 'get_Headers' , (['out'], POINTER(POINTER(ICoreWebView2HttpResponseHeaders)), 'headers')),
-    COMMETHOD([], HRESULT, 'get_StatusCode' , (['out'], POINTER(c_int32), 'statusCode')),
-    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2WebResourceResponseView_2"),
-    COMMETHOD([], HRESULT, 'GetContent' , (['in'], POINTER(ICoreWebView2WebResourceResponseViewGetContentCompletedHandler), 'handler')),
-]
-
-ICoreWebView2WebResourceResponseViewGetContentCompletedHandler._methods_ = [
-    COMMETHOD([], HRESULT, 'Invoke' , (['in'], HRESULT, 'errorCode'), (['in'], POINTER(IStream), 'result')),
 ]
 
 ICoreWebView2WindowCloseRequestedEventHandler._methods_ = [
@@ -855,8 +823,8 @@ ICoreWebView2WindowFeatures._methods_ = [
 ]
 
 ICoreWebView2_2._methods_ = [
-    COMMETHOD([], HRESULT, 'add_WebResourceResponseReceived' , (['in'], POINTER(ICoreWebView2WebResourceResponseReceivedEventHandler), 'eventHandler'), (['out'], POINTER(EventRegistrationToken), 'token')),
-    COMMETHOD([], HRESULT, 'remove_WebResourceResponseReceived' , (['in'], EventRegistrationToken, 'token')),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_2_0"),
+    COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_2_1"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_2_2"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_2_3"),
     COMMETHOD([], HRESULT, "_reserved_ICoreWebView2_2_4"),

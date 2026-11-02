@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -81,7 +80,7 @@ class WebView2Host(QObject):
     _event = pyqtSignal(str, object)
 
     def __init__(self, parent_hwnd: int, user_data_folder: str, user_agent="", scripts=(),
-                 on_event=None, navigation_policy=None, capture_response=None):
+                 on_event=None, navigation_policy=None):
         super().__init__()
         self._assert_thread()
         self._closed = False
@@ -92,7 +91,6 @@ class WebView2Host(QObject):
         self._in_native_callback = False
         self._on_event = on_event or (lambda event, data: None)
         self._navigation_policy = navigation_policy
-        self._capture_response = capture_response
         self._next_request = 1
         self._requests = {}
         self._pending_resources = set()
@@ -143,8 +141,6 @@ class WebView2Host(QObject):
                     p = urlsplit(data["url"])
                     return int(p.scheme in ("http", "https") or data["url"] in ("about:blank", "about:srcdoc"))
                 return int(bool(self._navigation_policy(data["page_id"], data["url"], data["is_frame"])))
-            if event == "response_check":
-                return int(bool(self._capture_response and self._capture_response(data["page_id"], data["url"])))
             self._event.emit(event, data)
         except Exception as error:
             _log_callback_failure("bridge_callback", error)
@@ -190,26 +186,15 @@ class WebView2Host(QObject):
         if event == "result":
             item = self._requests.pop(data["request_id"], None)
             if item is not None:
-                cb, timer, transform = item
+                cb, timer = item
                 timer.stop(); timer.deleteLater()
                 error = WebView2Error("异步操作", data["hresult"]) if data["hresult"] < 0 else None
                 value = data.get("value") if error is None else None
-                if error is None and transform is not None:
-                    try:
-                        value = transform(value)
-                    except Exception:
-                        value, error = None, WebView2Error("返回数据无效")
                 self._invoke(cb, value, error)
             return
         if event == "ready":
             self._ready = True
             self._startup_timer.stop()
-        if event in ("response", "resource_request"):
-            try:
-                data["body"] = self._decode_body(data.pop("body_base64"))
-            except Exception:
-                self._notify("error", {"page_id": data["page_id"], "operation": "response_body", "hresult": -2147467259})
-                return
         if event == "resource_completed":
             self._pending_resources.discard(data["request_id"])
             return
@@ -226,15 +211,6 @@ class WebView2Host(QObject):
                 return
         self._notify(event, data)
 
-    @staticmethod
-    def _decode_body(value):
-        if not isinstance(value, str) or len(value) > (_BODY_LIMIT + 2) // 3 * 4:
-            raise ValueError("Body limit")
-        result = base64.b64decode(value, validate=True)
-        if len(result) > _BODY_LIMIT:
-            raise ValueError("Body limit")
-        return result
-
     def _invoke(self, cb, value, error):
         if cb is None:
             return
@@ -244,14 +220,14 @@ class WebView2Host(QObject):
             _log_callback_failure("result_callback", error)
             self._notify("error", {"page_id": 1, "operation": "result_callback", "hresult": -2147467259})
 
-    def _request(self, operation, args, callback, *, transform=None):
+    def _request(self, operation, args, callback):
         self._guard()
         rid = self._next_request
         self._next_request += 1
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda: self._request_timeout(rid))
-        self._requests[rid] = (callback, timer, transform)
+        self._requests[rid] = (callback, timer)
         try:
             self._call(operation, *args, rid)
         except WebView2Error as error:
@@ -262,7 +238,7 @@ class WebView2Host(QObject):
     def _request_timeout(self, rid):
         item = self._requests.pop(rid, None)
         if item:
-            cb, timer, unused = item
+            cb, timer = item
             timer.deleteLater()
             self._invoke(cb, None, WebView2Error("异步操作超时", -2147023436))
 
@@ -291,17 +267,11 @@ class WebView2Host(QObject):
     def subscribe_devtools(self, page_id, event_name):
         self._call("subscribe_devtools", int(page_id), str(event_name))
 
-    def post_message(self, page_id, value):
-        self._call("post_message", int(page_id), json.dumps(value, ensure_ascii=False, separators=(",", ":")))
-
     def new_page(self, url="about:blank"):
         return self._call("new_page", str(url))
 
     def close_page(self, page_id):
         self._call("close_page", int(page_id))
-
-    def stop(self, page_id=1):
-        self._call("stop", int(page_id))
 
     def resize(self, width, height):
         self._call("resize", int(width), int(height))
@@ -322,7 +292,7 @@ class WebView2Host(QObject):
         return self._request("clear_data", (), callback)
 
     def capture_preview(self, page_id=1, callback=None):
-        return self._request("capture_preview", (int(page_id),), callback, transform=self._decode_body)
+        return self._request("capture_preview", (int(page_id),), callback)
 
     def set_virtual_host(self, hostname, folder):
         self._guard()
@@ -391,7 +361,7 @@ class WebView2Host(QObject):
             raise
         self._pending_resources.clear()
         requests, self._requests = self._requests, {}
-        for cb, timer, unused in requests.values():
+        for cb, timer in requests.values():
             timer.stop(); timer.deleteLater()
             self._invoke(cb, None, WebView2Error("会话正在关闭"))
 
