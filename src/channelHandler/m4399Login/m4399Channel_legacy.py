@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 from PyQt6.QtCore import QTimer
 
+from native_ui.dialogs import fit_login_window
 from channelHandler.WebLoginUtils import WebBrowser
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
@@ -257,14 +258,14 @@ class M4399Login:
                 params={
                     "state": state,
                     "uid": uid,
-                    "key": self.game_key,
+                    "gamekey": self.game_key,
                 },
                 headers={"User-Agent": _USER_AGENT},
                 timeout=_HTTP_TIMEOUT,
             )
             data = resp.json()
             code = str(data.get("code", "")) if isinstance(data, dict) else ""
-            if code == "200":
+            if resp.status_code == 200 and code == "200":
                 return True, code
             # 601/604/10204/10205 都不能继续信任当前 state；上层会尝试恢复。
             return False, code or f"http_{resp.status_code}"
@@ -413,7 +414,7 @@ class M4399Browser(WebBrowser):
 
         super().__init__("m4399", True, frameless=True)
         self.logger = setup_logger()
-        self.resize(430, 680)
+        fit_login_window(self, 430, 680)
 
         try:
             self.profile.cookieStore().loadAllCookies()

@@ -126,9 +126,7 @@ class bilibiliChannel(channelmgr.channel):
     def validate_token_online(self) -> bool:
         """通过 auto.login API 验证并刷新 token。
 
-        auto.login 响应为根级格式（无 data 包裹，无 access_key/expires），
-        成功表示当前 access_key 仍有效。
-        更新用户信息（uid/uname/face），并延长 expires 30 天。
+        写回服务端返回的账号资料和新凭证。
         """
         data = self._get_login_data()
         if not data:
@@ -137,26 +135,29 @@ class bilibiliChannel(channelmgr.channel):
         if not access_key:
             return False
         try:
-            resp = call_auto_login(access_key)
+            resp = call_auto_login(
+                access_key, game_id=self.biliLogin.game_id, app_key=self.biliLogin.app_key
+            )
             if not isinstance(resp, dict) or resp.get("code") != 0:
                 self.logger.warning(f"Bilibili auto.login 刷新失败: {resp}")
                 return False
 
-            self.logger.info("Bilibili auto.login 刷新成功")
-            # auto.login 返回根级字段（uid/uname/face等），不含 access_key/expires
             refreshed_data = dict(data)
             for key in ("uid", "uname", "face"):
                 if key in resp and resp[key] is not None:
                     refreshed_data[key] = resp[key]
-            # access_key 验证通过，延长过期时间 30 天
             if not refreshed_data.get("uid"):
                 return False
-            refreshed_data["expires"] = int(time.time()) + 30 * 86400
+            refreshed_data["access_key"] = resp.get("access_key") or access_key
+            refreshed_data["expires"] = resp.get("expires") or int(time.time()) + 30 * 86400
             data.update(refreshed_data)
             self.observe_sdkuid(data["uid"])
+            if resp.get("uname"):
+                self.name = str(resp["uname"])
+            self.logger.info("Bilibili auto.login 刷新成功")
             return True
-        except Exception as e:
-            self.logger.error(f"Bilibili auto.login 请求异常: {e}")
+        except Exception:
+            self.logger.error("Bilibili auto.login 请求异常")
             return False
 
     # ── 登录 ──────────────────────────────────────────────────

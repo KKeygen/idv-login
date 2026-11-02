@@ -15,6 +15,8 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
 )
 
+from native_ui.dialogs import configure_dialog, primary_button
+
 
 def web_url(value):
     url = QUrl(value) if isinstance(value, (str, QUrl)) else QUrl()
@@ -274,7 +276,7 @@ class UpdateDialog(QDialog):
         self.setSizeGripEnabled(True)
         self.setObjectName('updateDialog')
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 18)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(18)
         body = QHBoxLayout()
         body.setSpacing(24)
@@ -313,6 +315,7 @@ class UpdateDialog(QDialog):
         body.addWidget(notes_panel, 1)
         layout.addLayout(body, 1)
         footer = QHBoxLayout()
+        footer.setSpacing(8)
         self.status = QLabel()
         self.status.setObjectName('muted')
         self.status.setWordWrap(True)
@@ -329,7 +332,7 @@ class UpdateDialog(QDialog):
             ignore.triggered.connect(self._ignore)
             menu.addAction(ignore)
             self.later_button.setMenu(menu)
-        self.update_button = QPushButton('现在更新  ↗')
+        self.update_button = primary_button(QPushButton('现在更新  ↗'))
         self.update_button.setObjectName('primary')
         self.update_button.setDefault(True)
         self.update_button.clicked.connect(self.accept)
@@ -358,32 +361,27 @@ class UpdateDialog(QDialog):
             self.status.setText(text)
 
     def _apply_theme(self):
-        dark = QApplication.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        configure_dialog(self, width=640)
         bg, panel, text, muted, border, accent, badge = (
-            ('#191d26', '#232936', '#e8edf6', '#a6b1c3', '#3a4455', '#86adff', '#2c3a52') if dark else
-            ('#f4f6fb', '#ffffff', '#202b3d', '#66758b', '#dce3ee', '#275fc7', '#e7eefc'))
+            '#2c2c2c', '#303030', '#f0f0f0', '#b0b0b0', '#3e3e3e', '#cbad8e', '#454039')
         palette = self.notes.palette()
         for role, color in ((QPalette.ColorRole.Base, panel), (QPalette.ColorRole.Text, text),
                             (QPalette.ColorRole.AlternateBase, bg), (QPalette.ColorRole.Mid, border),
                             (QPalette.ColorRole.Link, accent)):
             palette.setColor(role, QColor(color))
         self.notes.setPalette(palette)
-        self.setStyleSheet(f'''
+        self.setStyleSheet(self.styleSheet() + f'''
             QDialog#updateDialog {{ background: {bg}; color: {text}; }}
-            QLabel {{ color: {text}; font-size: 13px; }}
             QLabel#eyebrow {{ color: {accent}; font-size: 12px; font-weight: 700; }}
             QLabel#headline {{ font-size: 24px; font-weight: 700; }}
             QLabel#version {{ font-size: 21px; font-weight: 600; }}
             QLabel#muted {{ color: {muted}; font-size: 12px; }}
-            QLabel#badge {{ color: {accent}; background: {badge}; padding: 9px; border-radius: 6px; }}
-            QFrame#notesPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 10px; }}
+            QLabel#badge {{ color: {accent}; background: {badge}; padding: 9px; border-radius: 8px; }}
+            QFrame#notesPanel {{ background: {panel}; border: 1px solid {border}; border-radius: 8px; }}
             QTextBrowser {{ background: transparent; color: {text}; border: 0; }}
-            QPushButton, QToolButton {{ color: {text}; background: {panel}; border: 1px solid {border};
-                border-radius: 6px; padding: 9px 14px; font-size: 13px; }}
-            QPushButton:hover, QToolButton:hover {{ border-color: {accent}; }}
-            QPushButton#primary {{ background: {accent}; color: {'#152039' if dark else '#ffffff'};
-                border-color: {accent}; font-weight: 600; }}
-            QPushButton#primary:disabled {{ background: {border}; color: {muted}; border-color: {border}; }}
+            QMenu {{ background: {panel}; color: {text}; border: 1px solid {border}; padding: 4px; }}
+            QMenu::item {{ padding: 8px 12px; }}
+            QMenu::item:selected {{ background: {badge}; }}
             QToolButton::menu-button {{ width: 18px; border-left: 1px solid {border}; }}
             QToolButton[popupMode="1"] {{ padding-right: 28px; }}
             QScrollBar:vertical {{ background: {panel}; width: 12px; margin: 4px 2px; }}

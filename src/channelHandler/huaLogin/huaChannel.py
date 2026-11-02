@@ -28,7 +28,8 @@ from ssl_utils import should_verify_ssl
 from channelHandler.WebLoginUtils import WebBrowser
 from channelHandler.huaLogin.consts import DEVICE, COMMON_PARAMS
 from AutoFillUtils import RecordMgr
-from PyQt6.QtWidgets import QComboBox, QInputDialog, QPushButton
+from PyQt6.QtWidgets import QHBoxLayout, QPushButton
+from native_ui.dialogs import DialogComboBox, fit_login_window, get_text
 
 DEVICE_RECORD = "huawei_device.json"
 QRCODE_CACHE_KEY = "HUAWEI_QRCODE_CACHE"
@@ -205,7 +206,7 @@ def transform_service_token(st: str, package_name: str) -> str:
     """ST 变换：前20字符 + SHA256(ST + ":" + 游戏包名)。"""
     import hashlib
 
-    if not st:
+    if not st or len(st) < 20 or not package_name:
         return ""
     digest = hashlib.sha256((st + ":" + package_name).encode("utf-8")).hexdigest()
     return st[:20] + digest
@@ -246,6 +247,7 @@ def silent_token(st: str, package_name: str, client_id: str, device_id: str):
         timeout=30,
         verify=should_verify_ssl(),
     )
+    r.raise_for_status()
     return r.json()
 
 
@@ -261,7 +263,7 @@ class HuaweiLoginBrowser(WebBrowser):
         self.setWindowTitle("华为账号登录")
         self._login_url = login_url
         # 华为登录页为移动端页面，按现代手机比例初始化窗口（19.5:9）
-        self.resize(390, 844)
+        fit_login_window(self, 390, 844)
         # 使用手机端 UA，让登录页按移动端渲染
         self.set_user_agent(
             "Mozilla/5.0 (Linux; Android 13; SM-G9910) AppleWebKit/537.36 "
@@ -280,19 +282,33 @@ class HuaweiLoginBrowser(WebBrowser):
             self.records.remove(defaultAccount)
             self.records.insert(0, defaultAccount)
 
-        self.accountComboBox = QComboBox()
+        self.accountComboBox = DialogComboBox()
+        if self.clear_cookie_button is not None:
+            self.toolBarLayout.removeWidget(self.clear_cookie_button)
         self.toolBarLayout.addWidget(self.accountComboBox)
         self.accountComboBox.addItems(self.records)
         self.accountComboBox.currentIndexChanged.connect(self.onAccountChanged)
         self.accountComboBox.textActivated.connect(self.onAccountChanged)
 
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        if self.clear_cookie_button is not None:
+            actions.addWidget(self.clear_cookie_button)
+        actions.addStretch()
         self.fillButton = QPushButton("填充")
-        self.toolBarLayout.addWidget(self.fillButton)
+        actions.addWidget(self.fillButton)
         self.fillButton.clicked.connect(self.onAccountChanged)
 
         self.deleteButton = QPushButton("删除")
-        self.toolBarLayout.addWidget(self.deleteButton)
+        actions.addWidget(self.deleteButton)
+        self.layout.addLayout(actions)
         self.deleteButton.clicked.connect(self.deleteAccount)
+        self.setTabOrder(self.view, self.accountComboBox)
+        previous = self.accountComboBox
+        for button in (self.clear_cookie_button, self.fillButton, self.deleteButton):
+            if button is not None:
+                self.setTabOrder(previous, button)
+                previous = button
 
     def deleteAccount(self):
         account = self.accountComboBox.currentText()
@@ -306,7 +322,7 @@ class HuaweiLoginBrowser(WebBrowser):
         account = self.accountComboBox.currentText()
         if "*" in account:
             # 被掩码的账号需要完整账号解密
-            text, ok = QInputDialog.getText(
+            text, ok = get_text(
                 self, "二次验证", "密码已被加密，请输入完整的账号来解密", text=account
             )
             if ok:
@@ -366,6 +382,7 @@ class HuaweiLogin:
         self.accessToken = None
         self.expiredTime = 0
         self._at_game = ""  # accessToken 对应的短 game_id
+        self._at_binding = None
         self.real_game_id = real_game_id
         self.nickName = ""
         self._qr_cancelled = False
@@ -395,7 +412,7 @@ class HuaweiLogin:
         return str(self.device.get("device_uuid", "") or "").strip()
 
     def _device_id(self) -> str:
-        return self._device_uuid().replace("-", "")[:16]
+        return self._device_uuid()
 
     def makeFakeDevice(self):
         fake = Faker()
@@ -474,6 +491,7 @@ class HuaweiLogin:
             self._update_qrcode_cache("failed")
             return False
 
+        self.invalidate_game_token()
         self.serviceToken = st
         self.nickName = self._extract_nick_name(_resp)
         self.logger.info("华为扫码登录成功，已获取 ST")
@@ -547,6 +565,7 @@ class HuaweiLogin:
         if not st:
             self.logger.error("华为登录换 ST 失败")
             return False
+        self.invalidate_game_token()
         self.serviceToken = st
         self.nickName = self._extract_nick_name(_resp)
         self.logger.info("华为登录成功，已获取 ST")
@@ -557,46 +576,44 @@ class HuaweiLogin:
 
     # ── 游戏 token / 账号数据 ───────────────────────────────
 
-    def ensure_game_token(self, game_cfg, short_game_id):
-        """为指定游戏保证有效 accessToken（ST → silent_token）。
+    def invalidate_game_token(self):
+        self.accessToken = None
+        self.expiredTime = 0
+        self._at_binding = None
 
-        Returns:
-            bool: 是否成功。
-        """
+    def ensure_game_token(self, game_cfg, short_game_id):
+        """为指定凭据、游戏配置和设备签发 accessToken。"""
         now = int(time.time())
-        if (
-            self.accessToken
-            and self._at_game == short_game_id
-            and now < self.expiredTime - 60
-        ):
-            return True
-        if not self.serviceToken:
-            self.logger.warning("华为缺少 ST，无法签发游戏 token")
-            return False
         package_name = str(game_cfg.get("package_name") or "").strip()
         client_id = str(game_cfg.get("app_id") or "").strip()
-        if not package_name or not client_id:
-            self.logger.error("channel=huawei step=silent_token field=package_name/app_id missing")
+        device_id = self._device_id()
+        binding = (self.serviceToken, short_game_id, package_name, client_id, device_id)
+        if (self.accessToken and self._at_binding == binding
+                and now < self.expiredTime - 60):
+            return True
+        self.invalidate_game_token()
+        if not self.serviceToken or not package_name or not client_id:
+            self.logger.warning("channel=huawei step=silent_token credential/config missing")
             return False
-        resp = silent_token(self.serviceToken, package_name, client_id, self._device_id())
-        if not isinstance(resp, dict) or "access_token" not in resp:
-            self.logger.error("channel=huawei step=silent_token field=access_token missing")
-            self.accessToken = None
+        resp = silent_token(self.serviceToken, package_name, client_id, device_id)
+        if (not isinstance(resp, dict) or resp.get("error")
+                or not isinstance(resp.get("access_token"), str) or not resp["access_token"]):
+            self.logger.error("channel=huawei step=silent_token invalid response")
+            return False
+        try:
+            lifetime = int(resp.get("expire_in", resp.get("expires_in", 3600)))
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if lifetime <= 0:
             return False
         self.accessToken = resp["access_token"]
-        try:
-            self.expiredTime = now + int(resp.get("expire_in", 3600))
-        except (TypeError, ValueError):
-            self.expiredTime = now + 3600
+        self.expiredTime = now + lifetime
         self._at_game = short_game_id
+        self._at_binding = binding
         self.logger.info(f"华为 silent_token 签发成功 (game={short_game_id})")
         return True
 
-    def initAccountData(self, game_cfg):
-        """用 accessToken 获取账号数据（getGameAuthSign）。
-
-        调用者需先 ensure_game_token() 保证 accessToken 有效。
-        """
+    def _game_request(self, game_cfg, method, **params):
         if not self.accessToken:
             return None
         url = "https://jgw-drcn.jos.dbankcloud.cn/gameservice/api/gbClientApi"
@@ -604,13 +621,61 @@ class HuaweiLogin:
             "User-Agent": f"com.huawei.hms.game/6.14.0.300 (Linux; Android 12; {self.device.get('phoneType')}) RestClient/7.0.6.300",
             "Content-Type": "application/x-www-form-urlencoded",
         }
-        body = COMMON_PARAMS.copy()
+        body = {k: v for k, v in COMMON_PARAMS.items() if k not in ("idType", "gamePopTime")}
         body.update({k: v for k, v in self.device.items() if k != "device_uuid"})
-        body["method"] = "client.hms.gs.getGameAuthSign"
-        body["extraBody"] = f'json={{"appId":"{game_cfg.get("app_id")}"}}'
-        body["accessToken"] = self.accessToken
-        r = requests.post(url, headers=headers, data=body, verify=should_verify_ssl())
-        return r.json()
+        body.update(method=method, appId=str(game_cfg.get("app_id") or ""),
+                    gamePackage=game_cfg.get("package_name", ""), **params)
+        if game_cfg.get("cp_id"):
+            body["cpId"] = game_cfg["cp_id"]
+        for attempt in range(2):
+            body["accessToken"] = self.accessToken
+            response = requests.post(url, headers=headers, data=body,
+                                     timeout=30, verify=should_verify_ssl())
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, dict):
+                return None
+            if data.get("rtnCode") in (0, "0"):
+                return data
+            if data.get("rtnCode") not in (2, "2") or attempt:
+                return None
+            self.invalidate_game_token()
+            if not self.ensure_game_token(game_cfg, self._at_game):
+                return None
+        return None
+
+    def get_game_accounts(self, game_cfg):
+        """查询当前游戏可登录的游戏号；不支持时返回 None。"""
+        data = self._game_request(game_cfg, "client.hms.gs.user.getLoginAccounts", needDetail="1")
+        if data is None or not isinstance(data.get("accountList"), list):
+            return None
+        accounts = data["accountList"]
+        ids = [item.get("gaOutId") for item in accounts if isinstance(item, dict)]
+        if (len(ids) != len(accounts) or any(not isinstance(i, str) or not i for i in ids)
+                or len(set(ids)) != len(ids)):
+            return None
+        return accounts
+
+    def switch_game_account(self, game_cfg, account_id):
+        """切换服务端默认游戏号，随后必须重新获取游戏签名。"""
+        result = self._game_request(game_cfg, "client.hms.gs.user.switchLoginAccount", gaOutId=account_id)
+        if result is None:
+            return False
+        self.invalidate_game_token()
+        return True
+
+    def initAccountData(self, game_cfg):
+        """获取当前游戏号的服务端身份和签名。"""
+        data = self._game_request(
+            game_cfg, "client.hms.gs.getGameAuthSign",
+            idType=COMMON_PARAMS.get("idType", 2), gamePopTime=COMMON_PARAMS.get("gamePopTime", 0),
+            extraBody="json=" + json.dumps({"appId": str(game_cfg.get("app_id"))}, separators=(",", ":")),
+        )
+        if data is None or data.get("checkResult", 0) not in (0, "0"):
+            return None
+        if not all(data.get(key) for key in ("playerId", "gameAuthSign", "ts")):
+            return None
+        return data
 
     def is_token_expired(self) -> bool:
         if self.accessToken is None:

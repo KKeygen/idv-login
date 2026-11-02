@@ -73,7 +73,6 @@ class QQBrowser(WebBrowser):
                 "pf": query_dict.get("pf", [None])[0],
                 "pfkey": query_dict.get("pfkey", [None])[0],
             }
-            logger.debug(f"QQ OAuth code flow: code={self.result['code'][:8] if self.result['code'] else None}...")
             return True
 
         # Implicit flow fallback
@@ -85,9 +84,9 @@ class QQBrowser(WebBrowser):
             "access_token": query_dict.get("access_token", [None])[0],
             "openid": query_dict.get("openid", [None])[0],
             "pay_token": query_dict.get("pay_token", [None])[0],
+            "expires_in": query_dict.get("expires_in", [None])[0],
         }
-        logger.debug(f"QQ OAuth implicit result: openid={self.result['openid']}, "
-                     f"has_access_token={bool(self.result['access_token'])}")
+        logger.debug(f"QQ OAuth implicit result: has_access_token={bool(self.result['access_token'])}")
         return True
 
 
@@ -99,7 +98,7 @@ class QQLogin:
         self.game_id = game_id
         self._active_browser: QQBrowser = None
 
-    def _verify_qq_login(self, access_token, openid, pay_token=None):
+    def _verify_qq_login(self, access_token, openid, pay_token=None, expires_in=None):
         """通过 YSDK 验证 QQ 登录，获取 atk/pf/pfKey/rtk"""
         ts = str(int(time.time() * 1000))
         verify_data = {
@@ -122,16 +121,15 @@ class QQLogin:
             "visitor_switch": "-1",
             "regChannel": "",
         }
-        self.logger.debug(f"QQ verify params: {verify_data}")
+        self.logger.debug("开始 QQ YSDK 凭据验证")
         url = "https://ysdk.qq.com/auth/qq_verify_login"
         r = requests.get(
             url,
             params=verify_data,
             verify=should_verify_ssl(),
         )
-        self.logger.debug(f"QQ verify request URL: {r.url}")
         rjson = r.json()
-        self.logger.info(f"QQ verify response: {rjson}")
+        self.logger.info(f"QQ verify response: ret={rjson.get('ret')}")
         if r.status_code != 200 or rjson.get("ret") != 0:
             self.logger.error(f"QQ YSDK 验证失败: {rjson}")
             return False
@@ -142,7 +140,13 @@ class QQLogin:
         if "openid" not in rjson:
             rjson["openid"] = openid
         if "atk_expire" not in rjson:
-            rjson["atk_expire"] = 7200  # QQ access_token 默认 2 小时
+            try:
+                ttl = int(expires_in) if expires_in is not None else 7200
+            except (TypeError, ValueError):
+                return False
+            if ttl <= 0:
+                return False
+            rjson["atk_expire"] = ttl
         if "pay_token" not in rjson:
             rjson["pay_token"] = pay_token
         # 处理健康系统（实名认证等）
@@ -193,10 +197,10 @@ class QQLogin:
             "Auth-Request-Time": timestamp,
         }
         url = "https://ysdk.qq.com/cmd/QQCodeLogin?"
-        self.logger.debug(f"QQCodeLogin request: appID={self.qq_appid}, code={code[:8]}...")
+        self.logger.debug("开始 QQ OAuth code 交换")
         r = requests.post(url, data=body, headers=headers, verify=should_verify_ssl())
         rjson = r.json()
-        self.logger.info(f"QQCodeLogin response: code={rjson.get('code')}, errmsg={rjson.get('errmsg')}")
+        self.logger.info(f"QQCodeLogin response: code={rjson.get('code')}")
 
         if rjson.get("code") != 0:
             self.logger.error(f"QQCodeLogin 失败: {rjson}")
@@ -220,7 +224,7 @@ class QQLogin:
             "msg": "ok",
             "first": 0,
         }
-        self.logger.info(f"QQCodeLogin 成功: openid={result['openid']}, expires={result['atk_expire']}s")
+        self.logger.info(f"QQCodeLogin 成功: expires={result['atk_expire']}s")
         return result
 
     def _process_browser_result(self, result):
@@ -240,11 +244,12 @@ class QQLogin:
                 pfkey=result.get("pfkey"),
             )
         else:
-            # Implicit flow fallback: 2 小时 token，需要 YSDK verify
+            # Implicit flow fallback，需要 YSDK verify
             return self._verify_qq_login(
                 result["access_token"],
                 result["openid"],
                 result.get("pay_token"),
+                expires_in=result.get("expires_in"),
             )
 
     def webLogin(self, on_complete=None):

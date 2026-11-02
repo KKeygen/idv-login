@@ -1,5 +1,5 @@
 {
-  "lastModified": 1793533812,
+  "lastModified": 1793551342,
   "version": "v6.3.2-stable",
   "hotfix": [
     {
@@ -847,8 +847,8 @@
         "v5.9.1-stable"
       ],
       "target_module": "channelHandler.oppoLogin.oppoChannel",
-      "target_commit": "42c0c45ad1cb442b8e9eda8fd9dcf8f61b899af2",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "70b634c34042cab8280fbbcf8ef2a00adc97bbce",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [
@@ -856,8 +856,8 @@
         "v5.9.1-stable"
       ],
       "target_module": "channelHandler.oppoLogin.jsbridge",
-      "target_commit": "42c0c45ad1cb442b8e9eda8fd9dcf8f61b899af2",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "70b634c34042cab8280fbbcf8ef2a00adc97bbce",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [
@@ -873,8 +873,8 @@
         "v6.2.2-stable"
       ],
       "target_module": "channelHandler.oppoLogin.oppoChannel",
-      "target_commit": "b6bd9eea5ff3fcdaad369a712541e2c17270aae7",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "c504ba2cf754b0d09ee420415c108d0705ae1534",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [
@@ -890,8 +890,8 @@
         "v6.2.2-stable"
       ],
       "target_module": "channelHandler.oppoLogin.jsbridge",
-      "target_commit": "b6bd9eea5ff3fcdaad369a712541e2c17270aae7",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "c504ba2cf754b0d09ee420415c108d0705ae1534",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [
@@ -900,8 +900,8 @@
         "v6.3.1-beta"
       ],
       "target_module": "channelHandler.oppoLogin.oppoChannel",
-      "target_commit": "b0804c4e6047c519b9869abaa4a4e87377cbebff",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "9b1ff598da6cb9ae6a952a8978ccf88bc8b2ae5c",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [
@@ -910,24 +910,24 @@
         "v6.3.1-beta"
       ],
       "target_module": "channelHandler.oppoLogin.jsbridge",
-      "target_commit": "b0804c4e6047c519b9869abaa4a4e87377cbebff",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "9b1ff598da6cb9ae6a952a8978ccf88bc8b2ae5c",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [
         "v6.3.2-stable"
       ],
       "target_module": "channelHandler.oppoLogin.oppoChannel",
-      "target_commit": "69986a3f4006b5334e35c1b7e13cabe02485159c",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "442321fbda0096138c8a5415a07b4951ff618e47",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [
         "v6.3.2-stable"
       ],
       "target_module": "channelHandler.oppoLogin.jsbridge",
-      "target_commit": "69986a3f4006b5334e35c1b7e13cabe02485159c",
-      "note": "修复了OPPO手动登录时只能密码登录的问题，现在也能验证码登录"
+      "target_commit": "442321fbda0096138c8a5415a07b4951ff618e47",
+      "note": "恢复 OPPO 原有账号密码登录流程，撤回近期验证码登录热更新。"
     },
     {
       "need_hotfix_version": [

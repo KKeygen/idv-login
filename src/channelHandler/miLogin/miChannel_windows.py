@@ -10,6 +10,7 @@ import requests
 from faker import Faker
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QPushButton
+from native_ui.dialogs import primary_button
 
 from channelHandler.miLogin.consts import DEVICE, DEVICE_RECORD, AES_KEY
 from logutil import setup_logger
@@ -28,27 +29,11 @@ class MiBrowser(WebBrowser):
         self._oauth_state = None
 
         # 无边框窗口使用悬浮按钮，不占用网页布局。
-        self.qq_login_button = QPushButton("QQ 登录", self)
+        self.qq_login_button = primary_button(QPushButton("QQ 登录", self))
         self.qq_login_button.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
         self.qq_login_button.setObjectName("xiaomi_qq_login_button")
-        self.qq_login_button.setFixedSize(72, 28)
+        self.qq_login_button.setFixedSize(96, 36)
         self.qq_login_button.setToolTip("使用 QQ 登录小米渠道")
-        self.qq_login_button.setStyleSheet(
-            "QPushButton#xiaomi_qq_login_button {"
-            "  background-color: rgba(18, 111, 214, 220);"
-            "  color: white;"
-            "  border: none;"
-            "  border-radius: 14px;"
-            "  font-size: 12px;"
-            "  font-weight: 500;"
-            "}"
-            "QPushButton#xiaomi_qq_login_button:hover {"
-            "  background-color: rgba(32, 129, 235, 240);"
-            "}"
-            "QPushButton#xiaomi_qq_login_button:pressed {"
-            "  background-color: rgba(12, 85, 170, 245);"
-            "}"
-        )
         self.qq_login_button.clicked.connect(self.qq_login)
         self.qq_login_button.raise_()
         self._reposition_qq_login_button()
@@ -60,7 +45,7 @@ class MiBrowser(WebBrowser):
             return
         button.move(
             close_button.x() - button.width() - 8,
-            close_button.y(),
+            close_button.y() + (close_button.height() - button.height()) // 2,
         )
 
     def resizeEvent(self, event):
@@ -272,6 +257,7 @@ class MiLogin:
                             self.account_type = 2
                             data = self.getSTbyQQResp(resp)
                         else:
+                            self.account_type = 4
                             data = self.getSTbyCode(resp)
                     except Exception as error:
                         data = error
@@ -287,6 +273,7 @@ class MiLogin:
                     self.account_type = 2
                     data = self.getSTbyQQResp(resp)
                 else:
+                    self.account_type = 4
                     data = self.getSTbyCode(resp)
             except Exception as error:
                 if on_complete is None:

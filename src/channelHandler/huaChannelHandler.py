@@ -18,6 +18,7 @@
 import json
 import time
 import base64
+import requests
 import channelmgr
 
 from cloudRes import CloudRes
@@ -60,6 +61,7 @@ class huaweiChannel(channelmgr.channel):
         name: str = "",
         serviceToken: str = "",
         game_id: str = "",
+        game_accounts: dict = None,
     ) -> None:
         super().__init__(
             login_info,
@@ -71,6 +73,7 @@ class huaweiChannel(channelmgr.channel):
             name,
         )
         self.serviceToken = serviceToken
+        self.game_accounts = dict(game_accounts) if isinstance(game_accounts, dict) else {}
         self.logger = setup_logger()
         self.crossGames = True
         self.game_id = game_id
@@ -100,6 +103,7 @@ class huaweiChannel(channelmgr.channel):
             if self.serviceToken != self.huaweiLogin.serviceToken:
                 # A new account-level credential has no verified game playerId yet.
                 self.active_sdkuid = ""
+                self.game_accounts.clear()
                 self.unisdk_cache.clear()
                 self.expires_at = None
             self.serviceToken = self.huaweiLogin.serviceToken
@@ -149,6 +153,7 @@ class huaweiChannel(channelmgr.channel):
             name=data.get("name", ""),
             serviceToken=data.get("serviceToken", ""),
             game_id=data.get("game_id", ""),
+            game_accounts=data.get("game_accounts"),
         )
 
     # ── 目标游戏 session ────────────────────────────────────
@@ -164,13 +169,66 @@ class huaweiChannel(channelmgr.channel):
             return None, short_gid
         return game_cfg, short_gid
 
-    def _ensure_session(self, game_cfg, short_gid):
-        """确保获得指定游戏的 session（accessToken → gameAuthSign）。"""
+    def _choose_game_account(self, accounts, short_gid):
+        from PyQt6.QtCore import QThread
+        from PyQt6.QtWidgets import QApplication, QInputDialog
+
+        app = QApplication.instance()
+        if app is None:
+            return None
+        labels = [f"{index + 1}. {item.get('name') or '游戏号'}"
+                  + ("（当前）" if item.get("isDefault") in (1, "1") else "")
+                  for index, item in enumerate(accounts)]
+
+        def choose():
+            label, accepted = QInputDialog.getItem(
+                None, "选择华为游戏号", f"游戏 {short_gid}：请选择本记录使用的游戏号", labels, 0, False)
+            return accounts[labels.index(label)]["gaOutId"] if accepted else None
+
+        if QThread.currentThread() == app.thread():
+            return choose()
+        dispatcher = getattr(app_state.ui_mgr, "_dispatcher", None)
+        return dispatcher.run_sync(choose) if dispatcher is not None else None
+
+    def _ensure_session(self, game_cfg, short_gid, *, interactive=True):
+        """获取游戏会话；可沿用已保存的游戏号选择。"""
+        self.session = None
         if not self.huaweiLogin.ensure_game_token(game_cfg, short_gid):
             return None
+        saved = self.game_accounts.get(short_gid) or {}
+        scope = {"app_id": str(game_cfg.get("app_id") or ""),
+                 "package_name": str(game_cfg.get("package_name") or "")}
+        selected = saved.get("gaOutId") if all(saved.get(k) == v for k, v in scope.items()) else None
+        try:
+            accounts = self.huaweiLogin.get_game_accounts(game_cfg)
+        except requests.RequestException:
+            accounts = None
+        if accounts:
+            if selected not in {item["gaOutId"] for item in accounts}:
+                selected = None
+            if not selected:
+                if len(accounts) == 1:
+                    selected = accounts[0]["gaOutId"]
+                elif interactive:
+                    selected = self._choose_game_account(accounts, short_gid)
+                else:
+                    selected = next((item["gaOutId"] for item in accounts
+                                     if item.get("isDefault") in (1, "1")), None)
+            if not selected:
+                return None
+            default = [item["gaOutId"] for item in accounts if item.get("isDefault") in (1, "1")]
+            if default != [selected]:
+                if not self.huaweiLogin.switch_game_account(game_cfg, selected):
+                    return None
+                if not self.huaweiLogin.ensure_game_token(game_cfg, short_gid):
+                    return None
+        else:
+            selected = None
         data = self.huaweiLogin.initAccountData(game_cfg)
         if not isinstance(data, dict) or not all(data.get(key) for key in ("playerId", "gameAuthSign", "ts")):
             return None
+        if selected:
+            self.game_accounts[short_gid] = dict(scope, gaOutId=selected)
         self.session = huaweiLoginResponse(data)
         self.observe_sdkuid(self.session.playerId, short_gid)
         return self.session
@@ -253,7 +311,7 @@ class huaweiChannel(channelmgr.channel):
             if on_complete is not None:
                 def _on_login_done(success):
                     try:
-                        result = self._build(game_cfg, short_gid) if success is True and self.is_token_valid() else success
+                        result = self._build(game_cfg, short_gid, interactive=interactive) if success is True and self.is_token_valid() else success
                     except Exception as error:
                         result = error
                     on_complete(result)
@@ -264,7 +322,7 @@ class huaweiChannel(channelmgr.channel):
                 return success
 
         try:
-            result = self._build(game_cfg, short_gid)
+            result = self._build(game_cfg, short_gid, interactive=interactive)
         except Exception as error:
             if on_complete is None:
                 raise
@@ -274,8 +332,8 @@ class huaweiChannel(channelmgr.channel):
             return None
         return result
 
-    def _build(self, game_cfg, short_gid):
-        if self._ensure_session(game_cfg, short_gid) is None:
+    def _build(self, game_cfg, short_gid, *, interactive=True):
+        if self._ensure_session(game_cfg, short_gid, interactive=interactive) is None:
             return False
         return self._build_unisdk_data(short_gid)
 

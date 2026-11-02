@@ -7,6 +7,7 @@
 import json
 import time
 import base64
+from urllib.parse import urlencode
 
 import channelmgr
 from cloudRes import CloudRes
@@ -104,7 +105,7 @@ class honorChannel(channelmgr.channel):
             return False
 
     def is_token_valid(self) -> bool:
-        if self.unionToken is None:
+        if not isinstance(self.unionToken, dict):
             return False
         open_id = self.unionToken.get("openId", "")
         token = self.unionToken.get("token", "")
@@ -169,7 +170,7 @@ class honorChannel(channelmgr.channel):
 
             str_data = json_data.copy()
             str_data.update({"username": uniSDKJSON["username"]})
-            str_data = "&".join([f"{k}={v}" for k, v in str_data.items()])
+            str_data = urlencode(str_data)
 
             extra_unisdk = json.dumps({
                 "SAUTH_STR": base64.b64encode(str_data.encode()).decode(),

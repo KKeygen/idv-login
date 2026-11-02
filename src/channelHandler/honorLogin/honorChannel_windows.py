@@ -23,6 +23,7 @@ from channelHandler.honorLogin.consts import (
     HONOR_AMS_PACKAGE,
 )
 from channelHandler.honorLogin.utils import get_authorization_code
+from channelHandler.honorLogin.session import parse_session, valid_redirect
 from channelHandler.WebLoginUtils import WebBrowser
 
 DEVICE_RECORD = "honor_device.json"
@@ -39,13 +40,7 @@ class HonorBrowser(WebBrowser):
         self.logger = setup_logger()
 
     def verify(self, url):
-        parsed = urllib.parse.urlsplit(url)
-        expected = urllib.parse.urlsplit(HONOR_REDIRECT_URI)
-        params = urllib.parse.parse_qs(parsed.query)
-        codes = params.get("code", [])
-        return (parsed.scheme == expected.scheme and parsed.netloc == expected.netloc
-                and parsed.path == expected.path and len(codes) == 1 and bool(codes[0])
-                and params.get("state") == [self.expected_state])
+        return valid_redirect(url, self.expected_state, HONOR_REDIRECT_URI)
 
     def parseReslt(self, url):
         self.result = url
@@ -96,6 +91,7 @@ class HonorLogin:
         auth_url, self.code_verifier = get_authorization_code(client_id, HONOR_REDIRECT_URI, HONOR_SCOPE)
 
         expected_state = urllib.parse.parse_qs(urllib.parse.urlsplit(auth_url).query)["state"][0]
+        self._expected_state = expected_state
         browser = HonorBrowser(expected_state)
         browser.set_url(auth_url)
         res = browser.run()
@@ -125,16 +121,12 @@ class HonorLogin:
 
     def _handle_redirect(self, url: str):
         """从 honorid://redirect_url?code=XXX 提取 code，直接传给 Game Center login。"""
-        self.logger.info("已收到荣耀 OAuth 回调")
-        parsed = urllib.parse.urlparse(url)
-        params = urllib.parse.parse_qs(parsed.query)
-        code_list = params.get("code")
-        if not code_list:
-            self.logger.error("荣耀 OAuth 回调未包含 code")
+        if not valid_redirect(url, getattr(self, "_expected_state", None), HONOR_REDIRECT_URI):
+            self.logger.warning("荣耀 OAuth 回调校验失败")
             return False
-
-        auth_code = code_list[0]
-        self.logger.info("荣耀 OAuth code 提取成功")
+        self._expected_state = None
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        auth_code = params["code"][0]
 
         # 荣耀 Game Center 直接接受 oauthCode（服务端自行换 token），不需要客户端先 exchange
         return self._game_center_login(auth_code)
@@ -162,28 +154,24 @@ class HonorLogin:
             "Content-Type": "application/json",
         }
 
+        data = None
         try:
-            resp = requests.post(url, json=body, headers=headers, verify=should_verify_ssl())
+            resp = requests.post(url, json=body, headers=headers, timeout=30, verify=should_verify_ssl())
+            resp.raise_for_status()
             data = resp.json()
-            # 响应结构: {"loginData": {"errorCode": 0, "data": {"unionToken": {...}, ...}}}
-            login_wrapper = data.get("loginData") or data.get("data") or {}
-            if isinstance(login_wrapper, dict) and login_wrapper.get("errorCode") not in (0, None):
-                self.logger.error(f"荣耀 Game Center login 错误: {login_wrapper.get('errorMessage')}")
-                return False
-            login_data = login_wrapper.get("data") or login_wrapper
-            ut = login_data.get("unionToken")
-            if isinstance(ut, dict) and ut.get("openId") and ut.get("token"):
-                expires = int(time.time()) + int(ut.get("expireTimeout", 3600))
-                self.unionToken = ut
-                self.displayName = str(login_data.get("displayName", ""))
-                self.lastLoginTime = int(time.time())
-                self.expiredTime = expires
-                self.logger.info("荣耀登录成功")
-                return True
-            else:
-                self.logger.error("荣耀 Game Center login 未返回有效 unionToken")
-                return False
+            ut, name, lifetime = parse_session(data)
+            now = int(time.time())
+            self.unionToken = ut
+            self.displayName = name
+            self.lastLoginTime = now
+            self.expiredTime = now + lifetime
+            self.logger.info("荣耀登录成功")
+            return True
         except Exception:
+            if isinstance(data, dict):
+                login_wrapper = data.get("loginData") or data.get("data") or {}
+                if isinstance(login_wrapper, dict) and login_wrapper.get("errorMessage"):
+                    self.logger.error(f"荣耀 Game Center login 错误: {login_wrapper.get('errorMessage')}")
             self.logger.exception("荣耀 Game Center login 请求失败")
             return False
 
@@ -235,24 +223,16 @@ class HonorLogin:
         }
 
         try:
-            resp = requests.post(url, json=body, headers=headers, verify=should_verify_ssl())
-            data = resp.json()
-            login_wrapper = data.get("loginData") or data.get("data") or {}
-            login_data = login_wrapper.get("data") or login_wrapper
-            ut = login_data.get("unionToken")
-            if isinstance(ut, dict) and ut.get("openId") and ut.get("token"):
-                expires = int(time.time()) + int(ut.get("expireTimeout", 3600))
-                self.unionToken = ut
-                dn = str(login_data.get("displayName", ""))
-                if dn:
-                    self.displayName = dn
-                self.lastLoginTime = int(time.time())
-                self.expiredTime = expires
-                self.logger.info("荣耀 configLogin 刷新成功")
-                return True
-            else:
-                self.logger.warning("荣耀 configLogin 刷新失败")
-                return False
+            resp = requests.post(url, json=body, headers=headers, timeout=30, verify=should_verify_ssl())
+            resp.raise_for_status()
+            ut, name, lifetime = parse_session(resp.json())
+            now = int(time.time())
+            self.unionToken = ut
+            self.displayName = name
+            self.lastLoginTime = now
+            self.expiredTime = now + lifetime
+            self.logger.info("荣耀 configLogin 刷新成功")
+            return True
         except Exception:
             self.logger.exception("荣耀 configLogin 请求失败")
             return False

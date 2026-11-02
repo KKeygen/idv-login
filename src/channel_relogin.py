@@ -128,7 +128,7 @@ class ExpiredChannelLogin:
         self.message = '渠道登录完成，正在更新游戏登录凭据…'
         try:
             self.record.request_unisdk(
-                self.game, force=True, interactive=self.record.channel_name == 'oppo',
+                self.game, force=True, interactive=self.record.channel_name in ('oppo', 'huawei'),
                 cancel_event=self.cancel_event,
                 on_complete=lambda packet: app_state.run_on_main_thread(
                     lambda: self._packet_ready(packet)))

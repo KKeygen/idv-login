@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import uuid as _uuid
+import secrets
+from urllib.parse import urlencode
 
 from channelHandler.honorLogin.consts import HONOR_OAUTH_BASE, HONOR_REDIRECT_URI
 
@@ -13,22 +15,21 @@ def generate_code_challenge(code_verifier: str) -> str:
 
 def get_authorization_code(client_id: str, redirect_uri: str = HONOR_REDIRECT_URI, scope: str = ""):
     """构建荣耀 OAuth 授权 URL，返回 (auth_url, code_verifier)。"""
-    code_verifier = str(_uuid.uuid4())
+    code_verifier = secrets.token_urlsafe(32)
     code_challenge = generate_code_challenge(code_verifier)
     nonce = str(_uuid.uuid4())
     state = str(_uuid.uuid4())
 
-    auth_url = (
-        f"{HONOR_OAUTH_BASE}/oauth2/v3/authorize?"
-        f"access_type=offline&"
-        f"response_type=code&"
-        f"client_id={client_id}&"
-        f"redirect_uri={redirect_uri}&"
-        f"scope={scope}&"
-        f"code_challenge={code_challenge}&"
-        f"code_challenge_method=S256&"
-        f"nonce={nonce}&"
-        f"display=touch&"
-        f"state={state}"
-    )
+    auth_url = f"{HONOR_OAUTH_BASE}/oauth2/v3/authorize?" + urlencode({
+        "access_type": "offline",
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "nonce": nonce,
+        "display": "touch",
+        "state": state,
+    })
     return auth_url, code_verifier

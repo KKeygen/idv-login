@@ -5,6 +5,7 @@ from PyQt6.QtCore import QEvent, Qt, QUrl, QTimer
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLabel
 import app_state
 from browser_runtime import BrowserSession
+from native_ui.dialogs import configure_close_button, configure_login_window, fit_login_window
 from envmgr import genv
 from logutil import setup_logger
 _CURRENT_COOKIE_TOKEN = object()
@@ -91,27 +92,27 @@ class WebBrowser(QWidget):
         if not self.frameless:
             self.clear_cookie_button = QPushButton("强制退登")
             self.clear_cookie_button.clicked.connect(self.clear_cookies)
-            self.toolBarLayout.addWidget(self.clear_cookie_button)
+            self.toolBarLayout.addWidget(self.clear_cookie_button, 0, Qt.AlignmentFlag.AlignLeft)
             self.layout.addLayout(self.toolBarLayout)
         flags = Qt.WindowType.WindowStaysOnTopHint
         if self.frameless:
             flags |= Qt.WindowType.FramelessWindowHint
             self.layout.setContentsMargins(0, 0, 0, 0)
         self.setWindowFlags(flags)
-        self.resize(1000, 750)
+        configure_login_window(self, self.frameless)
+        fit_login_window(self, 1000, 750)
         if self.frameless:
             close = QPushButton("✕", self)
             close.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-            close.setFixedSize(28, 28)
+            configure_close_button(close)
             close.setCursor(Qt.CursorShape.PointingHandCursor)
-            close.setStyleSheet("QPushButton{background:rgba(0,0,0,90);color:white;border:0;border-radius:14px;font-size:14px;}QPushButton:hover{background:rgba(220,53,69,220);}QPushButton:pressed{background:rgba(180,40,50,240);}")
             close.clicked.connect(self.close)
             self._frameless_close_button = close
             self._position_close()
 
     def _position_close(self):
         if self._frameless_close_button is not None:
-            self._frameless_close_button.move(self.width() - 32, 4)
+            self._frameless_close_button.move(self.width() - self._frameless_close_button.width() - 8, 8)
             self._frameless_close_button.raise_()
 
     def _resize_host(self):
