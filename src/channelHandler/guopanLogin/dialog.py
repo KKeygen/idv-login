@@ -4,9 +4,11 @@ import time
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QVBoxLayout,
+    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QLabel, QLineEdit, QPushButton,
 )
+
+from native_ui.dialogs import DialogComboBox, StatusLabel, dialog_layout, primary_button
 
 
 class GuopanLoginDialog(QDialog):
@@ -14,7 +16,6 @@ class GuopanLoginDialog(QDialog):
                  send_sms=None, sms_authenticate=None):
         super().__init__()
         self.setWindowTitle("果盘账号登录")
-        self.setMinimumWidth(440)
         self._authenticate = authenticate
         self._sms_authenticate = sms_authenticate
         self._send_sms = send_sms
@@ -26,16 +27,20 @@ class GuopanLoginDialog(QDialog):
         self._single_game_uin = ""
         self._sms_deadline = 0.0
         self.result_value = None
-        layout = QVBoxLayout(self)
-        note = QLabel("密码和短信验证码仅用于本次登录，不会保存。\n第三方发行商账号请使用其原有登录入口。")
+        layout = dialog_layout(self)
+        note = QLabel("密码和短信验证码仅用于本次登录，不会保存。\n第三方发行商账号请使用游戏扫码登录（临时记住）。")
         note.setWordWrap(True)
+        note.setProperty("role", "muted")
         layout.addWidget(note)
-        self.mode = QComboBox()
+        self.mode = DialogComboBox()
         self.mode.addItem("密码登录", "password")
         if send_sms is not None and sms_authenticate is not None:
             self.mode.addItem("短信登录", "sms")
         layout.addWidget(self.mode)
         form = QFormLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.username_label = QLabel("账号")
         self.username = QLineEdit()
         self.username.setMaxLength(128)
@@ -46,6 +51,7 @@ class GuopanLoginDialog(QDialog):
         self.sms_button = QPushButton("获取验证码")
         self.sms_button.hide()
         secret_row = QHBoxLayout()
+        secret_row.setSpacing(8)
         secret_row.addWidget(self.password)
         secret_row.addWidget(self.sms_button)
         form.addRow(self.username_label, self.username)
@@ -53,24 +59,24 @@ class GuopanLoginDialog(QDialog):
         layout.addLayout(form)
         self.sms_note = QLabel("未注册的手机号可能由果盘按其协议创建账号。")
         self.sms_note.setWordWrap(True)
+        self.sms_note.setProperty("role", "muted")
         self.sms_note.hide()
         layout.addWidget(self.sms_note)
         self.consent = QCheckBox("我已阅读并同意果盘用户协议和隐私政策")
         layout.addWidget(self.consent)
-        terms = QLabel('<a href="https://www.guopan.cn/zcxy.html">果盘用户协议</a> · '
-                       '<a href="https://user.guopan.cn/conceal.html">果盘隐私政策</a>')
+        terms = QLabel('<a style="color:#cbad8e" href="https://www.guopan.cn/zcxy.html">果盘用户协议</a> · '
+                       '<a style="color:#cbad8e" href="https://user.guopan.cn/conceal.html">果盘隐私政策</a>')
         terms.setOpenExternalLinks(True)
         layout.addWidget(terms)
-        self.accounts = QComboBox()
+        self.accounts = DialogComboBox()
         self.accounts.hide()
         layout.addWidget(self.accounts)
-        self.status = QLabel("")
-        self.status.setTextFormat(Qt.TextFormat.PlainText)
-        self.status.setWordWrap(True)
+        self.status = StatusLabel()
         layout.addWidget(self.status)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        buttons.layout().setSpacing(8)
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
-        self.submit = QPushButton("登录")
+        self.submit = primary_button(QPushButton("登录"))
         buttons.addButton(self.submit, QDialogButtonBox.ButtonRole.AcceptRole)
         self.submit.clicked.connect(self._submit)
         buttons.rejected.connect(self.reject)
@@ -82,6 +88,7 @@ class GuopanLoginDialog(QDialog):
         self.sms_button.clicked.connect(self._request_sms)
         self.finished.connect(self._closed)
         self.password.returnPressed.connect(self._submit)
+        self.username.setFocus()
 
     def _is_sms(self):
         return self.mode.currentData() == "sms"

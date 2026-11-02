@@ -3,6 +3,7 @@ from PyQt6.QtCore import QUrl, QTimer, pyqtSlot
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLabel
+from native_ui.dialogs import configure_close_button, configure_login_window, fit_login_window
 from envmgr import genv
 from logutil import setup_logger
 import os
@@ -82,7 +83,7 @@ class WebBrowser(QWidget):
         else:
             self.clear_cookie_button = QPushButton("强制退登")
             self.clear_cookie_button.clicked.connect(self.clear_cookies)
-            self.toolBarLayout.addWidget(self.clear_cookie_button)
+            self.toolBarLayout.addWidget(self.clear_cookie_button, 0, QtCore.Qt.AlignmentFlag.AlignLeft)
 
         self.layout = QVBoxLayout()
         self.layout.addWidget(self.view)
@@ -101,7 +102,8 @@ class WebBrowser(QWidget):
             self.layout.setContentsMargins(0, 0, 0, 0)
         self.setWindowFlags(window_flags)
         #设置窗口大小
-        self.resize(1000, 750)
+        configure_login_window(self, self.frameless)
+        fit_login_window(self, 1000, 750)
 
         if self.frameless:
             self._create_frameless_close_button()
@@ -109,23 +111,8 @@ class WebBrowser(QWidget):
     def _create_frameless_close_button(self):
         """创建无边框窗口唯一的自定义按钮。"""
         close_button = QPushButton("✕", self)
-        close_button.setFixedSize(28, 28)
+        configure_close_button(close_button)
         close_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        close_button.setStyleSheet(
-            "QPushButton {"
-            "  background-color: rgba(0, 0, 0, 90);"
-            "  color: white;"
-            "  border: none;"
-            "  border-radius: 14px;"
-            "  font-size: 14px;"
-            "}"
-            "QPushButton:hover {"
-            "  background-color: rgba(220, 53, 69, 220);"
-            "}"
-            "QPushButton:pressed {"
-            "  background-color: rgba(180, 40, 50, 240);"
-            "}"
-        )
         close_button.clicked.connect(self.close)
         close_button.raise_()
         self._frameless_close_button = close_button
@@ -134,7 +121,7 @@ class WebBrowser(QWidget):
     def _reposition_frameless_close_button(self):
         close_button = self._frameless_close_button
         if close_button is not None:
-            close_button.move(self.width() - close_button.width() - 4, 4)
+            close_button.move(self.width() - close_button.width() - 8, 8)
 
     def resizeEvent(self, event):
         if self.frameless:

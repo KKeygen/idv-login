@@ -33,7 +33,6 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QLabel,
     QListWidget,
-    QVBoxLayout,
     QWidget,
     QCheckBox,
 )
@@ -55,11 +54,12 @@ def _show_account_selector(accounts: list) -> str:
     parent = QWidget()
     dialog = QDialog(parent)
     dialog.setWindowTitle("选择小号")
-    dialog.setMinimumWidth(300)
-    layout = QVBoxLayout(dialog)
+    from native_ui.dialogs import configure_account_list, dialog_layout, primary_button
+    layout = dialog_layout(dialog)
     layout.addWidget(QLabel("检测到多个小号，请选择要登录的账号："))
 
     lst = QListWidget(dialog)
+    configure_account_list(lst, len(accounts))
     for acc in accounts:
         lst.addItem(f"{acc.nickName}")
     lst.setCurrentRow(0)
@@ -72,6 +72,10 @@ def _show_account_selector(accounts: list) -> str:
     buttons = QDialogButtonBox(
         QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
     )
+    buttons.layout().setSpacing(8)
+    primary_button(buttons.button(QDialogButtonBox.StandardButton.Ok))
+    buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确认")
+    buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)

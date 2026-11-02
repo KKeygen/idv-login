@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
 import requests
+from native_ui.dialogs import fit_login_window
 from PyQt6.QtCore import QTimer
 
 from channelHandler.WebLoginUtils import WebBrowser
@@ -286,7 +287,7 @@ class BilibiliBrowser(WebBrowser):
         self._login_url = _build_login_url(game_id, app_key)
 
         # 无边框、关闭按钮与拖拽行为由 WebBrowser 统一提供。
-        self.resize(370, 439)
+        fit_login_window(self, 370, 439)
 
         # 注入 XHR 拦截脚本（在文档创建前）
         self.add_init_script(_build_intercept_js(), name="bili_xhr_intercept")

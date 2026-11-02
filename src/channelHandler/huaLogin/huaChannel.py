@@ -28,7 +28,8 @@ from ssl_utils import should_verify_ssl
 from channelHandler.WebLoginUtils import WebBrowser
 from channelHandler.huaLogin.consts import DEVICE, COMMON_PARAMS
 from AutoFillUtils import RecordMgr
-from PyQt6.QtWidgets import QComboBox, QInputDialog, QPushButton
+from PyQt6.QtWidgets import QHBoxLayout, QPushButton
+from native_ui.dialogs import DialogComboBox, fit_login_window, get_text
 
 DEVICE_RECORD = "huawei_device.json"
 QRCODE_CACHE_KEY = "HUAWEI_QRCODE_CACHE"
@@ -262,7 +263,7 @@ class HuaweiLoginBrowser(WebBrowser):
         self.setWindowTitle("华为账号登录")
         self._login_url = login_url
         # 华为登录页为移动端页面，按现代手机比例初始化窗口（19.5:9）
-        self.resize(390, 844)
+        fit_login_window(self, 390, 844)
         # 使用手机端 UA，让登录页按移动端渲染
         self.set_user_agent(
             "Mozilla/5.0 (Linux; Android 13; SM-G9910) AppleWebKit/537.36 "
@@ -281,19 +282,33 @@ class HuaweiLoginBrowser(WebBrowser):
             self.records.remove(defaultAccount)
             self.records.insert(0, defaultAccount)
 
-        self.accountComboBox = QComboBox()
+        self.accountComboBox = DialogComboBox()
+        if self.clear_cookie_button is not None:
+            self.toolBarLayout.removeWidget(self.clear_cookie_button)
         self.toolBarLayout.addWidget(self.accountComboBox)
         self.accountComboBox.addItems(self.records)
         self.accountComboBox.currentIndexChanged.connect(self.onAccountChanged)
         self.accountComboBox.textActivated.connect(self.onAccountChanged)
 
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        if self.clear_cookie_button is not None:
+            actions.addWidget(self.clear_cookie_button)
+        actions.addStretch()
         self.fillButton = QPushButton("填充")
-        self.toolBarLayout.addWidget(self.fillButton)
+        actions.addWidget(self.fillButton)
         self.fillButton.clicked.connect(self.onAccountChanged)
 
         self.deleteButton = QPushButton("删除")
-        self.toolBarLayout.addWidget(self.deleteButton)
+        actions.addWidget(self.deleteButton)
+        self.layout.addLayout(actions)
         self.deleteButton.clicked.connect(self.deleteAccount)
+        self.setTabOrder(self.view, self.accountComboBox)
+        previous = self.accountComboBox
+        for button in (self.clear_cookie_button, self.fillButton, self.deleteButton):
+            if button is not None:
+                self.setTabOrder(previous, button)
+                previous = button
 
     def deleteAccount(self):
         account = self.accountComboBox.currentText()
@@ -307,7 +322,7 @@ class HuaweiLoginBrowser(WebBrowser):
         account = self.accountComboBox.currentText()
         if "*" in account:
             # 被掩码的账号需要完整账号解密
-            text, ok = QInputDialog.getText(
+            text, ok = get_text(
                 self, "二次验证", "密码已被加密，请输入完整的账号来解密", text=account
             )
             if ok:
