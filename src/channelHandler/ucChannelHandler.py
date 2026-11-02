@@ -85,7 +85,9 @@ class ucChannel(channelmgr.channel):
         uc_session = data.get("ucSession")
         refresh = data.get("refreshToken", "")
         if not refresh and isinstance(uc_session, dict):
-            refresh = uc_session.get("refreshToken", "")
+            session_data = uc_session.get("data", uc_session)
+            if isinstance(session_data, dict):
+                refresh = session_data.get("refreshToken") or uc_session.get("refreshToken", "")
         return cls(
             login_info=data.get("login_info", {}),
             user_info=data.get("user_info", {}),
@@ -137,11 +139,11 @@ class ucChannel(channelmgr.channel):
         data = session_data.get("data", session_data)
         if not isinstance(data, dict) or not data.get("sid") or not (data.get("accountId") or data.get("ucid")):
             return False
-        timeout = int(session_data.get("timeout", 86400))
+        timeout = int(data.get("timeout", session_data.get("timeout", 86400)))
         self.ucSession = session_data
         self.observe_sdkuid(data.get("accountId") or data.get("ucid"))
         # 提取 refreshToken
-        rt = session_data.get("refreshToken", "")
+        rt = data.get("refreshToken") or session_data.get("refreshToken", "")
         if rt:
             self.refreshToken = rt
         # 计算 sid 过期时间（timeout 是持续秒数，默认 86400 = 24h）
@@ -166,7 +168,7 @@ class ucChannel(channelmgr.channel):
             return False
         try:
             new_data = self.ucLogin.do_refresh(old_sid, self.refreshToken)
-            if new_data and isinstance(new_data, dict) and new_data.get("sid"):
+            if isinstance(new_data, dict):
                 if not self._store_session(new_data):
                     return False
                 self.logger.debug("UC session 自动续期成功")

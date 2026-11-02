@@ -205,11 +205,25 @@ class wechatChannel(channelmgr.channel):
                 data.get(key) for key in ("access_token", "refresh_token", "expires_in")
             ) or data.get("errcode"):
                 return False
+            ttl = int(data["expires_in"])
+            if ttl <= 0:
+                return False
             renewed = self.session.__json__()
             renewed.update(atk=data["access_token"], rtk=data["refresh_token"],
-                           atk_expire=int(data["expires_in"]))
+                           openid=data.get("openid") or self.session.openid,
+                           atk_expire=ttl)
             self.session = myappVeriftResp(renewed)
             self.token_issued_at = int(time.time())
+            try:
+                profile = requests.get(
+                    "https://api.weixin.qq.com/sns/userinfo",
+                    params={"access_token": self.session.atk, "openid": self.session.openid},
+                    verify=should_verify_ssl(), timeout=(5, 15)
+                ).json()
+                if profile.get("nickname"):
+                    self.name = str(profile["nickname"])
+            except Exception:
+                pass
             return True
         except Exception:
             self.logger.error("微信凭证续期失败")
