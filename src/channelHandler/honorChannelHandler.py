@@ -2,7 +2,7 @@
 """荣耀 (Honor) 游戏中心渠道处理器。
 
 登录流程：OAuth 浏览器授权 → Game Center aggregate/login → unionToken → SAUTH。
-支持 configLogin 刷新 session（无需重新 OAuth）。
+支持 configLogin 以及账号 serviceToken 静默重新授权。
 """
 import json
 import time
@@ -33,6 +33,7 @@ class honorChannel(channelmgr.channel):
         game_id: str = "",
         unionToken: dict = None,
         uuid: str = "",
+        accountSession: dict = None,
     ) -> None:
         super().__init__(
             login_info,
@@ -48,6 +49,7 @@ class honorChannel(channelmgr.channel):
         self.crossGames = False
         self.game_id = game_id
         self.unionToken = unionToken
+        self.accountSession = dict(accountSession or {})
 
         real_game_id = getShortGameId(game_id)
         cloudRes = CloudRes()
@@ -59,7 +61,7 @@ class honorChannel(channelmgr.channel):
             )
         self.channelConfig = res.get(self.channel_name, {})
         self.sdk_version = self.channelConfig.get("sdk_ver", HONOR_APK_VER_NAME)
-        self.honorLogin = HonorLogin(self.channelConfig, self.unionToken)
+        self.honorLogin = HonorLogin(self.channelConfig, self.unionToken, self.accountSession, real_game_id)
         self.realGameId = real_game_id
 
     # ── 序列化 / 反序列化 ────────────────────────────────────
@@ -76,28 +78,42 @@ class honorChannel(channelmgr.channel):
             name=data.get("name", ""),
             game_id=data.get("game_id", ""),
             unionToken=data.get("unionToken"),
+            accountSession=data.get("accountSession"),
             uuid=data.get("uuid", ""),
         )
 
     # ── 登录 ──────────────────────────────────────────────────
 
-    def request_user_login(self, on_complete=None):
+    def request_user_login(self, on_complete=None, login_method="qr", cancel_event=None, on_qrcode=None):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
+        manager = app_state.channels_helper
+        if (login_method == "qr" and on_qrcode is None and manager is not None
+                and manager.query_channel(self.uuid) is self):
+            from channel_relogin import start_honor_relogin
+            app_state.run_on_main_thread(lambda: start_honor_relogin(self, self.game_id))
+            if on_complete is not None:
+                on_complete(None)
+            return None
         def _apply(success):
+            if cancel_event is not None and cancel_event.is_set():
+                return None
             if success is not True:
                 return success
             token = self.honorLogin.unionToken
             if not isinstance(token, dict) or not token.get("openId") or not token.get("token"):
                 return False
             self.unionToken = token
+            self.accountSession = dict(self.honorLogin.accountSession)
             self._update_name()
             self.mark_manual_login_success()
             return True
+        login = self.honorLogin.newAccountLogin if login_method == "qr" else self.honorLogin.newOAuthLogin
+        options = {"cancel_event": cancel_event, "on_qrcode": on_qrcode} if login_method == "qr" else {}
         try:
             if on_complete is not None:
-                self.honorLogin.newOAuthLogin(on_complete=lambda success: on_complete(_apply(success)))
+                login(on_complete=lambda success: on_complete(_apply(success)), **options)
                 return None
-            return _apply(self.honorLogin.newOAuthLogin())
+            return _apply(login(**options))
         except Exception:
             self.logger.error("渠道登录未完成")
             if on_complete is not None:
@@ -112,9 +128,9 @@ class honorChannel(channelmgr.channel):
         return bool(open_id and token)
 
     def _refresh_session(self) -> bool:
-        """尝试用 configLogin 刷新 session。"""
+        """先 configLogin；旧游戏 token 不可用时由账号 ST 取新授权码。"""
         self.honorLogin.unionToken = self.unionToken
-        success = self.honorLogin.configLogin()
+        success = self.honorLogin.refreshSession()
         if success:
             self.unionToken = self.honorLogin.unionToken
             self.observe_sdkuid(self.unionToken.get("openId"))
@@ -193,6 +209,10 @@ class honorChannel(channelmgr.channel):
                 "gvn": "1.5.80",
                 "cv": "a1.5.0",
             }
+
+        # 有账号长期态但没有游戏会话时，先无感获取，后台预刷新也可使用。
+        if not self.is_token_valid() and self.accountSession.get("serviceToken"):
+            self._refresh_session()
 
         # 检查 token 是否有效
         if not self.is_token_valid():

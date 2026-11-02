@@ -23,6 +23,7 @@ from channelHandler.honorLogin.consts import (
     HONOR_AMS_PACKAGE,
 )
 from channelHandler.honorLogin.utils import get_authorization_code
+from channelHandler.honorLogin.account import HonorAccountLogin
 from channelHandler.honorLogin.session import parse_session, valid_redirect
 from channelHandler.WebLoginUtils import WebBrowser
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestJob, QWebEngineUrlSchemeHandler
@@ -68,15 +69,17 @@ class HonorBrowser(WebBrowser):
                 self.cleanup()
 
 
-class HonorLogin:
+class HonorLogin(HonorAccountLogin):
     """荣耀渠道登录：OAuth → Game Center API → unionToken。"""
 
-    def __init__(self, channelConfig: dict, unionToken: dict = None):
+    def __init__(self, channelConfig: dict, unionToken: dict = None, accountSession: dict = None, game_id=""):
         os.chdir(os.path.join(os.environ["PROGRAMDATA"], "idv-login"))
         self.logger = setup_logger()
         self.channelConfig = channelConfig
         # unionToken 持久化格式: {"openId": "...", "token": "...", "unionId": "...", "expireTimeout": ...}
         self.unionToken = unionToken
+        self.accountSession = dict(accountSession or {})
+        self.account_game_id = game_id
         self.displayName = ""
         self.code_verifier = None
         self.lastLoginTime = 0
