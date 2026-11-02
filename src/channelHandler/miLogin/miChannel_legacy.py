@@ -255,6 +255,7 @@ class MiLogin:
                             self.account_type = 2
                             data = self.getSTbyQQResp(resp)
                         else:
+                            self.account_type = 4
                             data = self.getSTbyCode(resp)
                     except Exception as error:
                         data = error
@@ -270,6 +271,7 @@ class MiLogin:
                     self.account_type = 2
                     data = self.getSTbyQQResp(resp)
                 else:
+                    self.account_type = 4
                     data = self.getSTbyCode(resp)
             except Exception as error:
                 if on_complete is None:

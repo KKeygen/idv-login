@@ -194,6 +194,9 @@ class oppoChannel(channelmgr.channel):
         }
         self.oppo_open_account["session_ticket"] = client.session.session_ticket
 
+        if not self.oppo_open_account["authorize"]["success"]:
+            return False
+
         if isinstance(resp, dict):
             data = resp.get("data") or {}
             if not isinstance(data, dict):
@@ -251,6 +254,8 @@ class oppoChannel(channelmgr.channel):
 
         if not isinstance(resp, dict):
             raise TypeError("OpenAccount refresh 返回必须为 dict")
+        if not self.oppo_open_account["refresh"]["success"]:
+            return resp
         data = resp.get("data") or {}
         if not isinstance(data, dict):
             raise TypeError("OpenAccount refresh resp.data 必须为 dict")
