@@ -216,8 +216,15 @@ class FeverWindow(_WindowsFramelessWindow):
                 self.jobs.close()
             self._show_failure('WebView2 初始化失败，请检查运行时和数据目录权限。')
 
-    def open(self, game_id='', initial_view=''):
+    def open(self, game_id='', initial_view='', relogin_task=''):
+        from channel_relogin import cancel_web_login
+        previous = getattr(self, '_relogin_task', '')
+        if previous != relogin_task:
+            cancel_web_login(previous)
+        self._relogin_task = relogin_task
         query = {}
+        if relogin_task:
+            query['relogin'] = relogin_task
         if game_id:
             query['game_id'] = game_id
         if initial_view:
@@ -425,6 +432,8 @@ class FeverWindow(_WindowsFramelessWindow):
             self._call_host('notify_position_changed')
 
     def closeEvent(self, event):
+        from channel_relogin import cancel_web_login
+        cancel_web_login(getattr(self, '_relogin_task', ''))
         for dialog in tuple(self._dialogs):
             dialog.reject()
         if self.host and self._ready:
@@ -434,18 +443,18 @@ class FeverWindow(_WindowsFramelessWindow):
 
 
 class UIManager(NativeUIManager):
-    def _do_open_for_game(self, game_id='', initial_view=''):
+    def _do_open_for_game(self, game_id='', initial_view='', relogin_task=''):
         if self._window is None:
             self._window = FeverWindow(self)
-            self._window.open(game_id, initial_view)
+            self._window.open(game_id, initial_view, relogin_task)
             self._window.start()
         elif self._window.host is None and self._window._failure is not None:
             old = self._window
             self._window = None
             old.deleteLater()
-            self._do_open_for_game(game_id, initial_view)
+            self._do_open_for_game(game_id, initial_view, relogin_task)
             return
         else:
-            self._window.open(game_id, initial_view)
+            self._window.open(game_id, initial_view, relogin_task)
         self._force_foreground()
         _minimize_console_window()

@@ -76,7 +76,7 @@ def register_url_scheme():
 
 
 class _UISignalRouter(QObject):
-    open_game_sig = pyqtSignal(str, str)
+    open_game_sig = pyqtSignal(str, str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,10 +86,10 @@ class _UISignalRouter(QObject):
     def set_callback(self, callback):
         self._callback = callback
 
-    @pyqtSlot(str, str)
-    def _on_open_game(self, game_id: str, initial_view: str):
+    @pyqtSlot(str, str, str)
+    def _on_open_game(self, game_id: str, initial_view: str, relogin_task: str):
         if self._callback:
-            self._callback(game_id, initial_view)
+            self._callback(game_id, initial_view, relogin_task)
 
 
 class _MainThreadDispatcher(QObject):
@@ -128,8 +128,8 @@ class UIManager:
         self._router.set_callback(self._do_open_for_game)
         self._dispatcher = _MainThreadDispatcher()
 
-    def open_for_game(self, game_id='', initial_view=''):
-        self._router.open_game_sig.emit(game_id, initial_view)
+    def open_for_game(self, game_id='', initial_view='', relogin_task=''):
+        self._router.open_game_sig.emit(game_id, initial_view, relogin_task)
 
     def start_system_move(self):
         def move():

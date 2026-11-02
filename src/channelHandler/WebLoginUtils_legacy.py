@@ -307,6 +307,11 @@ class WebBrowser(QWidget):
             app.exec()
             return self.result
 
+    def cancel_login(self):
+        if not getattr(self, '_cleanup_called', False):
+            self.result = ""
+            self.close()
+
     def closeEvent(self, event):
         """用户手动关闭窗口时，触发 cleanup 释放资源并退出事件循环。"""
         if not getattr(self, '_cleanup_called', False):

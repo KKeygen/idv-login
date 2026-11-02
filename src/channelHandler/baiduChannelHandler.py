@@ -67,9 +67,9 @@ class baiduChannel(channelmgr.channel):
         self._baidu_packet_ready = True
         return result
 
-    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False):
+    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False, cancel_event=None):
         self._baidu_packet_ready = False
-        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True)
+        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True, cancel_event=cancel_event)
 
     def _call_protocol(self, method, value):
         client = BaiduProtocol({**self.channelConfig, "device_id": self.baiduDeviceId})
@@ -114,10 +114,17 @@ class baiduChannel(channelmgr.channel):
         if interactive:
             self.mark_manual_login_success()
 
-    def request_user_login(self, on_complete=None, *, interactive=True):
+    def request_user_login(self, on_complete=None, *, interactive=True, cancel_event=None):
+        def cancelled():
+            return cancel_event is not None and cancel_event.is_set()
+
+        if cancelled():
+            return on_complete(None) if on_complete else None
         genv.set("GLOB_LOGIN_UUID", self.uuid)
         if not interactive:
             def finish(result):
+                if cancelled():
+                    return on_complete(None) if on_complete else None
                 if isinstance(result, Exception):
                     value = result
                 else:
@@ -148,6 +155,8 @@ class baiduChannel(channelmgr.channel):
 
         def finish(result):
             self._login_pending = False
+            if cancelled():
+                return on_complete(None) if on_complete else None
             if isinstance(result, Exception):
                 value = result
             else:
@@ -167,7 +176,7 @@ class baiduChannel(channelmgr.channel):
             bduss = ref.cookies.get("BDUSS", "") if ref.result else ""
             ref.bduss = ""
             ref.cookies = {}
-            if not bduss:
+            if cancelled() or not bduss:
                 self._login_pending = False
                 return on_complete(None) if on_complete else None
             op = lambda: self._call_protocol("login_by_bduss", bduss)

@@ -324,8 +324,10 @@ class channel:
             self.expires_at = int(time.time())  # No packet yet; retain the existing UI failure status.
         return True
 
-    def request_unisdk(self, game_id='', on_complete=None, *, interactive=True, force=False):
+    def request_unisdk(self, game_id='', on_complete=None, *, interactive=True, force=False, cancel_event=None):
         """Reuse one fresh game packet, otherwise run the unchanged adapter."""
+        if cancel_event is not None and cancel_event.is_set():
+            return on_complete(None) if on_complete is not None else None
         game_id = game_id or self.game_id
         if self.record_source == 'manual':
             genv.set('GLOB_LOGIN_UUID', self.uuid)
@@ -348,6 +350,8 @@ class channel:
             return result
 
         def ready(result):
+            if cancel_event is not None and cancel_event.is_set():
+                return deliver(None)
             if result is None or result is False or isinstance(result, Exception):
                 return deliver(result)
             try:

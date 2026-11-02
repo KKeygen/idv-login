@@ -62,6 +62,7 @@ class WebBrowser(QWidget):
         self._scripts = []
         self._url = "about:blank"
         self._cleanup_called = self._finished = self._browser_running = False
+        self._login_cancelled = False
         self._startup_error = self._setup_dialog = None
         self._drag_pos = None
         self._moving_focus = False
@@ -426,6 +427,12 @@ class WebBrowser(QWidget):
         self.app.exec()
         return self.result
 
+    def cancel_login(self):
+        if not self._finished:
+            self._login_cancelled = True
+            self.result = ""
+            self.close()
+
     def closeEvent(self, event):
         if not self._finished:
             self.cleanup()
@@ -460,7 +467,7 @@ class WebBrowser(QWidget):
             return
         if self._cookie_commit_token is not None and not self._cookie_commit_accepted:
             return
-        if self.cookie_export is not None and not self._cookie_commit_accepted:
+        if self._login_cancelled or (self.cookie_export is not None and not self._cookie_commit_accepted):
             self.result = ""
             self._replace_cookie_records(())
         self._finished = True
