@@ -65,7 +65,7 @@ class ExpiredChannelLogin:
             return
         try:
             self.record.request_unisdk(
-                self.game, force=True, interactive=self.record.channel_name == 'oppo',
+                self.game, force=True, interactive=self.record.channel_name in ('oppo', 'huawei'),
                 on_complete=lambda packet: app_state.run_on_main_thread(
                     lambda: self._packet_ready(packet)))
         except Exception as error:
