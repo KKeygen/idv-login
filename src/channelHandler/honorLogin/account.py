@@ -11,11 +11,13 @@ import xml.etree.ElementTree as ET
 
 import qrcode
 import requests
+from PyQt6.QtCore import QTimer
 
 import app_state
 from envmgr import genv
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
+from channelHandler.WebLoginUtils import WebBrowser
 
 ACCOUNT_APP_ID = "com.hihonor.id"
 ACCOUNT_VERSION = "9.0.2.351"
@@ -127,6 +129,33 @@ class HonorAccountSession:
         return code
 
 
+class HonorAccountBrowser(WebBrowser):
+    def __init__(self, on_cancel):
+        super().__init__("honor", True)
+        self._on_cancel = on_cancel
+        self.setWindowTitle("荣耀账号登录")
+        self.set_user_agent(
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+        )
+
+    def verify(self, url):
+        # 登录结果由同一账号会话的轮询和 ST 兑换确认。
+        return False
+
+    def handle_url_change(self, url):
+        self.logger.debug("荣耀账号登录页面已跳转")
+
+    def on_load_finished(self, success):
+        if not success:
+            self.logger.debug("荣耀账号登录页面加载中断")
+
+    def closeEvent(self, event):
+        if not getattr(self, "_cleanup_called", False):
+            self._on_cancel()
+        super().closeEvent(event)
+
+
 class HonorAccountLogin:
     """由两种浏览器实现共用的账号态获取/恢复；QR 展示复用现有 UI。"""
 
@@ -155,43 +184,123 @@ class HonorAccountLogin:
             buf = io.BytesIO()
             qrcode.make(info["content"]).save(buf, format="PNG")
             self._update_qrcode_cache("ready", base64.b64encode(buf.getvalue()).decode("ascii"))
-            deadline = time.time() + 180
-            while time.time() < deadline:
-                if self._account_login_cancelled():
-                    self._update_qrcode_cache("cancelled")
-                    return None
-                scan = client.poll()
-                if self._account_login_cancelled():
-                    self._update_qrcode_cache("cancelled")
-                    return None
-                result_code = str(scan.get("resultCode", "0"))
-                if result_code == "103000201":
-                    self._update_qrcode_cache("expired")
-                    return False
-                if result_code == "103000202":
-                    self._update_qrcode_cache("scanned")
-                if result_code not in ("0", "103000200", "103000202"):
-                    self.logger.error("荣耀扫码确认失败: {}", scan)
-                    self._update_qrcode_cache("failed")
-                    return False
-                if result_code == "0" and scan.get("userID") and scan.get("code"):
-                    self._update_qrcode_cache("scanned")
-                    saved = client.exchange(scan, self.device)
-                    if self._account_login_cancelled():
-                        self._update_qrcode_cache("cancelled")
-                        return None
-                    if not saved:
-                        self._update_qrcode_cache("failed")
-                        return False
-                    self.accountSession = saved
-                    return True
-                time.sleep(0.5)
-            self._update_qrcode_cache("expired")
-            return False
+            return self._wait_for_account(client)
         except Exception:
             self._update_qrcode_cache("failed")
             self.logger.exception("荣耀账号扫码登录失败")
             return False
+
+    def _wait_for_account(self, client):
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            if self._account_login_cancelled():
+                self._update_qrcode_cache("cancelled")
+                return None
+            scan = client.poll()
+            if self._account_login_cancelled():
+                self._update_qrcode_cache("cancelled")
+                return None
+            result_code = str(scan.get("resultCode", "0"))
+            if result_code == "103000201":
+                self._update_qrcode_cache("expired")
+                return False
+            if result_code == "103000202":
+                self._update_qrcode_cache("scanned")
+            if result_code not in ("0", "103000200", "103000202"):
+                self.logger.error("荣耀扫码确认失败: {}", scan)
+                self._update_qrcode_cache("failed")
+                return False
+            if result_code == "0" and scan.get("userID") and scan.get("code"):
+                self._update_qrcode_cache("scanned")
+                saved = client.exchange(scan, self.device)
+                if self._account_login_cancelled():
+                    self._update_qrcode_cache("cancelled")
+                    return None
+                if not saved:
+                    self._update_qrcode_cache("failed")
+                    return False
+                self.accountSession = saved
+                return True
+            time.sleep(0.5)
+        self._update_qrcode_cache("expired")
+        return False
+
+    def _web_account_login(self, on_complete=None):
+        client = HonorAccountSession(self.accountSession)
+
+        def show(info):
+            if self._account_login_cancelled():
+                if on_complete is not None:
+                    on_complete(None, False)
+                return None, False
+            browser = HonorAccountBrowser(self.cancel_qr)
+            browser.set_url(info["content"])
+            self._active_browser = browser
+
+            def closed(b):
+                if self._active_browser is not b:
+                    return
+                self._active_browser = None
+                result = b.result if isinstance(b.result, tuple) else (None, False)
+                if result[0] is None:
+                    self.cancel_qr()
+                QTimer.singleShot(0, lambda: on_complete(*result))
+
+            if on_complete is not None:
+                browser._async_completion_callback = closed
+
+            def worker():
+                try:
+                    success = self._wait_for_account(client)
+                    game_ready = success is True and not self._account_login_cancelled() and self.loginWithAccount()
+                except Exception:
+                    self.logger.exception("荣耀账号网页登录失败")
+                    success, game_ready = False, False
+
+                def complete_browser():
+                    if self._active_browser is browser:
+                        browser.result = (success, game_ready)
+                        browser.cleanup()
+                app_state.run_on_main_thread(complete_browser)
+
+            try:
+                threading.Thread(target=worker, daemon=True).start()
+                result = browser.run()
+            except Exception:
+                self.cancel_qr()
+                self._active_browser = None
+                browser.cleanup()
+                raise
+            if on_complete is not None:
+                return None
+            self._active_browser = None
+            if not isinstance(result, tuple):
+                self.cancel_qr()
+                return None, False
+            return result
+
+        if on_complete is not None:
+            def prepare():
+                try:
+                    info = client.get_qr_info()
+                except Exception:
+                    self.logger.exception("荣耀账号网页登录准备失败")
+                    app_state.run_on_main_thread(lambda: on_complete(False, False))
+                    return
+                def open_browser():
+                    try:
+                        show(info)
+                    except Exception:
+                        self.logger.exception("荣耀账号登录页打开失败")
+                        on_complete(False, False)
+                app_state.run_on_main_thread(open_browser)
+            threading.Thread(target=prepare, daemon=True).start()
+            return None
+        try:
+            return show(client.get_qr_info())
+        except Exception:
+            self.logger.exception("荣耀账号网页登录失败")
+            return False, False
 
     def loginWithAccount(self):
         try:
@@ -206,7 +315,7 @@ class HonorAccountLogin:
             return True
         return self.loginWithAccount()
 
-    def newAccountLogin(self, on_complete=None, cancel_event=None, on_qrcode=None):
+    def newAccountLogin(self, on_complete=None, cancel_event=None, on_qrcode=None, login_method="qr"):
         self._qr_cancelled = False
         self._account_cancel_event = cancel_event
         self._on_qrcode = on_qrcode
@@ -239,6 +348,10 @@ class HonorAccountLogin:
                 result = None
             self._update_qrcode_cache("verified" if result is True else "cancelled" if result is None else "failed")
             return result
+        if login_method == "web":
+            if on_complete is not None:
+                return self._web_account_login(on_complete=finish)
+            return finish(*self._web_account_login())
         if on_complete is not None:
             def worker():
                 success = self.qrLogin()

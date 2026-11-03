@@ -107,8 +107,10 @@ class honorChannel(channelmgr.channel):
             self._update_name()
             self.mark_manual_login_success()
             return True
-        login = self.honorLogin.newAccountLogin if login_method == "qr" else self.honorLogin.newOAuthLogin
-        options = {"cancel_event": cancel_event, "on_qrcode": on_qrcode} if login_method == "qr" else {}
+        login = self.honorLogin.newOAuthLogin if login_method == "oauth" else self.honorLogin.newAccountLogin
+        options = {} if login_method == "oauth" else {
+            "cancel_event": cancel_event, "on_qrcode": on_qrcode, "login_method": login_method,
+        }
         try:
             if on_complete is not None:
                 login(on_complete=lambda success: on_complete(_apply(success)), **options)
