@@ -1096,7 +1096,6 @@
                             fetch(`/_idv-login/switch-status?task_id=${taskId}`)
                                 .then(r => r.json())
                                 .then(status => {
-                                    if (switchedToWebLogin) return;
                                     if (status.status === 'done') {
                                         swal.close();
                                         if (status.result && status.result !== false) {
@@ -3114,6 +3113,7 @@
                             fetch(`/_idv-login/import-status?task_id=${taskId}`)
                                 .then(r => r.json())
                                 .then(status => {
+                                    if (switchedToWebLogin) return;
                                     if (status.status === 'done') {
                                         stopQrcodePolling();
                                         swal.close();
