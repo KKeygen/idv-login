@@ -60,15 +60,21 @@ class TelemetryTests(unittest.TestCase):
                     telemetry._current = worker
                 text = 'HTTP 401 response={"token":"literal-error", "detail":"失败"}'
                 logutil.logger.warning(text)
+                try:
+                    raise RuntimeError('synthetic-exception-detail')
+                except RuntimeError:
+                    logutil.logger.exception('synthetic-exception-message')
                 logutil.user_notice('NOTICE-MUST-NOT-BE-UPLOADED')
                 self.assertTrue(ready.wait(3))
                 worker.close()
                 local = pathlib.Path('log.txt').read_text()
                 bodies = [item['body'] for payload in sent for item in json.loads(payload.splitlines()[2])['items']]
                 self.assertIn(text, local)
-                self.assertIn(text, bodies)
+                self.assertIn(text, ''.join(bodies))
+                self.assertIn('synthetic-exception-detail', local)
+                self.assertEqual(local, ''.join(bodies))
                 self.assertNotIn('NOTICE-MUST-NOT-BE-UPLOADED', local)
-                self.assertNotIn('NOTICE-MUST-NOT-BE-UPLOADED', bodies)
+                self.assertNotIn('NOTICE-MUST-NOT-BE-UPLOADED', ''.join(bodies))
                 logging.getLogger('hotfixmgr').warning('standard-logging-example')
                 self.assertIn('standard-logging-example', pathlib.Path('log.txt').read_text())
             finally:
@@ -81,9 +87,9 @@ class TelemetryTests(unittest.TestCase):
         def record(text):
             return {'message': text, 'level': SimpleNamespace(name='INFO'),
                     'time': datetime.datetime.now(), 'name': 'test', 'line': 3}
-        worker.submit(record('first'))
+        worker.submit(record('first'), 'first')
         time.sleep(0.1)
-        worker.submit(record('second'))
+        worker.submit(record('second'), 'second')
         time.sleep(0.1)
         self.assertEqual(sent, [])
         worker.close(flush=True)
@@ -95,7 +101,7 @@ class TelemetryTests(unittest.TestCase):
         sent = []
         worker = telemetry.Telemetry('v6.3.3-beta', sent.append)
         worker.submit({'message': 'pending', 'level': SimpleNamespace(name='INFO'),
-                       'time': datetime.datetime.now(), 'name': 'test', 'line': 3})
+                       'time': datetime.datetime.now(), 'name': 'test', 'line': 3}, 'pending')
         time.sleep(0.05)
         worker.close()
         worker.thread.join(timeout=1)
@@ -114,7 +120,7 @@ class TelemetryTests(unittest.TestCase):
             return {'message': str(n), 'level': SimpleNamespace(name='INFO'),
                     'time': datetime.datetime.now(), 'name': 'test', 'line': 3}
         for n in range(64):
-            worker.submit(record(n))
+            worker.submit(record(n), str(n))
         deadline = time.monotonic() + 2
         while len(sent) < 2 and time.monotonic() < deadline:
             time.sleep(0.01)

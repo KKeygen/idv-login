@@ -24,7 +24,7 @@ def _telemetry_sink(message):
     """Upload the same log record as the file sink."""
     if not message.record['extra'].get('user_notice', False):
         from telemetry import submit
-        submit(message.record)
+        submit(message.record, str(message))
 
 
 def _get_console_sink():
@@ -47,7 +47,7 @@ try:
     logger.add(_get_console_sink(), level="INFO", filter=lambda record: not in_prefetch())
     logger.add("log.txt", rotation="10MB", encoding="utf-8", diagnose=False,
                filter=lambda record: not record["extra"].get("user_notice", False))
-    logger.add(_telemetry_sink, level="DEBUG")
+    logger.add(_telemetry_sink, level="DEBUG", diagnose=False)
 
     # Only application-owned standard loggers are bridged. Third-party loggers,
     # including mitmproxy's raw traffic, remain outside this pipeline.

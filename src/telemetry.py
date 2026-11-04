@@ -118,12 +118,12 @@ class Telemetry:
         self.thread = threading.Thread(target=self._worker, name='telemetry', daemon=True)
         self.thread.start()
 
-    def submit(self, record):
+    def submit(self, record, rendered):
         with self.lock:
             if self.stop_event.is_set():
                 return
             try:
-                self.queue.put_nowait((record['message'], record['level'].name,
+                self.queue.put_nowait((rendered, record['level'].name,
                                        record['time'].timestamp(), record['name'] or '', record['line']))
             except queue.Full:
                 pass
@@ -206,10 +206,10 @@ def stop_telemetry(flush=False):
             _current = None
 
 
-def submit(record):
+def submit(record, rendered):
     with _lock:
         if _current is not None:
-            _current.submit(record)
+            _current.submit(record, rendered)
 
 
 # Read settings before the program alters the environment or proxy.
