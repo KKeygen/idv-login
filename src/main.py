@@ -1655,6 +1655,17 @@ def main(cli_args=None):
 
     try:
         cloudBuildInfo()
+        from telemetry import configure as configure_debug_mode
+        # The persisted UI choice behaves like the existing --debug flag.
+        # An explicit --debug on a versioned build also opts in to telemetry.
+        configure_debug_mode(cli_args)
+        CLI_ARGS.debug = cli_args.debug
+        from telemetry import start_telemetry, collect_proxy_state
+        if start_telemetry(cli_args.debug, genv.get('VERSION', '')):
+            logger.info('调试遥测已启动')
+        if cli_args.debug:
+            proxy_state = collect_proxy_state(cli_args.proxy_port)
+            logger.info('启动前代理状态: {}', proxy_state)
         genv.set("MOCK_VERSION", getattr(cli_args, "mock_version", None))
         # hotfix gate: verify config cache can be written before importing most app modules.
         # macOS PyInstaller hotfixes are loaded via an import hook, so it must be installed

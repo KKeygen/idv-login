@@ -375,6 +375,12 @@ class IDVLoginAddon:
                          key[0], key[1], type(transport_error).__name__ if transport_error else None,
                          network_reason, http_status, code if isinstance(code, int) else None,
                          subcode if isinstance(subcode, int) else None, success)
+        if type(http_status) is int and 400 <= http_status <= 599:
+            try:
+                self.logger.debug('SAUTH HTTP status={} response={}', http_status,
+                                  flow.response.get_text(strict=False))
+            except Exception:
+                pass
         try:
             matched = bool(manager and manager.record_sauth(data, success))
         except Exception as error:

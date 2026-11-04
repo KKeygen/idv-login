@@ -20,6 +20,13 @@ from loguru import logger
 import sys
 
 
+def _telemetry_sink(message):
+    """Upload the same log record as the file sink."""
+    if not message.record['extra'].get('user_notice', False):
+        from telemetry import submit
+        submit(message.record)
+
+
 def _get_console_sink():
     stream = sys.stdout
     if sys.platform != "win32":
@@ -40,6 +47,26 @@ try:
     logger.add(_get_console_sink(), level="INFO", filter=lambda record: not in_prefetch())
     logger.add("log.txt", rotation="10MB", encoding="utf-8", diagnose=False,
                filter=lambda record: not record["extra"].get("user_notice", False))
+    logger.add(_telemetry_sink, level="DEBUG")
+
+    # Only application-owned standard loggers are bridged. Third-party loggers,
+    # including mitmproxy's raw traffic, remain outside this pipeline.
+    import logging
+    class _ApplicationLogHandler(logging.Handler):
+        def emit(self, record):
+            try:
+                level = record.levelname if record.levelname in (
+                    'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL') else 'INFO'
+                logger.bind(stdlib_logger=record.name).log(level, record.getMessage())
+            except Exception:
+                self.handleError(record)
+
+    for _name in ('hotfixmgr', 'install_actions', 'native_ui.chrome', 'webview2_host'):
+        _standard = logging.getLogger(_name)
+        if not any(isinstance(h, _ApplicationLogHandler) for h in _standard.handlers):
+            _standard.addHandler(_ApplicationLogHandler())
+        _standard.setLevel(logging.DEBUG)
+        _standard.propagate = False
 except Exception as e:
     print(e)
     from logging import getLogger

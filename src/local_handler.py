@@ -154,6 +154,7 @@ class LocalRequestHandler:
             "/_idv-login/export-logs": self._export_logs,
             "/_idv-login/restart": self._restart_tool,
             "/_idv-login/diagnostics/terminal": self._diagnostics_terminal,
+            "/_idv-login/debug-mode": self._debug_mode,
             "/_idv-login/diagnostics/reset-state": self._diagnostics_reset_state,
             "/_idv-login/open-external-url": self._open_external_url,
             "/_idv-login/proxy-mode": self._get_proxy_mode,
@@ -2154,6 +2155,35 @@ class LocalRequestHandler:
         from console_capture import read_console_output
         result = read_console_output(args.get("cursor", 0))
         result["success"] = True
+        return self._json_response(200, result)
+
+    def _debug_mode(self, args, body, method):
+        from telemetry import SETTING, active, state
+        if method == 'GET':
+            return self._json_response(200, state())
+        if method != 'POST':
+            return self._json_response(405, {'success': False, 'error': 'Method not allowed'})
+        if not isinstance(body, dict) or type(body.get('enabled')) is not bool:
+            return self._json_response(400, {'success': False, 'error': 'enabled must be boolean'})
+        enabled = body['enabled']
+        # A settings change must be durable before any restart is scheduled.
+        try:
+            genv.set(SETTING, enabled, True, require_saved=True)
+        except Exception:
+            return self._json_response(500, {'success': False, 'error': '无法保存调试设置'})
+        if not enabled:
+            from telemetry import stop_telemetry
+            stop_telemetry()
+        result = state(enabled)
+        if enabled != active():
+            import hotfixmgr
+            restart = threading.Timer(0.5, hotfixmgr.restart_self,
+                                      args=('应用调试设置',), kwargs={'debug_mode': enabled})
+            restart.daemon = True
+            restart.start()
+            result['restarting'] = True
+        else:
+            result['restarting'] = False
         return self._json_response(200, result)
 
     def _restart_tool(self, args, body, method):

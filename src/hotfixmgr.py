@@ -321,7 +321,16 @@ def _build_remote_source_info(module_name: str, commit: str) -> Tuple[str, List[
     return url, fallbacks
 
 
-def restart_self(reason: str = ""):
+def _restart_debug_args(args, debug_mode):
+    if debug_mode is None:
+        return args
+    result = [arg for arg in args if arg != '--debug']
+    if debug_mode:
+        result.append('--debug')
+    return result
+
+
+def restart_self(reason: str = "", *, debug_mode=None):
     try:
         if reason:
             logger.info(f"【热更新】即将重启: {reason}")
@@ -348,6 +357,8 @@ def restart_self(reason: str = ""):
         args = [sys.executable] + sys.argv[1:]
     else:
         args = [sys.executable] + sys.argv
+
+    args = _restart_debug_args(args, debug_mode)
 
     cwd = genv.get("SCRIPT_DIR") or os.getcwd()
     if _is_macos_pyinstaller():
