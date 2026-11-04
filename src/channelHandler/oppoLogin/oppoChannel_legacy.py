@@ -66,7 +66,7 @@ class OppoBrowser(WebBrowser):
             self.page.runJavaScript("if(window.onRefresh){onRefresh()}")
             self.logger.info("已在主页面触发 onRefresh")
         except Exception as e:
-            self.logger.debug(f"触发主页面 onRefresh 失败: {e}")
+            self.logger.debug(f"触发主页面 onRefresh 失败: {type(e).__name__}")
 
     def _schedule_main_page_refresh(self, delay_ms: int = 50):
         QTimer.singleShot(delay_ms, self._trigger_main_page_refresh)
@@ -183,7 +183,7 @@ class OppoBrowser(WebBrowser):
             payload,
             allow_plain_fallback=True,
         )
-        self.logger.debug(f"authentication/auth 响应: {resp}")
+        self.logger.debug("authentication/auth 已收到响应")
         if isinstance(resp, dict):
             data = resp.get("data")
             if not isinstance(data, dict):
@@ -194,7 +194,7 @@ class OppoBrowser(WebBrowser):
                 if verification_url:
                     self.logger.info("已通过 authentication/auth 获取 verificationUrl")
                     if next_process_token:
-                        self.logger.debug(f"authentication/auth nextProcessToken={next_process_token}")
+                        self.logger.debug("authentication/auth 已提供 nextProcessToken")
                     return verification_url
 
         raise RuntimeError("无法构建有效的 verificationUrl，无法进行后续登录校验。请加群反馈此问题并提供相关日志以便修复。")
@@ -249,7 +249,7 @@ class OppoBrowser(WebBrowser):
         try:
             data = json.loads(payload)
         except Exception:
-            self.logger.debug(f"Oppo console payload 解析失败: {payload}")
+            self.logger.debug("Oppo console payload 解析失败")
             return
 
         method = (data or {}).get("method")

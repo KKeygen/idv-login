@@ -25,6 +25,7 @@ from typing import Tuple
 from urllib.parse import parse_qs, urlparse
 
 from envmgr import genv
+from logutil import safe_exception
 import app_state
 import const
 from login_stack_mgr import LoginStackManager
@@ -177,7 +178,7 @@ class LocalRequestHandler:
             try:
                 return handler(args, json_body, method)
             except Exception as e:
-                self.logger.exception(f"处理请求 {path} 时出错")
+                safe_exception(self.logger, f"处理请求 {path} 时出错")
                 return self._json_response(500, {"success": False, "error": str(e)})
 
         return self._json_response(404, {"error": "Not found"})
@@ -443,7 +444,7 @@ class LocalRequestHandler:
                 pending.honorLogin.cancel_qr()
                 return self._json_response(200, {"success": True})
         except Exception:
-            self.logger.exception("取消 QR 失败")
+            safe_exception(self.logger, "取消 QR 失败")
         return self._json_response(200, {"success": False})
 
     _pending_switch = {}  # {task_id: {"status": "pending"|"done", "result": any}}
@@ -629,7 +630,7 @@ class LocalRequestHandler:
             genv.set(f"auto-{game_id}", args["uuid"], True)
             return self._json_response(200, {"success": True})
         except Exception:
-            self.logger.exception("设置默认账号失败")
+            safe_exception(self.logger, "设置默认账号失败")
             return self._json_response(200, {"success": False})
 
     def _clear_default(self, args, body, method):
@@ -817,7 +818,7 @@ class LocalRequestHandler:
                                 "enabled": True, "path": sel_path, "game_id": gid,
                             }
                         except Exception as e:
-                            logger.exception("异步选择游戏路径失败")
+                            safe_exception(logger, "异步选择游戏路径失败")
                             LocalRequestHandler._pending_imports[task_id] = {
                                 "status": "done", "success": False, "error": str(e)
                             }
@@ -879,7 +880,7 @@ class LocalRequestHandler:
                 "success": True, "enabled": enabled, "path": game_path, "game_id": gid
             })
         except Exception as e:
-            self.logger.exception(f"设置游戏 {args.get('game_id', '')} 的自动启动状态失败")
+            safe_exception(self.logger, f"设置游戏 {args.get('game_id', '')} 的自动启动状态失败")
             return self._json_response(200, {"success": False, "error": str(e)})
 
     def _start_game(self, args, body, method):
@@ -1048,7 +1049,7 @@ class LocalRequestHandler:
                 "distributions": distributions,
             })
         except Exception as e:
-            self.logger.exception("获取启动器状态失败")
+            safe_exception(self.logger, "获取启动器状态失败")
             return self._json_response(200, {"success": False, "error": str(e)})
 
     def _launcher_locate(self, args, body, method):
@@ -1117,7 +1118,7 @@ class LocalRequestHandler:
                 "path": executable_path,
             })
         except Exception as e:
-            self.logger.exception("定位游戏失败")
+            safe_exception(self.logger, "定位游戏失败")
             return self._json_response(500, {"success": False, "error": str(e)})
 
     def _launcher_install(self, args, body, method):
@@ -1260,7 +1261,7 @@ class LocalRequestHandler:
                     except Exception as exc:
                         if installation is not None and created_installation:
                             game_helper.remove_game_installation(gid, installation.installation_id)
-                        logger.exception("后台安装启动器失败")
+                        safe_exception(logger, "后台安装启动器失败")
                         NativeTaskRegistry.finish(
                             task_id,
                             success=False,
@@ -1353,7 +1354,7 @@ class LocalRequestHandler:
                             "version": installation.installed_version,
                         }
                     except Exception as e:
-                        logger.exception("异步安装启动器失败")
+                        safe_exception(logger, "异步安装启动器失败")
                         LocalRequestHandler._pending_imports[task_id] = {
                             "status": "done", "success": False, "error": str(e)
                         }
@@ -1418,7 +1419,7 @@ class LocalRequestHandler:
                 "version": installation.installed_version,
             })
         except Exception as e:
-            self.logger.exception("安装启动器失败")
+            safe_exception(self.logger, "安装启动器失败")
             return self._json_response(500, {"success": False, "error": str(e)})
 
     def _launcher_update(self, args, body, method):
@@ -1482,7 +1483,7 @@ class LocalRequestHandler:
                     else:
                         NativeTaskRegistry.finish(task_id, **values)
                 except Exception as exc:
-                    self.logger.exception("后台更新游戏失败")
+                    safe_exception(self.logger, "后台更新游戏失败")
                     NativeTaskRegistry.finish(
                         task_id,
                         success=False,
@@ -1502,7 +1503,7 @@ class LocalRequestHandler:
                 "installation_id": installation.installation_id,
             })
         except Exception as e:
-            self.logger.exception("更新启动器失败")
+            safe_exception(self.logger, "更新启动器失败")
             return self._json_response(500, {"success": False, "error": str(e)})
 
     def _launcher_update_info(self, args, body, method):
@@ -1535,7 +1536,7 @@ class LocalRequestHandler:
                             **stats,
                         )
                     except Exception as exc:
-                        self.logger.exception("后台获取更新信息失败")
+                        safe_exception(self.logger, "后台获取更新信息失败")
                         NativeTaskRegistry.finish(
                             task_id, success=False, error=str(exc)
                         )
@@ -1561,7 +1562,7 @@ class LocalRequestHandler:
                 **stats,
             })
         except Exception as e:
-            self.logger.exception("获取更新信息失败")
+            safe_exception(self.logger, "获取更新信息失败")
             return self._json_response(500, {"success": False, "error": str(e)})
 
     def _launcher_import_state(self, args, body, method):
@@ -1626,7 +1627,7 @@ class LocalRequestHandler:
                 "installation_id": installation.installation_id if installation else "",
             })
         except Exception as e:
-            self.logger.exception("导入Fever游戏失败")
+            safe_exception(self.logger, "导入Fever游戏失败")
             return self._json_response(500, {"success": False, "error": str(e)})
 
     def _list_fever_games(self, args, body, method):
@@ -1874,7 +1875,7 @@ class LocalRequestHandler:
                 sync.manager = manager
             app_state.channels_helper = manager
         except Exception:
-            self.logger.exception("云同步拉取后刷新账号管理器失败")
+            safe_exception(self.logger, "云同步拉取后刷新账号管理器失败")
 
     # -- Native browser bridge ──
 
@@ -2027,7 +2028,7 @@ class LocalRequestHandler:
                 os.remove(temporary)
             except OSError:
                 pass
-            self.logger.exception("写入下载控制请求失败")
+            safe_exception(self.logger, "写入下载控制请求失败")
             return self._json_response(500, {
                 "success": False,
                 "error": str(exc),
@@ -2134,12 +2135,14 @@ class LocalRequestHandler:
         """Export diagnostic logs: save to file and open containing folder."""
         try:
             from debugmgr import DebugMgr
-            data = DebugMgr.export_debug_info_json() if DebugMgr.is_windows() else {}
             log_dir = genv.get("FP_WORKDIR")
             log_path = os.path.join(log_dir, "log.txt")
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write("\n\n" + json.dumps(data, ensure_ascii=False, indent=2))
             if os.path.exists(log_path):
+                if DebugMgr.is_windows():
+                    processes = [entry for entry in DebugMgr.get_process_list()
+                                 if isinstance(entry, dict)]
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write("\n\n" + json.dumps({"processes": processes}, ensure_ascii=False, indent=2))
                 import subprocess
                 subprocess.Popen(["explorer", "/select,", log_path])
                 return self._json_response(200, {"success": True, "path": log_path})
@@ -2180,7 +2183,7 @@ class LocalRequestHandler:
                 import hotfixmgr
                 hotfixmgr.restart_self("工具状态已重置")
             except Exception:
-                self.logger.exception("重置工具状态后重启失败")
+                safe_exception(self.logger, "重置工具状态后重启失败")
 
         threading.Thread(target=restart, name="reset-tool-state", daemon=True).start()
         return self._json_response(202, {

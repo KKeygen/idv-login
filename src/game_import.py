@@ -4,6 +4,7 @@ import sys
 import threading
 
 from nativebridge import NativeTaskRegistry
+from logutil import safe_exception
 
 
 _IMPORT_LOCK = threading.Lock()
@@ -228,7 +229,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
         NativeTaskRegistry.finish(task_id, success=False, cancelled=True,
                                   cancelable=False, phase="cancelled", error="导入已取消")
     except Exception as exc:
-        manager.logger.exception("后台导入游戏失败")
+        safe_exception(manager.logger, "后台导入游戏失败")
         NativeTaskRegistry.finish(task_id, success=False, cancelable=False,
                                   phase="failed", error=str(exc))
     finally:

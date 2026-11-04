@@ -23,7 +23,7 @@ import app_state
 import channelmgr
 from cloudRes import CloudRes
 from envmgr import genv
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 from channelHandler.channelUtils import buildSAUTH, getShortGameId, postSignedData
 from channelHandler.m4399Login.m4399Channel import M4399Login
 
@@ -215,7 +215,7 @@ class m4399Channel(channelmgr.channel):
             if helper is not None and isinstance(channels, list) and self in channels:
                 helper.save_records()
         except Exception:
-            self.logger.exception("4399 恢复凭证落盘失败")
+            safe_exception(self.logger, "4399 恢复凭证落盘失败")
 
     def _accept_silent_login_resp(self, resp: Dict[str, Any]) -> bool:
         """用刷新响应整包替换 loginResp，但绝不动 refreshToken。"""
@@ -451,7 +451,7 @@ class m4399Channel(channelmgr.channel):
             try:
                 return _build_result()
             except Exception:
-                self.logger.exception("4399 UniSDK 生成失败")
+                safe_exception(self.logger, "4399 UniSDK 生成失败")
                 return False
 
         if self._recover_existing_credential():

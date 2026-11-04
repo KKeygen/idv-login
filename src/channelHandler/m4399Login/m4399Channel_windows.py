@@ -14,7 +14,7 @@ import requests
 from native_ui.dialogs import fit_login_window
 from channelHandler.WebLoginUtils import WebBrowser
 from browser_cookies import CookieExport
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 from ssl_utils import should_verify_ssl
 
 
@@ -325,7 +325,7 @@ class M4399Login:
                 f"session={len(self.cookie_records) - persistent_count}"
             )
         except Exception:
-            self.logger.exception("[4399-cookie] 导出浏览器 cookies 失败")
+            safe_exception(self.logger, "[4399-cookie] 导出浏览器 cookies 失败")
 
         # refresh_token 只从 callback URL 获取。不要从 JSON response 猜。
         if browser.refresh_token:
@@ -361,7 +361,7 @@ class M4399Login:
                         else:
                             on_complete(None if not result else False)
                     except Exception:
-                        self.logger.exception("4399 异步登录回调失败")
+                        safe_exception(self.logger, "4399 异步登录回调失败")
                         on_complete(False)
 
                 browser._async_completion_callback = _on_async_done
@@ -479,7 +479,7 @@ class M4399Browser(WebBrowser):
                 f"expires_in={self.callback_expires_in or '-'}"
             )
         except Exception:
-            self.logger.exception("4399 callback query 元数据解析失败")
+            safe_exception(self.logger, "4399 callback query 元数据解析失败")
 
     def on_load_finished(self, success: bool):
         self.on_page_load_finished(self.page, success)

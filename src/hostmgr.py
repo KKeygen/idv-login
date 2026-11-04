@@ -17,7 +17,7 @@
  """
 
 from python_hosts import Hosts, HostsEntry
-from logutil import setup_logger
+from logutil import setup_logger, user_notice, safe_exception
 
 import os
 import sys
@@ -110,7 +110,7 @@ class hostmgr:
             try:
                 open(FN_HOSTS, 'w').close()
             except:
-                self.logger.exception(f"Hosts文件创建失败！")
+                safe_exception(self.logger, "Hosts文件创建失败")
                 raise Exception()
         elif not os.access(FN_HOSTS, os.W_OK):
             self.logger.warning(f"Hosts文件不可写，正在尝试修复权限...")
@@ -119,11 +119,12 @@ class hostmgr:
                 self.logger.info(f"Hosts文件权限修复成功，继续初始化...")
                 # 修复后重新检查
                 if not os.access(FN_HOSTS, os.W_OK):
-                    self.logger.error(f"Hosts文件权限修复后仍不可写，请以管理员身份运行！")
+                    self.logger.error("Hosts文件权限修复后仍不可写")
+                    user_notice("Hosts文件权限修复后仍不可写，请以管理员身份运行！", level='ERROR')
                     raise Exception()
             except Exception as e:
                 self.logger.error(f"修复Hosts文件权限失败: {e}")
-                self.logger.error(f"请以管理员身份运行，或手动检查{FN_HOSTS}的权限设置！")
+                user_notice(f"请以管理员身份运行，或手动检查{FN_HOSTS}的权限设置！", level='ERROR')
                 raise Exception()
         
         # 验证 hosts 文件可正常读取
@@ -141,7 +142,8 @@ class hostmgr:
                 self.logger.debug(hostsOkay)
                 self.logger.info("Hosts文件修复成功")
             except:
-                self.logger.error(f"Hosts文件修复失败，请手动检查{FN_HOSTS}")
+                self.logger.error("Hosts文件修复失败")
+                user_notice(f"Hosts文件修复失败，请手动检查{FN_HOSTS}", level='ERROR')
                 input("按任意键退出。")
                 sys.exit(1)
 
@@ -151,7 +153,8 @@ class hostmgr:
         try:
             m_host.write()
         except:
-            self.logger.error(f"写Hosts文件失败，请参考常见问题解决方案。")
+            self.logger.error("写Hosts文件失败")
+            user_notice("写Hosts文件失败，请参考常见问题解决方案。", level='ERROR')
             raise Exception()
     def remove(self, dnsname) :
         m_host = Hosts()

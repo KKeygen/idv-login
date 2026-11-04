@@ -83,13 +83,20 @@ def _configured_target_domains():
 
 
 # -- 全局异常钩子 --
+def _safe_exception_summary(exc_type, exc_tb):
+    import traceback
+    frames = traceback.extract_tb(exc_tb) if exc_tb else []
+    locations = [f"{os.path.basename(frame.filename)}:{frame.lineno}:{frame.name}"
+                 for frame in frames]
+    return f"{exc_type.__name__}; stack={locations}"
+
+
 def _global_excepthook(exc_type, exc_value, exc_tb):
     """处理主线程中未捕获的异常"""
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_tb)
         return
-    import traceback
-    tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    tb_str = _safe_exception_summary(exc_type, exc_tb)
     if logger:
         logger.critical(f"未捕获的异常:\n{tb_str}")
     else:
@@ -101,8 +108,7 @@ def _threading_excepthook(args):
     """处理子线程中未捕获的异常 (Python 3.8+)"""
     if args.exc_type is SystemExit:
         return
-    import traceback
-    tb_str = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+    tb_str = _safe_exception_summary(args.exc_type, args.exc_traceback)
     thread_name = args.thread.name if args.thread else "Unknown"
     if logger:
         logger.critical(f"线程 '{thread_name}' 中未捕获的异常:\n{tb_str}")
@@ -167,7 +173,8 @@ def handle_exit():
             app_state.fever_bridge.stop()
         except Exception:
             if logger:
-                logger.exception("停止平台托管登录失败")
+                from logutil import safe_exception
+                safe_exception(logger, "停止平台托管登录失败")
         app_state.fever_bridge = None
 
     if app_state.channels_helper and app_state.channels_helper.db_sync:
@@ -227,7 +234,7 @@ def handle_exit():
         if logger:
             logger.warning(f"恢复代理设置失败: {e}")
             import traceback
-            logger.debug(traceback.format_exc())
+            logger.debug("异常详情已省略")
 
     # 注销 URI Scheme（减少痕迹）
     try:
@@ -241,7 +248,7 @@ def handle_exit():
         if logger:
             logger.warning(f"注销 URI Scheme 失败: {e}")
             import traceback
-            logger.debug(traceback.format_exc())
+            logger.debug("异常详情已省略")
     print("再见!")
 
 def handle_update():
@@ -742,14 +749,14 @@ def handle_download_task(task_file_path):
         return False
     prepare_platform_workdir()
     setup_work_directory()
-    from logutil import setup_logger
+    from logutil import setup_logger, safe_exception
     logger_local = setup_logger()
     task_data = None
     try:
         with open(task_file_path, "r", encoding="utf-8") as f:
             task_data = json.load(f)
     except Exception as e:
-        logger_local.exception(f"读取下载任务文件失败: {e}")
+        safe_exception(logger_local, '读取下载任务文件失败')
         return False
     download_root = task_data.get("download_root", "")
     game_id = task_data.get("game_id", "")
@@ -844,7 +851,7 @@ def handle_download_task(task_file_path):
                     if sys.platform == "win32"
                     else 0
                 )
-                logger_local.info(f"下载核心输出日志: {core_log_path}")
+                logger_local.info("下载核心输出日志已创建")
                 with open(core_log_path, "ab", buffering=0) as core_log:
                     download_process = subprocess.Popen(
                         download_cmd,
@@ -913,14 +920,14 @@ def handle_download_task(task_file_path):
         try:
             os.remove(task_file_path)
         except Exception as e:
-            logger_local.exception(f"删除下载任务文件失败: {e}")
+            safe_exception(logger_local, '删除下载任务文件失败')
         if control_file:
             try:
                 os.remove(control_file)
             except FileNotFoundError:
                 pass
             except Exception as e:
-                logger_local.exception(f"删除下载控制文件失败: {e}")
+                safe_exception(logger_local, '删除下载控制文件失败')
         try:#尝试用explorer打开下载完成的目录
             if download_root and os.path.exists(download_root):
                 #使用正斜杠避免路径问题
@@ -934,7 +941,7 @@ def handle_download_task(task_file_path):
                 elif sys.platform == "linux":
                     subprocess.Popen(["xdg-open", download_root])
         except Exception as e:
-            logger_local.exception(f"打开下载目录失败: {e}")
+            safe_exception(logger_local, '打开下载目录失败')
         _write_download_status(progress_file, {
             "status": "done",
             "success": bool(result),
@@ -950,7 +957,7 @@ def handle_download_task(task_file_path):
         })
         return result
     except Exception as e:
-        logger_local.exception(f"下载任务执行失败: {e}")
+        safe_exception(logger_local, '下载任务执行失败')
         _write_download_status(progress_file, {
             "status": "done",
             "success": False,
@@ -984,7 +991,7 @@ def cleanup_expired_certificates():
         for cert_path, cert_name in cert_files:
             if cert_path and os.path.exists(cert_path):
                 os.remove(cert_path)
-                logger.info(f"已删除旧的{cert_name}: {cert_path}")
+                logger.info(f"已删除旧的{cert_name}")
     
     return web_cert_expired, ca_cert_expired
 
@@ -1260,10 +1267,12 @@ def setup_network_proxy(proxy_port):
     from run_once import run_once_after_qt
     run_once_after_qt(ui_mgr)
 
+    from logutil import user_notice
+
     # 根据模式执行不同的启动逻辑
     if proxy_mode == "compat":
         # 兼容模式：无需设置代理环境变量，DNS 劫持会自动生效
-        logger.info("提示：当前使用兼容模式，通过 DNS 劫持拦截游戏流量。")
+        user_notice("提示：当前使用兼容模式，通过 DNS 劫持拦截游戏流量。")
         if uri_action == "start" and uri_game_id:
             game = game_helper.get_game(uri_game_id)
             if game:
@@ -1297,7 +1306,7 @@ def setup_network_proxy(proxy_port):
     elif proxy_mode == "global":
         # 次优先级：全局模式 → 设置系统/用户级代理
         _set_proxy(app_state.proxy_mgr.port)
-        logger.info("提示：当前使用全局代理模式，会处理本机所有网络连接。")
+        user_notice("提示：当前使用全局代理模式，会处理本机所有网络连接。")
         if auto_games:
             # 全局模式下也启动自启游戏（它们会继承代理环境变量）
             names = ", ".join(g.name for g in auto_games)
@@ -1306,7 +1315,7 @@ def setup_network_proxy(proxy_port):
                 installation = g.get_auto_start_installation()
                 g.start(installation.installation_id if installation else "")
         else:
-            logger.info("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
+            user_notice("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
     elif auto_games:
         # 第三优先级：进程模式但有自启游戏 → 启动自启游戏（进程级代理）
         names = ", ".join(g.name for g in auto_games)
@@ -1316,16 +1325,16 @@ def setup_network_proxy(proxy_port):
             g.start(installation.installation_id if installation else "")
     else:
         # 进程代理模式且没有自启游戏
-        logger.info("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
-        logger.info("如需设置全局代理，可在管理页面切换为全局模式。")
+        user_notice("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
+        user_notice("如需设置全局代理，可在管理页面切换为全局模式。")
 
     if proxy_mode == "compat":
         logger.info("兼容模式已就绪！DNS 劫持和反向代理已启动。")
     else:
         logger.info(f"mitmproxy 代理模式已就绪！监听端口: {app_state.proxy_mgr.port}")
     logger.info("代理已就绪，等待游戏请求；尚未确认游戏流量拦截或响应改写。")
-    logger.warning("如果您在之前已经打开了游戏，请关闭游戏后重新打开，否则工具不会生效！")
-    logger.info("登入账号且已经··进入游戏··后，您可以关闭本工具。")
+    user_notice("如果您在之前已经打开了游戏，请关闭游戏后重新打开，否则工具不会生效！", level="WARNING")
+    user_notice("登入账号且已经··进入游戏··后，您可以关闭本工具。")
 
 
 def _setup_compat_mode(addon):
@@ -1506,7 +1515,7 @@ def _check_and_handle_port_443():
             logger.warning(f"查找占用进程失败: {e}")
 
     if not occupying_pids:
-        logger.warning("无法确定占用 443 端口的进程，请手动关闭后重试")
+        logger.warning("无法确定占用 443 端口的进程")
         _ask_user_confirmation("端口占用", "无法确定占用 443 端口的进程。\n请手动关闭相关进程后按确认继续。")
         return
 
@@ -1558,7 +1567,9 @@ def _check_and_handle_port_443():
                     except Exception as e:
                         logger.error(f"终止进程失败: {e}")
         except psutil.AccessDenied:
-            logger.warning(f"无权限访问进程 {pid}，请以管理员身份运行")
+            logger.warning(f"无权限访问进程 {pid}")
+            from logutil import user_notice
+            user_notice(f"无权限访问进程 {pid}，请以管理员身份运行", level="WARNING")
         except psutil.NoSuchProcess:
             pass
         except Exception as e:
@@ -1574,15 +1585,10 @@ def handle_error_and_exit(e):
         genv.set("last_run_error", str(e), True)
     except Exception:
         pass
-    try:
-        import debugmgr
-        debugmgr.DebugMgr().export_debug_info()
-    except:
-        pass
     if logger: # Check if logger was initialized
-        logger.exception(
-            f"发生未处理的异常:{e}.反馈时请发送日志！\n日志路径:{genv.get('FP_WORKDIR')}下的log.txt"
-        )
+        from logutil import user_notice
+        logger.error(f"发生未处理的异常: {_safe_exception_summary(type(e), e.__traceback__)}")
+        user_notice("发生未处理的异常，请反馈日志。", level="ERROR")
     else:
         print(f"发生未处理的异常:{e}. 日志记录器未初始化。")
         # Try to provide workdir info if genv is available
@@ -1638,7 +1644,9 @@ def main(cli_args=None):
     if NATIVE_CRASH_LOG_PATH:
         logger.info(f"原生故障记录文件: {NATIVE_CRASH_LOG_PATH}")
     else:
-        logger.warning("无法启用原生故障文件记录，请检查用户目录/临时目录是否可写")
+        logger.warning("无法启用原生故障文件记录")
+        from logutil import user_notice
+        user_notice("无法启用原生故障文件记录，请检查用户目录/临时目录是否可写", level="WARNING")
 
     try:
         cloudBuildInfo()

@@ -146,7 +146,7 @@ class VivoLogin:
             self.cookieRecords = None if cookie_records is None else [dict(item) for item in cookie_records]
 
         if self.cookieRecords or (self.cookieRecords is None and self.cookies):
-            self.logger.info(f"使用本地cookies登录: {u}")
+            self.logger.info("使用本地 cookies 登录")
             try:
                 r = self._request("GET", u)
                 j = r.json()

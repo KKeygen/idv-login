@@ -19,13 +19,13 @@ from native_ui.dialogs import fit_login_window
 from PyQt6.QtCore import QTimer
 
 from channelHandler.WebLoginUtils import WebBrowser
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 from ssl_utils import should_verify_ssl
 
 
 # ── Console 前缀 ──────────────────────────────────────────────
-BILI_NET_PREFIX = "__BILI_NET__::"
 BILI_LOGIN_PREFIX = "__BILI_LOGIN__::"
+BILI_HTTP_ERROR_PREFIX = "__BILI_HTTP_ERROR__::"
 
 # ── 登录页 URL 模板 ──────────────────────────────────────────
 # 注意：不传 sdk_ver——B站登录页的 Axios 拦截器会把 URL 里的 sdk_ver
@@ -173,12 +173,12 @@ def _build_intercept_js() -> str:
 
     功能：
     1. /api/agreement/config → 本地模拟响应，不发真实请求
-    2. 其他所有 XHR → 正常发送，load 后记录 {url, method, status, requestBody, responseBody}
+    2. 其他所有 XHR → 正常发送；HTTP 错误时记录响应体
     3. /api/pcg/otp/login 或 /api/pcg/login 且 code===0 且含 access_key → 发射登录成功消息
     """
     return r"""(function() {
-  var BILI_NET  = "__BILI_NET__::";
   var BILI_LOGIN = "__BILI_LOGIN__::";
+  var BILI_HTTP_ERROR = "__BILI_HTTP_ERROR__::";
 
   var AGREEMENT_MOCK = JSON.stringify({
     request_id: "mock",
@@ -230,11 +230,6 @@ def _build_intercept_js() -> str:
           self.dispatchEvent(new Event("load"));
           self.dispatchEvent(new Event("loadend"));
 
-          console.log(BILI_NET + JSON.stringify({
-            url: self.__bili_url, method: self.__bili_method,
-            status: 200, requestBody: null,
-            responseBody: AGREEMENT_MOCK, mocked: true
-          }));
         } catch (e) { console.error("[bili-mock] agreement mock error:", e); }
       }, 10);
       return;
@@ -243,19 +238,16 @@ def _build_intercept_js() -> str:
     // ── 真实请求：附加 load 监听 ──
     this.addEventListener("load", function() {
       try {
-        var entry = {
-          url:          self.__bili_url,
-          method:       self.__bili_method,
-          status:       self.status,
-          requestBody:  body,
-          responseBody: self.responseText
-        };
-        console.log(BILI_NET + JSON.stringify(entry));
-
+        if (self.status >= 400) {
+          console.log(BILI_HTTP_ERROR + JSON.stringify({kind: "http", status: self.status, response: self.responseText}));
+        }
         // 登录成功检测（账密 /api/pcg/login + OTP /api/pcg/otp/login）
         var u = self.__bili_url || "";
         if (u.indexOf("/api/pcg/otp/login") !== -1 || u.indexOf("/api/pcg/login") !== -1) {
           var resp = JSON.parse(self.responseText);
+          if (self.status < 400 && resp && resp.code !== undefined && resp.code !== 0 && resp.code !== "0") {
+            console.log(BILI_HTTP_ERROR + JSON.stringify({kind: "api", status: self.status, response: self.responseText}));
+          }
           if (resp && resp.code === 0) {
             // access_key 可能在根级（OTP）或 data 内（密码登录）
             var ak = resp.access_key || (resp.data && resp.data.access_key);
@@ -309,11 +301,14 @@ class BilibiliBrowser(WebBrowser):
         if not isinstance(message, str):
             return
 
-        # 网络日志（调试用）
-        if message.startswith(BILI_NET_PREFIX):
-            payload = message[len(BILI_NET_PREFIX):]
-            if sys.platform != "win32":
-                self.logger.debug(f"[bili-net] {payload[:500]}")
+        if message.startswith(BILI_HTTP_ERROR_PREFIX):
+            try:
+                failure = json.loads(message[len(BILI_HTTP_ERROR_PREFIX):])
+                if (isinstance(failure, dict) and isinstance(failure.get("status"), int)
+                        and (failure["status"] >= 400 or failure.get("kind") == "api")):
+                    self.logger.warning("[bili-http] status={} response={}", failure["status"], failure.get("response", ""))
+            except (TypeError, ValueError):
+                self.logger.warning("[bili-http] 错误响应解析失败")
             return
 
         # 登录成功
@@ -322,10 +317,7 @@ class BilibiliBrowser(WebBrowser):
             try:
                 data = json.loads(payload)
             except Exception:
-                if sys.platform == "win32":
-                    self.logger.warning("[bili-login] JSON 解析失败")
-                else:
-                    self.logger.warning(f"[bili-login] JSON 解析失败: {payload[:200]}")
+                self.logger.warning("[bili-login] JSON 解析失败")
                 return
 
             # 密码登录响应可能嵌套在 data 字段下，统一展平到根级
@@ -414,10 +406,7 @@ class BilibiliLogin:
         qr_content = f"{redirect_url}?ticket={ticket}&fromNative=false&id={game_base_id}"
         qr_b64 = _render_qr_base64(qr_content)
 
-        if sys.platform == "win32":
-            self.logger.info("Bilibili QR 二维码已生成")
-        else:
-            self.logger.info(f"Bilibili QR 二维码已生成, ticket={ticket[:20]}...")
+        self.logger.info("Bilibili QR 二维码已生成")
         self._update_qrcode_cache("ready", qrcode_base64=qr_b64, ticket=ticket)
 
         # 3) 轮询扫码状态
@@ -472,7 +461,7 @@ class BilibiliLogin:
                         else:
                             on_complete(None if not result else False)
                     except Exception:
-                        self.logger.exception("Bilibili 异步登录回调失败")
+                        safe_exception(self.logger, "Bilibili 异步登录回调失败")
                         on_complete(False)
 
                 browser._async_completion_callback = _on_async_done

@@ -516,17 +516,17 @@ def init_sdk_config(game_data: dict = None) -> bool:
                 if security_key and update_rsa_key(security_key):
                     logger.info(f"UC RSA 密钥已更新: version={get_rsa_version()}")
                 else:
-                    logger.warning(f"UC RSA 密钥更新失败: {security_key[:40] if security_key else 'empty'}")
+                    logger.warning("UC RSA 密钥更新失败")
                 # 提取 werewolf: getSecurityKey 返回 "device" 字段作为设备标识
                 # SDK 内部存储为 PersistedObjs.crcCode，用作 DeviceHashParam.werewolf
                 werewolf = sk_data.get("device", "") or sk_data.get("crcCode", "")
                 if werewolf:
                     _cached_werewolf = werewolf
-                    logger.info(f"UC werewolf CRC 获取: {werewolf[:20]}...")
+                    logger.info("UC werewolf CRC 已获取")
         else:
             logger.warning(f"UC getSecurityKey 失败: code={sk_state.get('code')}, msg={sk_state.get('msg')}")
     except Exception as e:
-        logger.warning(f"UC getSecurityKey 异常 (继续): {e}")
+        logger.warning(f"UC getSecurityKey 异常 (继续): {type(e).__name__}")
 
     # Step 2: si.apply — 获取风控 SI token
     logger.info("UC SDK 初始化: Step 2 - si.apply ...")
@@ -543,12 +543,12 @@ def init_sdk_config(game_data: dict = None) -> bool:
                 si = si_data.get("si", "")
                 if si:
                     _cached_si = si
-                    logger.info(f"UC SI token 获取成功: {si[:20]}...")
+                    logger.info("UC SI token 获取成功")
                     return True
         logger.warning(f"UC si.apply 失败: code={si_state.get('code')}, subCode={si_state.get('subCode')}, msg={si_state.get('msg')}")
         return False
     except Exception as e:
-        logger.error(f"UC si.apply 异常: {e}")
+        logger.error(f"UC si.apply 异常: {type(e).__name__}")
         return False
 
 
@@ -625,12 +625,12 @@ def call_uc_api(service: str, data: dict, game_data: dict = None) -> dict:
         )
         resp_data = resp.json()
     except Exception as e:
-        logger.error(f"UC API 请求失败 ({service} → {host}): {e}")
+        logger.error(f"UC API 请求失败 ({service}): {type(e).__name__}")
         raise
 
     result = decrypt_response(resp_data, aes_key, aes_iv)
     state = result.get("state", {})
-    logger.debug(f"UC API {service} → code={state.get('code')}, msg={state.get('msg')}")
+    logger.debug(f"UC API {service} → code={state.get('code')}")
     return result
 
 
@@ -655,7 +655,7 @@ def send_sms_code(mobile: str, country_code: str = "86", game_data: dict = None)
     )
     state = result.get("state", {})
     if state.get("code") == 1:
-        logger.info(f"UC 短信验证码已发送到 {mobile}")
+        logger.info("UC 短信验证码已发送")
     else:
         logger.warning(f"UC 短信发送失败: code={state.get('code')}, msg={state.get('msg')}")
     return result
@@ -747,7 +747,7 @@ def refresh_login(sid: str, refresh_token: str, game_data: dict = None) -> Optio
 
     if code == 1:
         resp_data = result.get("data", {})
-        logger.info(f"UC session 续期成功: 新sid={resp_data.get('sid', '?')[:20]}...")
+        logger.info("UC session 续期成功")
         return resp_data
     else:
         logger.warning(f"UC session 续期失败: code={code}, msg={state.get('msg')}")

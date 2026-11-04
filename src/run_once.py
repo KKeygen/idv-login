@@ -1,7 +1,7 @@
 import os
 
 from envmgr import genv
-from logutil import setup_logger
+from logutil import setup_logger, user_notice
 
 def _show_msgbox(title: str, text: str, *, is_error: bool = False):
     """弹窗提示（Qt 尚未初始化，用 Win32 MessageBox）"""
@@ -48,7 +48,7 @@ def _cleanup_residual_proxy_registry(logger):
                     val, _ = winreg.QueryValueEx(key, var)
                     if any(f"127.0.0.1:{p}" in val for p in ports_to_check):
                         winreg.DeleteValue(key, var)
-                        logger.info(f"已清理残留代理环境变量: {var}={val}")
+                        logger.info(f"已清理残留代理环境变量: {var}")
                         cleaned = True
                 except FileNotFoundError:
                     pass
@@ -93,7 +93,7 @@ def _probe_proxy_mode(logger):
             logger.info("将已有的代理模式自动变更为兼容模式，即将重启...")
 
 
-            logger.warning("代理模式已变更为兼容模式，应用即将重启。如果重启后遇到网络连接问题，请重启计算机一次即可解决。")
+            user_notice("代理模式已变更为兼容模式，应用即将重启。如果重启后遇到网络连接问题，请重启计算机一次即可解决。", level='WARNING')
 
             try:
                 from main import handle_exit

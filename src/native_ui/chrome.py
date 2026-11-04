@@ -219,7 +219,7 @@ class _WindowsFramelessWindow(QMainWindow):
                 native_hwnd, ctypes.byref(margins)
             )
         except Exception as exc:
-            logger.debug(f"Windows DWM 窗口样式不可用: {exc}")
+            logger.debug(f"Windows DWM 窗口样式不可用: {type(exc).__name__}")
 
     def nativeEvent(self, event_type, message):
         if not self.isMaximized() and bytes(event_type) == b"windows_generic_MSG":

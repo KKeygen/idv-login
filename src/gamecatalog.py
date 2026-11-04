@@ -90,7 +90,7 @@ class DynamicGameCatalog:
         except FileNotFoundError:
             pass
         except (OSError, ValueError, TypeError) as exc:
-            logger.warning(f"读取动态游戏目录缓存失败: {exc}")
+            logger.warning(f"读取动态游戏目录缓存失败: {type(exc).__name__}")
         return {
             "schema_version": self.CACHE_SCHEMA_VERSION,
             "checked_at": 0,
@@ -204,7 +204,8 @@ class DynamicGameCatalog:
             )
             return status, payload, new_meta
         except (requests.RequestException, ValueError, TypeError) as exc:
-            logger.warning(f"获取动态游戏目录失败 ({source_key}): {exc}")
+            status = getattr(getattr(exc, 'response', None), 'status_code', None)
+            logger.warning(f"获取动态游戏目录失败 ({source_key}): {type(exc).__name__} status={status}")
             return self._ERROR, None, dict(previous_meta)
 
     @staticmethod

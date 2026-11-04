@@ -36,7 +36,7 @@ class VivoBrowser(WebBrowser):
             finally:
                 src_conn.close()
         except Exception as e:
-            self.logger.debug(f"SQLite backup快照失败，尝试文件拷贝快照: {e}")
+            self.logger.debug(f"SQLite backup快照失败，尝试文件拷贝快照: {type(e).__name__}")
 
         copied = False
         last_copy_error = None
@@ -57,7 +57,7 @@ class VivoBrowser(WebBrowser):
         if copied:
             return tmp_db
         if last_copy_error is not None:
-            self.logger.debug(f"文件拷贝快照仍失败(可能句柄未释放): {last_copy_error}")
+            self.logger.debug(f"文件拷贝快照仍失败(可能句柄未释放): {type(last_copy_error).__name__}")
         if os.path.exists(tmp_db):
             try:
                 os.remove(tmp_db)
@@ -84,7 +84,7 @@ class VivoBrowser(WebBrowser):
                 if name and value is not None:
                     cookie_map[name] = value
         except Exception as e:
-            self.logger.warning(f"从SQLite读取cookie失败，回退内存cookie: {e}")
+            self.logger.warning(f"从SQLite读取cookie失败，回退内存cookie: {type(e).__name__}")
         finally:
             if conn is not None:
                 conn.close()
@@ -160,7 +160,7 @@ class VivoLogin:
         self.cookies = cookies or {}
 
         if self.cookies:
-            self.logger.info(f"使用本地cookies登录: {u}")
+            self.logger.info("使用本地 cookies 登录")
             try:
                 r = self._request("GET", u)
                 j = r.json()

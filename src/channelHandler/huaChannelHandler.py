@@ -24,7 +24,7 @@ import channelmgr
 from cloudRes import CloudRes
 from envmgr import genv
 import app_state
-from logutil import setup_logger
+from logutil import setup_logger, user_notice
 from channelHandler.channelUtils import getShortGameId
 from channelHandler.huaLogin.huaChannel import HuaweiLogin
 
@@ -296,7 +296,8 @@ class huaweiChannel(channelmgr.channel):
 
         game_cfg, short_gid = self._resolve_game_cfg(game_id)
         if game_cfg is None:
-            self.logger.error(f"游戏{short_gid}-渠道{self.channel_name}暂不支持，请参照教程联系开发者发起添加请求。")
+            self.logger.error(f"游戏{short_gid}-渠道{self.channel_name}不受支持")
+            user_notice(f"游戏{short_gid}-渠道{self.channel_name}暂不支持，请参照教程联系开发者发起添加请求。")
             if on_complete is not None:
                 on_complete(False)
             return False

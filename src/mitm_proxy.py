@@ -24,6 +24,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import random
 import socket
@@ -35,7 +36,7 @@ import threading
 from urllib.parse import urlsplit
 
 from envmgr import genv
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 
 
 logger = setup_logger()
@@ -93,7 +94,7 @@ def add_custom_dns(domain: str, port: int, ip: str):
             (ip, port, 0, 0),
         )
     _dns_cache[key] = [value]
-    logger.debug(f"添加自定义 DNS: {domain}:{port} -> {ip}")
+    logger.debug(f"添加自定义 DNS: {domain}:{port}")
 
 
 def clear_custom_dns():
@@ -161,7 +162,7 @@ def probe_hardcoded_ip(domain: str, timeout: float = 3.0) -> bool:
                 # 连接成功
                 return True
     except Exception as e:
-        logger.debug(f"探测 {domain} ({ip}) 失败: {e}")
+        logger.debug(f"探测 {domain} 失败: {type(e).__name__}")
         return False
 
 
@@ -181,10 +182,10 @@ def resolve_domain_ip(domain: str, use_hardcoded_first: bool = True) -> str | No
     if use_hardcoded_first and domain in HARDCODED_IPS:
         hardcoded_ip = HARDCODED_IPS[domain]
         if probe_hardcoded_ip(domain):
-            logger.debug(f"使用硬编码 IP: {domain} -> {hardcoded_ip}")
+            logger.debug(f"使用硬编码 IP: {domain}")
             return hardcoded_ip
         else:
-            logger.warning(f"硬编码 IP {hardcoded_ip} 不可访问，尝试 DNS 解析")
+            logger.warning("硬编码 IP 不可访问，尝试 DNS 解析")
 
     # 2. 并行查询上游 DNS 服务器（取最快响应）
     ip = _query_upstream_parallel(domain)
@@ -193,7 +194,7 @@ def resolve_domain_ip(domain: str, use_hardcoded_first: bool = True) -> str | No
 
     # 3. 回退到硬编码 IP（即使不可访问）
     if domain in HARDCODED_IPS:
-        logger.warning(f"DNS 解析失败，回退到硬编码 IP: {domain} -> {HARDCODED_IPS[domain]}")
+        logger.warning(f"DNS 解析失败，回退到硬编码 IP: {domain}")
         return HARDCODED_IPS[domain]
 
     return None
@@ -272,7 +273,7 @@ def _query_upstream_parallel(domain: str) -> str | None:
             try:
                 srv, ip = future.result()
                 if ip:
-                    logger.debug(f"DNS 解析成功: {domain} -> {ip} (via {srv})")
+                    logger.debug(f"DNS 解析成功: {domain}")
                     return ip
             except Exception:
                 continue
@@ -714,7 +715,7 @@ class DnsPolicyManager:
                 if self._hostmgr.isExist(domain):
                     self._hostmgr.remove(domain)
                 self._hostmgr.add(domain, self.target_ip)
-                logger.debug(f"已添加 Hosts 记录: {domain} -> {self.target_ip}")
+                logger.debug(f"已添加 Hosts 记录: {domain}")
 
             flush_dns_cache()
             self._use_nrpt = False
@@ -911,7 +912,7 @@ class MitmProxyManager:
         except BaseException as error:
             if not (isinstance(error, asyncio.CancelledError) and self._stop_requested.is_set()):
                 self._startup_error = error
-                logger.exception("mitmproxy 运行出错")
+                safe_exception(logger, "mitmproxy 运行出错")
         finally:
             self._ready = False
             if self._loop is not None:
@@ -932,7 +933,7 @@ class MitmProxyManager:
                                 if server.is_running:
                                     self._loop.run_until_complete(server.stop())
                 except Exception:
-                    logger.exception("mitmproxy 监听清理失败")
+                    safe_exception(logger, "mitmproxy 监听清理失败")
                 finally:
                     self._loop.close()
             if self._startup_error is None and not self._stop_requested.is_set():
@@ -1155,9 +1156,8 @@ class _ResponseLogAddon:
             url = flow.request.pretty_url
         except Exception:
             url = str(getattr(flow.request, "url", ""))
-        # Query strings routinely contain login codes, tickets and device
-        # identifiers.  The host and path are sufficient for diagnostics.
-        return str(url).split("?", 1)[0].split("#", 1)[0]
+        # Secrets can also occur in userinfo or path segments, not only queries.
+        return hashlib.sha256(str(url).encode('utf-8', errors='replace')).hexdigest()[:12]
 
     def response(self, flow):
         if flow.response is None:
@@ -1165,11 +1165,10 @@ class _ResponseLogAddon:
         if flow.response.status_code in (200, 404):
             return
         logger.debug(
-            "[HTTP] {} {} -> {} {}",
+            "[HTTP] {} {} -> {}",
             flow.request.method,
             self._url(flow),
             flow.response.status_code,
-            flow.response.reason,
         )
 
     def error(self, flow):
@@ -1177,5 +1176,5 @@ class _ResponseLogAddon:
             "[HTTP] {} {} -> network error: {}",
             flow.request.method,
             self._url(flow),
-            flow.error,
+            "network request failed",
         )

@@ -6,7 +6,6 @@ import ctypes
 from collections import deque
 import json
 import os
-import re
 import sys
 import threading
 import time
@@ -17,6 +16,7 @@ if sys.platform == "win32":
     import ctypes.wintypes
 
 import app_state
+from logutil import safe_exception
 from channelHandler.channelUtils import getShortGameId
 from fever_assets import (
     MPAY_DLL_SHA256,
@@ -34,11 +34,6 @@ MPAY_LOGIN_STYLE = 0
 MPAY_PARENT_HWND_OPTION = b"mpay_option_parent_hwnd"
 SESSION_LIVENESS_CHECK_INTERVAL_SECONDS = 0.5
 
-
-_MPAY_LOG_SECRET_RE = re.compile(
-    r"(?i)(\b(?:access_token|refresh_token|authorization|cookie|session|ticket|token)\b"
-    r"\s*[:=]\s*[\"']?)([^\s,;&\"'}]+)"
-)
 
 
 class FeverBridge:
@@ -411,8 +406,8 @@ class FeverBridge:
             try:
                 self._retire_interface("start-failed")
             except Exception:
-                self.logger.exception("隔离失败的 mpay 运行时失败")
-            self.logger.exception("启动平台托管 mpay 登录失败")
+                safe_exception(self.logger, "隔离失败的 mpay 运行时失败")
+            safe_exception(self.logger, "启动平台托管 mpay 登录失败")
 
     def _load_mpay_dll(self, target_long_game_id: str):
         if self._mpay is not None:
@@ -442,7 +437,6 @@ class FeverBridge:
             self.logger.info(
                 "MPay 独立映像已激活: "
                 f"game_id={target_long_game_id}, generation={image_generation}, "
-                f"path={dll_path}, "
                 f"handle=0x{int(getattr(image, '_handle', 0) or 0):x}"
             )
         except Exception:
@@ -502,7 +496,7 @@ class FeverBridge:
         )
         self.logger.info(
             f"MPay SetResPath: type={MPAY_RESOURCE_ZIP}, "
-            f"result={resource_result}, path={skin_path}"
+            f"result={resource_result}"
         )
 
         self._prepare_mpay_host_window()
@@ -745,7 +739,7 @@ class FeverBridge:
                         current_thread, foreground_thread, False
                     )
         except Exception:
-            self.logger.debug("激活 MPay 登录窗口失败", exc_info=True)
+            safe_exception(self.logger, "激活 MPay 登录窗口失败")
 
     def _install_mpay_log_hook(self):
         log_callback_type = ctypes.CFUNCTYPE(None, ctypes.c_char_p)
@@ -754,13 +748,11 @@ class FeverBridge:
             try:
                 if not message:
                     return
-                text = message.decode("utf-8", errors="replace")
-                for line in text.splitlines() or [text]:
-                    sanitized = _MPAY_LOG_SECRET_RE.sub(r"\1***", line)
-                    self.logger.warning(f"[mpay] {sanitized}")
+                # Native log content can contain unlabelled credentials or URLs.
+                self.logger.debug("[mpay] 原生日志已接收，长度={}字节", len(message))
             except Exception:
                 # Never let a Python exception escape through the native hook.
-                self.logger.exception("处理 mpay 日志失败")
+                safe_exception(self.logger, "处理 mpay 日志失败")
 
         self._log_hook_ref = log_callback_type(on_log)
         set_log_hook = getattr(
@@ -888,7 +880,7 @@ class FeverBridge:
             user32.EnumWindows(collect, 0)
             return handles
         except Exception:
-            self.logger.debug("枚举 MPay 窗口失败", exc_info=True)
+            safe_exception(self.logger, "枚举 MPay 窗口失败")
             return []
 
     def _hide_retired_mpay_windows(self, handles) -> None:
@@ -901,7 +893,7 @@ class FeverBridge:
                 if hwnd:
                     user32.ShowWindow(ctypes.wintypes.HWND(hwnd), SW_HIDE)
         except Exception:
-            self.logger.debug("隐藏已退休 MPay 窗口失败", exc_info=True)
+            safe_exception(self.logger, "隐藏已退休 MPay 窗口失败")
 
     def _retire_interface(self, reason: str = "") -> None:
         """Retire the current MPay runtime without tearing native objects down.
@@ -934,7 +926,7 @@ class FeverBridge:
             try:
                 window.hide()
             except Exception:
-                self.logger.debug("隐藏已退休 MPay host window 失败", exc_info=True)
+                safe_exception(self.logger, "隐藏已退休 MPay host window 失败")
         self._hide_retired_mpay_windows(native_hwnds)
 
         runtime = {
@@ -960,7 +952,6 @@ class FeverBridge:
             "MPay 运行时已退休并保持完整驻留: "
             f"game_id={self._active_dll_key or '?'}, "
             f"generation={retiring_generation}, reason={reason or '?'}, "
-            f"path={self._dll_path or '?'}, "
             f"handle=0x{int(getattr(library, '_handle', 0) or 0):x}, "
             f"retired_count={len(self._retired_mpay_runtimes)}"
         )
@@ -1031,7 +1022,7 @@ class FeverBridge:
         except Exception:
             with self._lock:
                 self._state = self.STATE_IDLE
-            self.logger.exception("处理平台登录结果失败")
+            safe_exception(self.logger, "处理平台登录结果失败")
 
     def _request_channel_qrcode_ticket(self, record, device_id, session):
         """Confirm a fresh QR session; only the target game exchanges its code."""
@@ -1133,7 +1124,7 @@ class FeverBridge:
         except Exception:
             with self._lock:
                 self._state = self.STATE_AUTHENTICATED
-            self.logger.exception("获取平台登录 ticket 失败")
+            safe_exception(self.logger, "获取平台登录 ticket 失败")
 
     def _on_ticket_result(self, args, generation: int | None = None):
         if generation is not None and generation != self._generation:
@@ -1212,7 +1203,7 @@ class FeverBridge:
         try:
             self._retire_interface("channel-code-handoff")
         except Exception:
-            self.logger.exception("隔离已完成渠道服登录的 MPay 运行时失败")
+            safe_exception(self.logger, "隔离已完成渠道服登录的 MPay 运行时失败")
             return
         if next_serial is not None:
             self._start_active_login(next_serial)
@@ -1224,7 +1215,7 @@ class FeverBridge:
         try:
             self._retire_interface("bridge-stop")
         except Exception:
-            self.logger.exception("隔离当前 mpay 运行时失败")
+            safe_exception(self.logger, "隔离当前 mpay 运行时失败")
 
     def stop(self):
         self._liveness_stop.set()

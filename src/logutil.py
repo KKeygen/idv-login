@@ -38,7 +38,8 @@ try:
     logger.remove(0)
     from prefetch_context import in_prefetch
     logger.add(_get_console_sink(), level="INFO", filter=lambda record: not in_prefetch())
-    logger.add("log.txt",rotation="10MB", encoding="utf-8", diagnose=False)
+    logger.add("log.txt", rotation="10MB", encoding="utf-8", diagnose=False,
+               filter=lambda record: not record["extra"].get("user_notice", False))
 except Exception as e:
     print(e)
     from logging import getLogger
@@ -46,3 +47,30 @@ except Exception as e:
 
 def setup_logger():
     return logger
+
+
+def user_notice(message, level="INFO"):
+    """Show an instruction on the console without appending it to log.txt."""
+    if hasattr(logger, "bind"):
+        logger.bind(user_notice=True).log(level, message)
+    else:
+        print(message)
+
+
+def safe_exception(target_logger, message, *args):
+    """Log the exception type and call sites without its potentially secret text."""
+    import os
+    import traceback
+    exc_type, error, tb = sys.exc_info()
+    locations = [f"{os.path.basename(frame.filename)}:{frame.lineno}:{frame.name}"
+                 for frame in traceback.extract_tb(tb)] if tb else []
+    detail = f" [{exc_type.__name__ if exc_type else 'unknown'}; stack={locations}]"
+    target_logger.error(str(message) + detail, *args)
+    # HTTP error response bodies are explicitly useful for troubleshooting.
+    # Never include the exception text: it can contain a credential-bearing URL.
+    try:
+        import requests
+        if isinstance(error, requests.HTTPError) and error.response is not None:
+            target_logger.error(f"HTTP status={error.response.status_code} response={error.response.text}")
+    except Exception:
+        pass

@@ -31,7 +31,7 @@ from PyQt6.QtCore import QTimer
 
 from native_ui.dialogs import fit_login_window
 from channelHandler.WebLoginUtils import WebBrowser
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 from ssl_utils import should_verify_ssl
 
 
@@ -342,7 +342,7 @@ class M4399Login:
                 f"session={len(self.cookie_records) - persistent_count}"
             )
         except Exception:
-            self.logger.exception("[4399-cookie] 导出浏览器 cookies 失败")
+            safe_exception(self.logger, "[4399-cookie] 导出浏览器 cookies 失败")
 
         # refresh_token 只从 callback URL 获取。不要从 JSON response 猜。
         if browser.refresh_token:
@@ -378,7 +378,7 @@ class M4399Login:
                         else:
                             on_complete(None if not result else False)
                     except Exception:
-                        self.logger.exception("4399 异步登录回调失败")
+                        safe_exception(self.logger, "4399 异步登录回调失败")
                         on_complete(False)
 
                 browser._async_completion_callback = _on_async_done
@@ -419,7 +419,7 @@ class M4399Browser(WebBrowser):
         try:
             self.profile.cookieStore().loadAllCookies()
         except Exception:
-            self.logger.exception("[4399-cookie] 加载 profile 既有 cookies 失败")
+            safe_exception(self.logger, "[4399-cookie] 加载 profile 既有 cookies 失败")
 
     # ── Privacy-safe navigation logs ──────────────────────────
 
@@ -506,7 +506,7 @@ class M4399Browser(WebBrowser):
                 f"sameSite={same_site} value_len={len(value)}"
             )
         except Exception:
-            self.logger.exception("[4399-cookie] 解析 cookie 元数据失败")
+            safe_exception(self.logger, "[4399-cookie] 解析 cookie 元数据失败")
 
     def export_cookie_records(self) -> List[Dict[str, Any]]:
         return [dict(item) for item in self._cookie_records.values()]
@@ -539,7 +539,7 @@ class M4399Browser(WebBrowser):
                 f"expires_in={self.callback_expires_in or '-'}"
             )
         except Exception:
-            self.logger.exception("4399 callback query 元数据解析失败")
+            safe_exception(self.logger, "4399 callback query 元数据解析失败")
 
     def on_load_finished(self, success: bool):
         # 不调用基类：基类失败日志会打印完整 URL，callback URL 含敏感 query。

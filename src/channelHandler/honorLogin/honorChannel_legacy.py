@@ -7,7 +7,7 @@ import urllib.parse
 
 import requests
 from faker import Faker
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 from envmgr import genv
 from ssl_utils import should_verify_ssl
 
@@ -134,7 +134,7 @@ class HonorLogin(HonorAccountLogin):
                             return
                         on_complete(self._handle_redirect(b.result))
                     except Exception:
-                        self.logger.exception("荣耀异步登录处理失败")
+                        safe_exception(self.logger, "荣耀异步登录处理失败")
                         on_complete(False)
                 browser._async_completion_callback = _on_async_done
             return

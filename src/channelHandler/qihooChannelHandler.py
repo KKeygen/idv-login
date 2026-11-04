@@ -18,7 +18,7 @@ import channelmgr
 from cloudRes import CloudRes
 from envmgr import genv
 import app_state
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 
 from channelHandler.channelUtils import buildSAUTH, postSignedData, getShortGameId
 from channelHandler.qihooLogin.qihooChannel import QihooLogin
@@ -87,7 +87,7 @@ class qihooChannel(channelmgr.channel):
                 protocol_app_channel = cfg.get("protocol_app_channel") or protocol_app_channel
                 sdk_ver = cfg.get("sdk_ver") or sdk_ver
         except Exception:
-            self.logger.exception(f"{TAG} 读取 360 渠道配置失败，使用内置默认值")
+            safe_exception(self.logger, f"{TAG} 读取 360 渠道配置失败，使用内置默认值")
 
         if not app_id:
             app_id = QC.DEFAULT_APP_ID
@@ -201,7 +201,7 @@ class qihooChannel(channelmgr.channel):
                     if browser_login:
                         self.mark_manual_login_success()
             except Exception:
-                self.logger.exception(f"{TAG} 异步登录处理失败")
+                safe_exception(self.logger, f"{TAG} 异步登录处理失败")
                 success = False
             if on_complete is not None:
                 on_complete(success)
@@ -259,7 +259,7 @@ class qihooChannel(channelmgr.channel):
             try:
                 return self._build_unisdk_result(short_game_id)
             except Exception:
-                self.logger.exception("生成渠道登录数据失败")
+                safe_exception(self.logger, "生成渠道登录数据失败")
                 return False
 
         def _on_login_done(success):

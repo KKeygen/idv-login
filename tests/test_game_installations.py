@@ -36,6 +36,8 @@ sys.modules["envmgr"] = envmgr
 
 logutil = types.ModuleType("logutil")
 logutil.setup_logger = lambda: logging.getLogger("game-installation-tests")
+logutil.user_notice = lambda *args, **kwargs: None
+logutil.safe_exception = lambda *args, **kwargs: None
 sys.modules["logutil"] = logutil
 
 cloud_res = types.ModuleType("cloudRes")

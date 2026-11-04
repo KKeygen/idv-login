@@ -13,7 +13,7 @@ import channelmgr
 from cloudRes import CloudRes
 from envmgr import genv
 import app_state
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 
 from channelHandler.channelUtils import buildSAUTH, postSignedData, getShortGameId
 from channelHandler.bilibiliLogin.bilibiliChannel import BilibiliLogin, call_auto_login
@@ -226,7 +226,7 @@ class bilibiliChannel(channelmgr.channel):
             try:
                 return self._build_unisdk_result(short_game_id)
             except Exception:
-                self.logger.exception("生成渠道登录数据失败")
+                safe_exception(self.logger, "生成渠道登录数据失败")
                 return False
 
         def _on_login_done(success):

@@ -250,7 +250,7 @@ def _compile_source(source_path: str) -> bool:
         py_compile.compile(source_path, doraise=True)
         return True
     except Exception as e:
-        logger.error(f"【热更新】编译失败: {source_path}: {e}")
+        logger.error(f"【热更新】编译失败: {os.path.basename(source_path)}: {type(e).__name__}")
         return False
 
 
@@ -263,7 +263,7 @@ def _compile_to_pyc(source_path: str, pyc_path: str) -> Tuple[bool, str]:
         py_compile.compile(source_path, cfile=pyc_path, doraise=True)
         return True, ""
     except Exception as e:
-        logger.error(f"【热更新】编译失败: {source_path} -> {pyc_path}: {e}")
+        logger.error(f"【热更新】编译失败: {os.path.basename(source_path)}: {type(e).__name__}")
         return False, str(e)
 
 

@@ -64,7 +64,7 @@ class CloudRes:
         """
         if self.signatures_required:
             return self._fetch_verified_json()
-        for url in self.urls:
+        for index, url in enumerate(self.urls, 1):
             try:
                 headers = {}
                 url_meta = self._get_url_meta(url)
@@ -78,7 +78,7 @@ class CloudRes:
                 )
 
                 if response.status_code == 304:
-                    logger.info(f"云端配置未变化 (304): {url}")
+                    logger.info(f"云端配置未变化 (304): 源 {index}")
                     return (_NOT_MODIFIED, None)
 
                 response.raise_for_status()
@@ -95,11 +95,12 @@ class CloudRes:
 
                 return (_MODIFIED, data)
             except requests.RequestException as e:
-                logger.debug(f"Failed to fetch JSON from URL {url}: {e}")
+                status = getattr(getattr(e, 'response', None), 'status_code', None)
+                logger.debug(f"Failed to fetch JSON from source {index}: {type(e).__name__} status={status}")
             except json.JSONDecodeError as e:
-                logger.debug(f"Invalid JSON received from URL {url}: {e}")
+                logger.debug(f"Invalid JSON received from source {index}: {type(e).__name__}")
             except Exception as e:
-                logger.debug(f"Unexpected error while fetching JSON from URL {url}: {e}")
+                logger.debug(f"Unexpected error while fetching JSON from source {index}: {type(e).__name__}")
         logger.error("Failed to fetch JSON from all provided URLs.")
         return (_ERROR, None)
 
@@ -164,13 +165,13 @@ class CloudRes:
                     return json.load(f)
             return {}
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse cache file: {e}")
+            logger.error(f"Failed to parse cache file: {type(e).__name__} line={e.lineno} column={e.colno}")
             return {}
         except IOError as e:
-            logger.error(f"Failed to read cache file: {e}")
+            logger.error(f"Failed to read cache file: {type(e).__name__} errno={e.errno}")
             return {}
         except Exception as e:
-            logger.error(f"Unexpected error while loading cache file: {e}")
+            logger.error(f"Unexpected error while loading cache file: {type(e).__name__}")
             return {}
 
     def update_cache_if_needed(self):

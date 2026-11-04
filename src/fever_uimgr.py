@@ -30,8 +30,7 @@ def _log_failure(logger, operation):
         label += f' HRESULT=0x{code & 0xffffffff:08X}'
     frames = '\n'.join(f'  {Path(frame.f_code.co_filename).name}:{line} in {frame.f_code.co_name}'
                        for frame, line in traceback.walk_tb(error.__traceback__))
-    logger.exception('%s failed\n%s', operation, frames,
-                     exc_info=(RuntimeError, RuntimeError(label), None))
+    logger.error(f"{operation} failed: {label}\n{frames}")
 
 
 class _Surface(QWidget):
