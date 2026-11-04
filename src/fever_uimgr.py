@@ -390,7 +390,8 @@ class FeverWindow(_WindowsFramelessWindow):
         if path.endswith('/window-controls'):
             actions = {'minimize': self.showMinimized, 'maximize': self.toggle_maximized,
                        'close': self.close}
-            action = actions.get(body.get('action'))
+            name = body.get('action')
+            action = actions.get(name) if isinstance(name, str) else None
             if action is None:
                 raise RequestRejected(400, 'Invalid window action')
             self._finish_request(rid, json_response(200, {'success': True}))
