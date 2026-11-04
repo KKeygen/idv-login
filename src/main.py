@@ -83,12 +83,17 @@ def _configured_target_domains():
 
 
 # -- 全局异常钩子 --
-def _safe_exception_summary(exc_type, exc_tb):
+def _safe_exception_summary(exc_type, exc_tb, exc_value=None):
     import traceback
     frames = traceback.extract_tb(exc_tb) if exc_tb else []
     locations = [f"{os.path.basename(frame.filename)}:{frame.lineno}:{frame.name}"
                  for frame in frames]
-    return f"{exc_type.__name__}; stack={locations}"
+    summary = f"{exc_type.__name__}; stack={locations}"
+    # Keep the response body of an HTTP error for diagnostics.  The exception
+    # text itself can contain a request URL and is intentionally not included.
+    if isinstance(exc_value, requests.HTTPError) and exc_value.response is not None:
+        summary += f"; HTTP status={exc_value.response.status_code} response={exc_value.response.text}"
+    return summary
 
 
 def _global_excepthook(exc_type, exc_value, exc_tb):
@@ -96,7 +101,7 @@ def _global_excepthook(exc_type, exc_value, exc_tb):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_tb)
         return
-    tb_str = _safe_exception_summary(exc_type, exc_tb)
+    tb_str = _safe_exception_summary(exc_type, exc_tb, exc_value)
     if logger:
         logger.critical(f"未捕获的异常:\n{tb_str}")
     else:
@@ -108,7 +113,7 @@ def _threading_excepthook(args):
     """处理子线程中未捕获的异常 (Python 3.8+)"""
     if args.exc_type is SystemExit:
         return
-    tb_str = _safe_exception_summary(args.exc_type, args.exc_traceback)
+    tb_str = _safe_exception_summary(args.exc_type, args.exc_traceback, args.exc_value)
     thread_name = args.thread.name if args.thread else "Unknown"
     if logger:
         logger.critical(f"线程 '{thread_name}' 中未捕获的异常:\n{tb_str}")
@@ -1587,7 +1592,7 @@ def handle_error_and_exit(e):
         pass
     if logger: # Check if logger was initialized
         from logutil import user_notice
-        logger.error(f"发生未处理的异常: {_safe_exception_summary(type(e), e.__traceback__)}")
+        logger.error(f"发生未处理的异常: {_safe_exception_summary(type(e), e.__traceback__, e)}")
         user_notice("发生未处理的异常，请反馈日志。", level="ERROR")
     else:
         print(f"发生未处理的异常:{e}. 日志记录器未初始化。")

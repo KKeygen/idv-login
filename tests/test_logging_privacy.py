@@ -8,6 +8,42 @@ import unittest
 
 
 class LoggingPrivacyTests(unittest.TestCase):
+    def test_system_and_json_errors_keep_useful_fields(self):
+        src = Path(__file__).resolve().parents[1] / 'src'
+        script = '''import errno, json, subprocess
+from logutil import setup_logger, safe_exception
+try:
+    raise OSError(errno.EACCES, "message with private path", "/private/path")
+except OSError:
+    safe_exception(setup_logger(), "file failed")
+try:
+    json.loads("{invalid}")
+except json.JSONDecodeError:
+    safe_exception(setup_logger(), "parse failed")
+try:
+    raise subprocess.CalledProcessError(7, ["program", "private_arg"])
+except subprocess.CalledProcessError:
+    safe_exception(setup_logger(), "process failed")
+try:
+    raise subprocess.TimeoutExpired(["program", "private_arg"], 3.5)
+except subprocess.TimeoutExpired:
+    safe_exception(setup_logger(), "process timed out")
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run([sys.executable, '-c', script], cwd=directory,
+                           env=dict(os.environ, PYTHONPATH=str(src)),
+                           capture_output=True, text=True, check=True)
+            log = (Path(directory) / 'log.txt').read_text(encoding='utf-8')
+        self.assertIn('errno=13', log)
+        self.assertIn('error=' + os.strerror(13), log)
+        self.assertIn('msg=Expecting property name enclosed in double quotes', log)
+        self.assertIn('line=1', log)
+        self.assertIn('column=2', log)
+        self.assertIn('returncode=7', log)
+        self.assertIn('timeout=3.5', log)
+        self.assertNotIn('/private/path', log)
+        self.assertNotIn('private_arg', log)
+
     def test_notice_is_not_written_to_file(self):
         src = Path(__file__).resolve().parents[1] / 'src'
         script = '''from logutil import setup_logger, user_notice, safe_exception

@@ -58,13 +58,37 @@ def user_notice(message, level="INFO"):
 
 
 def safe_exception(target_logger, message, *args):
-    """Log the exception type and call sites without its potentially secret text."""
+    """Log call sites and useful diagnostic fields from known exception types."""
+    import json
     import os
+    import subprocess
     import traceback
     exc_type, error, tb = sys.exc_info()
     locations = [f"{os.path.basename(frame.filename)}:{frame.lineno}:{frame.name}"
                  for frame in traceback.extract_tb(tb)] if tb else []
-    detail = f" [{exc_type.__name__ if exc_type else 'unknown'}; stack={locations}]"
+    fields = [exc_type.__name__ if exc_type else 'unknown', f'stack={locations}']
+    if isinstance(error, json.JSONDecodeError):
+        # The decoder's message and position describe the parsing failure;
+        # the original input document is deliberately not included.
+        fields.extend((f'msg={error.msg}', f'line={error.lineno}', f'column={error.colno}'))
+    elif isinstance(error, subprocess.CalledProcessError):
+        # Do not record the command line, which may contain credentials.
+        fields.append(f'returncode={error.returncode}')
+    elif isinstance(error, subprocess.TimeoutExpired):
+        fields.append(f'timeout={error.timeout}')
+    elif isinstance(error, OSError):
+        # Derive text from the OS error number, not from an arbitrary exception
+        # message that may embed a URL, request, or private filesystem path.
+        if type(error.errno) is int:
+            fields.append(f'errno={error.errno}')
+            try:
+                fields.append(f'error={os.strerror(error.errno)}')
+            except (ValueError, OverflowError):
+                pass
+        winerror = getattr(error, 'winerror', None)
+        if type(winerror) is int:
+            fields.append(f'winerror={winerror}')
+    detail = ' [' + '; '.join(fields) + ']'
     target_logger.error(str(message) + detail, *args)
     # HTTP error response bodies are explicitly useful for troubleshooting.
     # Never include the exception text: it can contain a credential-bearing URL.
