@@ -139,7 +139,6 @@ class FeverWindow(_WindowsFramelessWindow):
         self.setWindowTitle('IDV Login · Fever WebUI')
         self.setWindowIcon(QApplication.instance().windowIcon())
         self.setMinimumSize(760, 540)
-        self._layout.setContentsMargins(7, 7, 7, 7)
         self.surface = _Surface(self)
         self.set_content_widget(self.surface)
         self._window_controls.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
@@ -418,12 +417,6 @@ class FeverWindow(_WindowsFramelessWindow):
             self._call_host('visible', False)
         self.surface.hide()
         self._failure.show()
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange:
-            inset = 0 if self.isMaximized() else 7
-            self._layout.setContentsMargins(inset, inset, inset, inset)
 
     def moveEvent(self, event):
         super().moveEvent(event)
