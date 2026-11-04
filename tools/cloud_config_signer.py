@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = 'assets/cloudRes.json'
@@ -22,6 +23,19 @@ HEX = re.compile(r'[0-9a-f]{40}\Z')
 
 def git(repo, *args):
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS='1', GIT_TERMINAL_PROMPT='0')
+    # Terminal may not inherit proxy variables even when macOS has a system
+    # proxy. Pass those settings to Git, including lazy object fetches.
+    try:
+        proxies = urllib.request.getproxies_macosx_sysconf()
+    except (AttributeError, OSError):
+        proxies = {}
+    for scheme in ('http', 'https'):
+        lower, upper = scheme + '_proxy', scheme.upper() + '_PROXY'
+        value = env.get(lower) or env.get(upper) or proxies.get(scheme)
+        if value:
+            env[lower] = env[upper] = value
+        elif args and args[0] == 'fetch':
+            raise ValueError(f'未配置 {scheme.upper()} 代理，已停止网络操作')
     return subprocess.run(['git', '-C', str(repo), *args], env=env, check=True,
                           stdout=subprocess.PIPE).stdout
 
