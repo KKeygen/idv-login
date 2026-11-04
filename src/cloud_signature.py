@@ -1,7 +1,7 @@
 """Verify embedded cloud-configuration signatures with a pinned public key.
 
-The public key is empty until the release owner provisions it.  An empty key is
-an explicit pre-rollout compatibility mode, not a verified configuration.
+The pinned public key enables verification. An empty key is an explicit
+pre-rollout compatibility mode, not a verified configuration.
 """
 import base64
 import binascii
@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 
-CLOUD_CONFIG_PUBLIC_KEY_PEM = b''
+CLOUD_CONFIG_PUBLIC_KEY_PEM = b'-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXzIJKehw6P7e1cNY5XqrQSG4WxT+\n/t09tRjD/h8rFvxtL+pedTrYdtJ9lIDDDFyoU0WimctzUKxL5Hx3IfImRQ==\n-----END PUBLIC KEY-----\n'
 SIGNATURE_DOMAIN = b'IDV-CLOUD-CONFIG-V1\0'
 
 
