@@ -28,10 +28,12 @@ import requests
 
 from axml import parse_manifest
 from arsc import ResourceTable
+from cloudres_staging import STAGING_BRANCH, staging_snapshot
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-CLOUDRES_API = "https://api.github.com/repos/KKeygen/idv-login/contents/assets/cloudRes.json"
+CLOUDRES_REPOSITORY = "https://api.github.com/repos/KKeygen/idv-login"
+CLOUDRES_API = CLOUDRES_REPOSITORY + "/contents/assets/cloudRes.json"
 
 # 网易游戏配置接口，提供 client_log_key（即 cloudRes 的 log_key）。
 # 部分游戏的 APK 内 JF_LOG_KEY 为空，需要从这里补。
@@ -464,47 +466,58 @@ def update_cloud_res(item, token=None):
     会产生重复项，而 get_channelData 只取第一个，新条目永远不会生效。
     """
     token = token or os.getenv("GITHUB_TOKEN")
-    headers = {"Authorization": "token %s" % token} if token else {}
+    session = requests.Session()
+    if token:
+        session.headers.update({"Authorization": "token %s" % token})
 
-    resp = requests.get(CLOUDRES_API, headers=headers, timeout=30)
-    file_info = resp.json()
-    sha = file_info["sha"]
-    data = json.loads(base64.b64decode(file_info["content"]).decode())
+    for attempt in range(3):
+        _, staging_commit = staging_snapshot(session, CLOUDRES_REPOSITORY)
+        resp = session.get(CLOUDRES_API, params={"ref": staging_commit}, timeout=30)
+        resp.raise_for_status()
+        file_info = resp.json()
+        data = json.loads(base64.b64decode(file_info["content"]).decode())
 
-    key = (item["app_channel"], item["game_id"])
-    index = next(
-        (i for i, existing in enumerate(data["data"])
-         if (existing.get("app_channel"), existing.get("game_id")) == key),
-        None,
-    )
+        key = (item["app_channel"], item["game_id"])
+        index = next(
+            (i for i, existing in enumerate(data["data"])
+             if (existing.get("app_channel"), existing.get("game_id")) == key),
+            None,
+        )
 
-    if index is None:
-        data["data"].append(item)
-        action = "新增"
-    else:
-        old = data["data"][index]
-        # 保留人工维护的展示字段（channel / name 等）
-        merged = dict(item)
-        for field in ("channel", "name"):
-            if not merged.get(field) and old.get(field):
-                merged[field] = old[field]
-        data["data"][index] = merged
-        action = "更新"
-        if old.get("package_name") != item.get("package_name"):
-            logging.info("包名变更: %s -> %s"
-                         % (old.get("package_name"), item.get("package_name")))
+        if index is None:
+            data["data"].append(item)
+            action = "新增"
+        else:
+            old = data["data"][index]
+            # 保留人工维护的展示字段（channel / name 等）
+            merged = dict(item)
+            for field in ("channel", "name"):
+                if not merged.get(field) and old.get(field):
+                    merged[field] = old[field]
+            data["data"][index] = merged
+            action = "更新"
+            if old.get("package_name") != item.get("package_name"):
+                logging.info("包名变更: %s -> %s"
+                             % (old.get("package_name"), item.get("package_name")))
 
-    data["lastModified"] = int(time.time())
-
-    payload = {
-        "message": "Live update for %s-%s (%s)"
-                   % (item["game_id"], item["app_channel"], action),
-        "content": base64.b64encode(render_cloud_res(data)).decode(),
-        "sha": sha,
-    }
-    result = requests.put(CLOUDRES_API, headers=headers, json=payload, timeout=30)
-    logging.info("cloudRes %s: %s-%s" % (action, item["game_id"], item["app_channel"]))
-    print(result.json())
+        data["lastModified"] = int(time.time())
+        payload = {
+            "message": "Stage update for %s-%s (%s)"
+                       % (item["game_id"], item["app_channel"], action),
+            "content": base64.b64encode(render_cloud_res(data)).decode(),
+            "sha": file_info["sha"],
+            "branch": STAGING_BRANCH,
+        }
+        result = session.put(CLOUDRES_API, json=payload, timeout=30)
+        if result.status_code in (200, 201):
+            logging.info("cloudRes 候选已%s: %s-%s，尚未发布" %
+                         (action, item["game_id"], item["app_channel"]))
+            return
+        if result.status_code not in (409, 422):
+            result.raise_for_status()
+        if attempt < 2:
+            time.sleep(5)
+    raise RuntimeError("cloud-config-staging cloudRes update rejected or changed concurrently; no update was committed")
 
 
 def render_cloud_res(data):

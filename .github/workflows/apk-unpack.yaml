@@ -11,6 +11,11 @@ on:
                 required: true
                 type: string
 
+concurrency:
+  group: update-cloud-resources-staging
+  cancel-in-progress: false
+  queue: max
+
 jobs:
     analyze-apk:
         runs-on: ubuntu-latest

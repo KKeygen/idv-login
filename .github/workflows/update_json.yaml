@@ -31,8 +31,9 @@ on:
         type: boolean
 
 concurrency:
-  group: update-cloud-resources-main
+  group: update-cloud-resources-staging
   cancel-in-progress: false
+  queue: max
 
 jobs:
   update_json:
@@ -44,7 +45,7 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -q requests==2.33.1 markdown==3.3.7
-      - name: Update cloudRes.json for exact release
+      - name: Stage cloudRes.json for exact release (requires signing)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITEE_ROPE: ${{ secrets.GITEE_ROPE }}
