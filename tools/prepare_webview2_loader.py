@@ -22,8 +22,15 @@ def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def verify_signature(path):
     import os
     env=dict(os.environ,IDV_LOADER_SIGNATURE_PATH=str(path))
-    command="$s=Get-AuthenticodeSignature -LiteralPath $env:IDV_LOADER_SIGNATURE_PATH; if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {exit 1}"
-    subprocess.run(['powershell.exe','-NoProfile','-Command',command],env=env,check=True,capture_output=True)
+    # PowerShell 7 can pass its module path to Windows PowerShell 5 through
+    # Python.  Remove all casings so Windows PowerShell rebuilds its own path.
+    env={key:value for key,value in env.items() if key.upper() != 'PSMODULEPATH'}
+    command="$ErrorActionPreference='Stop'; $s=Get-AuthenticodeSignature -LiteralPath $env:IDV_LOADER_SIGNATURE_PATH; if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {throw ('Signature status: '+$s.Status+'; signer: '+$s.SignerCertificate.Subject)}"
+    try:
+        subprocess.run(['powershell.exe','-NoProfile','-Command',command],env=env,check=True,capture_output=True)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or b'').decode('utf-8', errors='replace').strip()
+        raise RuntimeError(f'WebView2 Loader signature verification failed: {detail}') from error
 
 
 def main():

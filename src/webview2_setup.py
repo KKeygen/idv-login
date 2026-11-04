@@ -116,6 +116,8 @@ def _download(url, destination, expected_hash=None):
 def _powershell(command, installer, timeout):
     executable = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     env = dict(os.environ, IDV_WEBVIEW2_INSTALLER=str(installer))
+    # Windows PowerShell must not inherit PowerShell 7's module search path.
+    env = {key: value for key, value in env.items() if key.upper() != "PSMODULEPATH"}
     try:
         result = subprocess.run(
             [str(executable), "-NoProfile", "-NonInteractive", "-Command", command],
