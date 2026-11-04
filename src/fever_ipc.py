@@ -9,6 +9,8 @@ import struct
 import sys
 import threading
 
+from logutil import safe_exception
+
 
 _XOR_TABLE = bytes.fromhex(
     "4c85667cf22497662300819a8e03cbc7901d15ea463d7bacc36fbda7277813b4"
@@ -168,7 +170,7 @@ class FeverIpcHost:
                 user32.DispatchMessageW(ctypes.byref(message))
         except Exception as exc:
             self._error = str(exc)
-            self.logger.exception("启动发烧平台 IPC 失败")
+            safe_exception(self.logger, "启动发烧平台 IPC 失败")
             self._ready.set()
         finally:
             self.hwnd = None
@@ -214,7 +216,7 @@ class FeverIpcHost:
                 )
                 return 0 if accepted is False else 1
         except Exception:
-            self.logger.exception(f"处理游戏 IPC op{opcode} 失败")
+            safe_exception(self.logger, f"处理游戏 IPC op{opcode} 失败")
         return 0
 
     def _resolve_client_sender(self, sender_hwnd):

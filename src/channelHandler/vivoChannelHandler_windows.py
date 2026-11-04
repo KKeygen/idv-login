@@ -23,7 +23,7 @@ import channelmgr
 from cloudRes import CloudRes
 from envmgr import genv
 import app_state
-from logutil import setup_logger
+from logutil import setup_logger, user_notice
 from channelHandler.channelUtils import getShortGameId
 from channelHandler.vivoLogin.vivoChannel import VivoLogin
 
@@ -161,7 +161,8 @@ class vivoChannel(channelmgr.channel):
         res = cloudRes.get_channelData(self.channel_name, real_game_id)
         if res == None:
             self.logger.error(f"Failed to get channel config for {self.name}")
-            self.logger.error(f"游戏{real_game_id}-渠道{self.channel_name}暂不小号登录，如有小号登录需求，请参照教程联系开发者发起添加请求。即将开始默认账号登录。")
+            self.logger.warning(f"游戏{real_game_id}-渠道{self.channel_name}不支持小号登录，使用默认账号")
+            user_notice(f"游戏{real_game_id}-渠道{self.channel_name}暂不支持小号登录，如有需要，请参照教程联系开发者。即将开始默认账号登录。")
             self.crossGames=True
             self.vivoLogin = VivoLogin()
         else:

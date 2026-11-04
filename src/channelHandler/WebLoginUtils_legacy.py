@@ -5,7 +5,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLabel
 from native_ui.dialogs import configure_close_button, configure_login_window, fit_login_window
 from envmgr import genv
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 import os
 import typing
 class WebBrowser(QWidget):
@@ -57,7 +57,7 @@ class WebBrowser(QWidget):
             self.profile.setHttpAcceptLanguage("zh-CN,zh;q=0.9,en;q=0.8")
             self.logger.info(f"Profile创建成功: {name}")
         except Exception as e:
-            self.logger.error(f"Profile创建失败： {e}")
+            self.logger.error(f"Profile创建失败： {type(e).__name__}")
             raise
 
         #cookie相关
@@ -265,12 +265,11 @@ class WebBrowser(QWidget):
     def on_load_finished(self, success):
         # 登录页多为 SPA，跳转/中断会触发 success=False，属正常现象，仅记入文件日志
         if not success:
-            url = self.page.url().toString() if self.page else "?"
-            self.logger.debug(f"[WebBrowser] 页面加载失败: {url}")
+            self.logger.debug("[WebBrowser] 页面加载失败")
 
 
     def handle_url_change(self, url):
-        self.logger.debug(f"[WebBrowser] URL changed: {url.toString()[:200]}")
+        self.logger.debug("[WebBrowser] 页面变化")
         if self.verify(url.toString()):
             if self.parseReslt(url.toString()):
                 self.cleanup()
@@ -279,7 +278,7 @@ class WebBrowser(QWidget):
         return self.cookies
 
     def cookie_added(self, cookie):
-        self.logger.debug(f"Cookie added: {cookie.name().data().decode()}")
+        self.logger.debug("Cookie added")
         self.cookies[cookie.name().data().decode()] = cookie.value().data().decode()
 
     def verify(self, url):
@@ -330,7 +329,7 @@ class WebBrowser(QWidget):
             try:
                 cb(self)
             except Exception:
-                self.logger.exception("[WebBrowser] 异步登录回调执行失败")
+                safe_exception(self.logger, "[WebBrowser] 异步登录回调执行失败")
 
         try:
             self.profile.cookieStore().cookieAdded.disconnect(self.cookie_added)

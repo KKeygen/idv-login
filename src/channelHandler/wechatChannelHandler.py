@@ -49,7 +49,7 @@ class myappVeriftResp:
             self.pay_token = rawJson.get("pay_token")
         except Exception as e:
             self.msg = "Failed to parse json"
-            print(e)
+            setup_logger().error("微信登录结果解析失败: {}", type(e).__name__)
 
     def __json__(self):
         return {

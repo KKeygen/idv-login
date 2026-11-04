@@ -15,7 +15,7 @@ import channelmgr
 from cloudRes import CloudRes
 from envmgr import genv
 import app_state
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 
 from channelHandler.channelUtils import buildSAUTH, postSignedData, getShortGameId
 from channelHandler.ucLogin.ucChannel import UCLogin
@@ -174,7 +174,7 @@ class ucChannel(channelmgr.channel):
                 self.logger.debug("UC session 自动续期成功")
                 return True
         except Exception:
-            self.logger.exception("UC 会话续期异常")
+            safe_exception(self.logger, "UC 会话续期异常")
         return False
 
     # ── 登录 ──────────────────────────────────────────────────
@@ -194,7 +194,7 @@ class ucChannel(channelmgr.channel):
                 if success is True:
                     self.mark_manual_login_success()
             except Exception:
-                self.logger.exception("UC 异步登录处理失败")
+                safe_exception(self.logger, "UC 异步登录处理失败")
                 success = False
             if on_complete is not None:
                 on_complete(success)
@@ -229,7 +229,7 @@ class ucChannel(channelmgr.channel):
             try:
                 return self._build_unisdk_result(short_game_id)
             except Exception:
-                self.logger.exception("生成渠道登录数据失败")
+                safe_exception(self.logger, "生成渠道登录数据失败")
                 return False
 
         def _on_login_done(success):

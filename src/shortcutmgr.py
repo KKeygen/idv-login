@@ -29,7 +29,7 @@ class ShortcutMgr:
                 f.write(content)
             return True
         except Exception as e:
-            logger.error(f"创建快捷方式失败: {e}")
+            logger.error(f"创建快捷方式失败: {type(e).__name__}")
             return False
     
     def _detect_current_executable_path(self):
@@ -38,15 +38,15 @@ class ShortcutMgr:
             if getattr(sys, 'frozen', False):
                 # 如果是PyInstaller打包的执行文件
                 exe_path = sys.executable
-                logger.debug(f"检测到PyInstaller打包环境，可执行文件路径: {exe_path}")
+                logger.debug("检测到PyInstaller打包环境")
                 return exe_path, True  # 返回路径和是否为exe的标志
             else:
                 # 如果是Python脚本
                 script_path = os.path.abspath(sys.argv[0])
-                logger.debug(f"检测到Python脚本环境，脚本路径: {script_path}")
+                logger.debug("检测到Python脚本环境")
                 return script_path, False  # 返回路径和是否为exe的标志
         except Exception as e:
-            logger.error(f"检测可执行文件路径时出错: {e}")
+            logger.error(f"检测可执行文件路径时出错: {type(e).__name__}")
             return None, False
 
     def get_shortcuts(self):

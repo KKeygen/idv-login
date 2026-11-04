@@ -13,6 +13,9 @@ TODO: 支持创建新模块文件的热更新
 
 import importlib.abc
 import importlib.util
+import hashlib
+import hmac
+import re
 import logging
 import os
 import py_compile
@@ -247,7 +250,7 @@ def _compile_source(source_path: str) -> bool:
         py_compile.compile(source_path, doraise=True)
         return True
     except Exception as e:
-        logger.error(f"【热更新】编译失败: {source_path}: {e}")
+        logger.error(f"【热更新】编译失败: {os.path.basename(source_path)}: {type(e).__name__}")
         return False
 
 
@@ -260,11 +263,11 @@ def _compile_to_pyc(source_path: str, pyc_path: str) -> Tuple[bool, str]:
         py_compile.compile(source_path, cfile=pyc_path, doraise=True)
         return True, ""
     except Exception as e:
-        logger.error(f"【热更新】编译失败: {source_path} -> {pyc_path}: {e}")
+        logger.error(f"【热更新】编译失败: {os.path.basename(source_path)}: {type(e).__name__}")
         return False, str(e)
 
 
-def _download_text(url: str, fallbacks: List[str]) -> Tuple[bool, bytes, str]:
+def _download_text(url: str, fallbacks: List[str], expected_sha256: str = "") -> Tuple[bool, bytes, str]:
     from ssl_utils import should_verify_ssl
     sess = requests.Session()
     sess.trust_env = False
@@ -273,11 +276,35 @@ def _download_text(url: str, fallbacks: List[str]) -> Tuple[bool, bytes, str]:
         try:
             resp = sess.get(source_url, timeout=20, headers=headers, verify=should_verify_ssl())
             if resp.status_code == 200:
+                if expected_sha256 and not hmac.compare_digest(hashlib.sha256(resp.content).hexdigest(), expected_sha256):
+                    last_error = "源码 SHA-256 不匹配"
+                    continue
                 return True, resp.content, ""
             last_error = f"HTTP {resp.status_code}"
         except requests.RequestException as e:
             last_error = str(e)
     return False, b"", last_error
+
+
+def _hotfix_source_hash(item, required=False):
+    """Read the source hash only when this hotfix is about to be applied."""
+    source = item.get('source_sha256', '')
+    if not source and not required:
+        return ''
+    if not isinstance(source, str) or not re.fullmatch(r'[0-9a-f]{64}', source):
+        raise ValueError('热更新缺少有效的源码 SHA-256')
+    return source
+
+
+def _get_verified_hotfix(item, url, fallbacks, required):
+    try:
+        source_hash = _hotfix_source_hash(item, required)
+    except ValueError as error:
+        return False, b'', str(error)
+    ok, content, error = _download_text(url, fallbacks, source_hash)
+    if not ok:
+        return False, b'', error
+    return True, content, ''
 
 
 def _build_remote_source_info(module_name: str, commit: str) -> Tuple[str, List[str]]:
@@ -294,7 +321,16 @@ def _build_remote_source_info(module_name: str, commit: str) -> Tuple[str, List[
     return url, fallbacks
 
 
-def restart_self(reason: str = ""):
+def _restart_debug_args(args, debug_mode):
+    if debug_mode is None:
+        return args
+    result = [arg for arg in args if arg != '--debug']
+    if debug_mode:
+        result.append('--debug')
+    return result
+
+
+def restart_self(reason: str = "", *, debug_mode=None):
     try:
         if reason:
             logger.info(f"【热更新】即将重启: {reason}")
@@ -322,6 +358,8 @@ def restart_self(reason: str = ""):
     else:
         args = [sys.executable] + sys.argv
 
+    args = _restart_debug_args(args, debug_mode)
+
     cwd = genv.get("SCRIPT_DIR") or os.getcwd()
     if _is_macos_pyinstaller():
         cwd = genv.get("FP_WORKDIR") or os.getcwd()
@@ -346,7 +384,7 @@ def restart_self(reason: str = ""):
 # 应用 / 回滚
 # ------------------------------------------------------------------
 
-def _apply_one(item: dict) -> Tuple[bool, str]:
+def _apply_one(item: dict, require_hashes: bool = False) -> Tuple[bool, str]:
     """返回 (success, message)。成功时会落盘并编译。"""
     hotfix_id = _make_id(item)
     module_name = (item or {}).get("target_module", "")
@@ -355,7 +393,7 @@ def _apply_one(item: dict) -> Tuple[bool, str]:
         return False, "配置缺少 target_module 或 target_commit"
 
     if _is_macos_pyinstaller():
-        return _apply_one_overlay(item, hotfix_id, module_name, commit)
+        return _apply_one_overlay(item, hotfix_id, module_name, commit, require_hashes)
 
     target_path, target_kind = _resolve_module_target_path(module_name)
     if not target_path or not target_kind:
@@ -366,7 +404,7 @@ def _apply_one(item: dict) -> Tuple[bool, str]:
         return False, f"模块文件不可写（可能无权限或在只读目录）: {target_path}"
 
     url, fallbacks = _build_remote_source_info(module_name, commit)
-    ok, content, err = _download_text(url, fallbacks)
+    ok, content, err = _get_verified_hotfix(item, url, fallbacks, require_hashes)
     if not ok:
         return False, f"下载失败: {url} ({err})"
 
@@ -492,10 +530,10 @@ def _apply_one(item: dict) -> Tuple[bool, str]:
     return True, f"应用成功: {module_name} ({commit})"
 
 
-def _apply_one_overlay(item: dict, hotfix_id: str, module_name: str, commit: str) -> Tuple[bool, str]:
+def _apply_one_overlay(item: dict, hotfix_id: str, module_name: str, commit: str, require_hashes: bool = False) -> Tuple[bool, str]:
     """为 macOS PyInstaller 应用外置源码覆盖，不修改包内文件。"""
     url, fallbacks = _build_remote_source_info(module_name, commit)
-    ok, content, err = _download_text(url, fallbacks)
+    ok, content, err = _get_verified_hotfix(item, url, fallbacks, require_hashes)
     if not ok:
         return False, f"下载失败: {url} ({err})"
 
@@ -685,14 +723,19 @@ def handle_if_needed(cloudres):
     for item in candidates:
         hid = _make_id(item)
         _record_update(hid, {"status": "applying", "ts": int(time.time())})
-        ok, msg = _apply_one(item)
+        ok, msg = _apply_one(item, require_hashes=bool(getattr(cloudres, "signatures_required", False)))
         print(f"【热更新】{hid}: {msg}")
         if ok:
             success_any = True
             applied_ids.append(hid)
         else:
-            _record_update(hid, {"status": "skipped", "skip_reason": "apply_failed", "error": msg})
-            _add_skipped([hid])
+            if getattr(cloudres, "signatures_required", False):
+                # Invalid or unavailable mirrored data may be transient; retry
+                # on a later launch rather than permanently skipping this HF.
+                _record_update(hid, {"status": "apply_failed", "error": msg})
+            else:
+                _record_update(hid, {"status": "skipped", "skip_reason": "apply_failed", "error": msg})
+                _add_skipped([hid])
 
     if success_any:
         _set_pending_ids(applied_ids)

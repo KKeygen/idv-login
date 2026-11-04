@@ -41,6 +41,8 @@ def _install_import_stubs():
 
     logutil = types.ModuleType("logutil")
     logutil.setup_logger = lambda: _Logger()
+    logutil.user_notice = lambda *args, **kwargs: None
+    logutil.safe_exception = lambda *args, **kwargs: None
     sys.modules["logutil"] = logutil
 
     channel_utils = types.ModuleType("channelHandler.channelUtils")

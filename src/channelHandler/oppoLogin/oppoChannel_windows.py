@@ -54,7 +54,7 @@ class OppoBrowser(WebBrowser):
             self.page.runJavaScript("if(window.onRefresh){onRefresh()}")
             self.logger.info("已在主页面触发 onRefresh")
         except Exception as e:
-            self.logger.debug(f"触发主页面 onRefresh 失败: {e}")
+            self.logger.debug(f"触发主页面 onRefresh 失败: {type(e).__name__}")
 
     def _schedule_main_page_refresh(self, delay_ms: int = 50):
         QTimer.singleShot(delay_ms, self._trigger_main_page_refresh)

@@ -23,7 +23,7 @@ import random
 import time
 import requests
 from envmgr import genv
-from logutil import setup_logger
+from logutil import setup_logger, user_notice
 from const import manual_login_channels
 from channelHandler.channelUtils import cmp_game_id, getShortGameId
 from channel_cache import packet_identity, credential_expires_at, exception_summary, unisdk_expires_at
@@ -607,7 +607,8 @@ class ChannelManager:
 
         manual_name = self._manual_channel_name(login_channel, game_id)
         if manual_name:
-            self.logger.info(f"正在扫码导入{manual_name}账号，保存时间较短，请前往渠道服管理界面手动登录以长期保存。")
+            self.logger.info(f"正在扫码导入{manual_name}账号")
+            user_notice(f"正在扫码导入{manual_name}账号，保存时间较短，请前往渠道服管理界面手动登录以长期保存。", level='INFO')
             toast_text = f"您正在扫码导入{manual_name}账号，保存时间较短，请及时参看教程，前往【渠道服管理界面】操作"
         else:
             toast_text = "扫码结果已临时保存，时长约3天，可在游戏的下拉框中选择账号登录。"
@@ -799,7 +800,7 @@ class ChannelManager:
                         try:
                             self.logger.info("微信登录：开始 request_user_login")
                             success = tmp_channel.request_user_login()
-                            self.logger.info(f"微信登录：request_user_login={success}")
+                            self.logger.info(f"微信登录：request_user_login success={success is True}")
                         except Exception as error:
                             success = error
                         # 必须在主线程收尾，因为后续可能涉及 Qt 操作
@@ -815,7 +816,7 @@ class ChannelManager:
                             try:
                                 self.logger.info("B站登录：开始 QR 扫码登录")
                                 success = tmp_channel.request_user_login(login_method="qr")
-                                self.logger.info(f"B站登录：request_user_login={success}")
+                                self.logger.info(f"B站登录：request_user_login success={success is True}")
                             except Exception as error:
                                 success = error
                             app_state.run_on_main_thread(lambda: _login_finished(success))
@@ -834,7 +835,7 @@ class ChannelManager:
                             try:
                                 self.logger.info("华为登录：开始扫码登录")
                                 success = tmp_channel.request_user_login(login_method="qr")
-                                self.logger.info(f"华为登录：request_user_login={success}")
+                                self.logger.info(f"华为登录：request_user_login success={success is True}")
                             except Exception as error:
                                 success = error
                             app_state.run_on_main_thread(lambda: _login_finished(success))
@@ -1001,9 +1002,9 @@ class ChannelManager:
             if os.path.exists(profile_path):
                 try:
                     shutil.rmtree(profile_path)
-                    self.logger.info(f"已删除 weblogin profile: {profile_path}")
+                    self.logger.info("已删除 weblogin profile")
                 except Exception as e:
-                    self.logger.warning(f"删除 profile 文件夹失败: {profile_path}, 错误: {e}")
+                    self.logger.warning(f"删除 profile 文件夹失败: {type(e).__name__}")
         
         # 删除 cache 文件夹
         cache_base = genv.get("GLOB_LOGIN_CACHE_PATH")
@@ -1012,9 +1013,9 @@ class ChannelManager:
             if os.path.exists(cache_path):
                 try:
                     shutil.rmtree(cache_path)
-                    self.logger.info(f"已删除 weblogin cache: {cache_path}")
+                    self.logger.info("已删除 weblogin cache")
                 except Exception as e:
-                    self.logger.warning(f"删除 cache 文件夹失败: {cache_path}, 错误: {e}")
+                    self.logger.warning(f"删除 cache 文件夹失败: {type(e).__name__}")
 
     def cleanup_orphaned_weblogin_profiles(self):
         """v6.0.0 新增：清理孤立的 weblogin profile/cache 文件夹
@@ -1066,11 +1067,11 @@ class ChannelManager:
                     if is_weblogin_folder and folder_name not in valid_uuids:
                         try:
                             shutil.rmtree(folder_path)
-                            self.logger.info(f"清理孤立 profile: {folder_path}")
+                            self.logger.info("清理孤立 profile")
                         except Exception as e:
-                            self.logger.warning(f"清理孤立 profile 失败: {folder_path}, 错误: {e}")
+                            self.logger.warning(f"清理孤立 profile 失败: {type(e).__name__}")
             except Exception as e:
-                self.logger.warning(f"扫描 profile 文件夹失败: {e}")
+                self.logger.warning(f"扫描 profile 文件夹失败: {type(e).__name__}")
         
         # 清理孤立的 cache 文件夹
         cache_base = genv.get("GLOB_LOGIN_CACHE_PATH")
@@ -1094,11 +1095,11 @@ class ChannelManager:
                     if is_weblogin_folder and folder_name not in valid_uuids:
                         try:
                             shutil.rmtree(folder_path)
-                            self.logger.info(f"清理孤立 cache: {folder_path}")
+                            self.logger.info("清理孤立 cache")
                         except Exception as e:
-                            self.logger.warning(f"清理孤立 cache 失败: {folder_path}, 错误: {e}")
+                            self.logger.warning(f"清理孤立 cache 失败: {type(e).__name__}")
             except Exception as e:
-                self.logger.warning(f"扫描 cache 文件夹失败: {e}")
+                self.logger.warning(f"扫描 cache 文件夹失败: {type(e).__name__}")
         
         self.logger.info("孤立 weblogin profile/cache 清理完成")
 

@@ -25,6 +25,7 @@ import threading
 import time
 
 import app_state
+from logutil import safe_exception
 from channelHandler.channelUtils import getShortGameId
 from mitmproxy import http
 from mpay_request_policy import (
@@ -324,7 +325,7 @@ class IDVLoginAddon:
             elif path == "/mpay/api/data/upload":
                 self._handle_data_upload_response(flow)
         except Exception:
-            self.logger.exception(f"处理响应时出错: {path}")
+            safe_exception(self.logger, "处理响应时出错")
 
     @staticmethod
     def _cancel_login(flow):
@@ -374,6 +375,12 @@ class IDVLoginAddon:
                          key[0], key[1], type(transport_error).__name__ if transport_error else None,
                          network_reason, http_status, code if isinstance(code, int) else None,
                          subcode if isinstance(subcode, int) else None, success)
+        if type(http_status) is int and 400 <= http_status <= 599:
+            try:
+                self.logger.debug('SAUTH HTTP status={} response={}', http_status,
+                                  flow.response.get_text(strict=False))
+            except Exception:
+                pass
         try:
             matched = bool(manager and manager.record_sauth(data, success))
         except Exception as error:
@@ -450,7 +457,7 @@ class IDVLoginAddon:
         try:
             held.kill()
         except Exception:
-            self.logger.exception("清理旧的托管 MPay 二维码响应失败")
+            safe_exception(self.logger, "清理旧的托管 MPay 二维码响应失败")
 
     def done(self):
         """Release intercepted responses when mitmproxy shuts down."""
@@ -716,7 +723,7 @@ class IDVLoginAddon:
 
             flow.response.content = json.dumps(data).encode()
         except Exception:
-            self.logger.exception("处理 create_login 响应失败")
+            safe_exception(self.logger, "处理 create_login 响应失败")
 
     def _effective_hosted_game_id(self, flow: http.HTTPFlow) -> str:
         query = flow.request.query
@@ -751,7 +758,7 @@ class IDVLoginAddon:
                     game_id, process_id, data["login_info"]
                 )
         except Exception:
-            self.logger.exception("处理 qrcode/query 响应失败")
+            safe_exception(self.logger, "处理 qrcode/query 响应失败")
 
     def _hold_hosted_channel_query(
         self, flow: http.HTTPFlow, effective_game_id: str = ""
@@ -808,7 +815,7 @@ class IDVLoginAddon:
                 try:
                     previous.kill()
                 except Exception:
-                    self.logger.exception("清理重复的渠道服登录响应失败")
+                    safe_exception(self.logger, "清理重复的渠道服登录响应失败")
             self._held_hosted_query_flows[process_id] = flow
             self.logger.info(
                 "已挂起托管 MPay 的渠道服登录响应并转交游戏: "
@@ -819,7 +826,7 @@ class IDVLoginAddon:
         except Exception:
             if not handed_off and getattr(flow, "intercepted", False):
                 flow.resume()
-            self.logger.exception("接管托管 MPay 渠道服登录 code 失败")
+            safe_exception(self.logger, "接管托管 MPay 渠道服登录 code 失败")
             return False
 
     def _handle_exchange_token_response(
@@ -922,7 +929,7 @@ class IDVLoginAddon:
             if not pending_game and self.game_helper.get_auto_close_setting(game_id):
                 self._trigger_auto_close()
         except Exception:
-            self.logger.exception("处理 data/upload 响应失败")
+            safe_exception(self.logger, "处理 data/upload 响应失败")
 
     def _trigger_auto_close(self):
         self.logger.info("检测到登录已完成请求，即将安全触发程序关闭逻辑...")
@@ -934,7 +941,7 @@ class IDVLoginAddon:
                     QMetaObject.invokeMethod(app_state.app, "quit", Qt.ConnectionType.QueuedConnection)
                     return
             except Exception as e:
-                self.logger.error(f"通知主循环退出失败: {e}")
+                safe_exception(self.logger, "通知主循环退出失败")
             
             # 兜底：如果 Qt 循环不存在，则手动调用 main 的清理逻辑后强退
             #try:

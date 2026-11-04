@@ -5,7 +5,7 @@ import requests
 
 from PyQt6.QtWebEngineCore import QWebEngineUrlSchemeHandler
 from channelHandler.WebLoginUtils import WebBrowser
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception, user_notice
 from ssl_utils import should_verify_ssl
 
 
@@ -170,13 +170,14 @@ class QQLogin:
                 msg = inst.get("msg", "")
                 url = inst.get("url", "")
                 title = inst.get("title", "")
-                self.logger.warning(f"健康系统: {title} - {msg}")
+                self.logger.info("收到健康系统提示")
+                user_notice(f"健康系统: {title} - {msg}")
                 if inst_type == 3 and url:
-                    self.logger.info(f"健康系统: 需要跳转到 {url}")
+                    self.logger.info("健康系统: 需要在浏览器中继续验证")
                     import webbrowser
                     webbrowser.open(url)
         except Exception:
-            self.logger.exception("解析 judgeLoginData 失败")
+            safe_exception(self.logger, "解析 judgeLoginData 失败")
 
     def _exchange_code(self, code, pf=None, pfkey=None):
         """通过 YSDK /cmd/QQCodeLogin 换取 60 天 token"""

@@ -31,7 +31,7 @@ from typing import Optional, List, Dict, Tuple, Any
 import xxhash
 from envmgr import genv
 import app_state
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 from cloudRes import CloudRes
 from channelHandler.channelUtils import getShortGameId, cmp_game_id
 
@@ -865,7 +865,7 @@ class Game:
         installation = self.get_installation(installation_id)
         game_path = installation.path if installation else ""
         if not game_path or not os.path.exists(game_path):
-            self.logger.error(f"游戏路径无效或不存在: {game_path}")
+            self.logger.error("游戏路径无效或不存在")
             self.last_start_error = "游戏路径无效或不存在"
             return False
         if app_state.channels_helper and app_state.channels_helper.db_sync:
@@ -890,7 +890,7 @@ class Game:
                     self.last_start_error = "平台托管登录仅支持 Windows"
                     return False
             except Exception:
-                self.logger.exception("启动平台托管登录失败")
+                safe_exception(self.logger, "启动平台托管登录失败")
                 self.last_start_error = "平台托管登录启动失败；请确认真实发烧平台未在运行且 mpay 资源完整"
                 return False
         elif app_state.fever_bridge is not None:
@@ -973,7 +973,7 @@ class Game:
                 )
                 self.logger.info(f"成功使用 cmd start 启动游戏: {game_path}")
             except Exception as e:
-                self.logger.warning(f"cmd start启动失败，尝试使用ShellExecuteEx作为备选方案1: {str(e)}")
+                safe_exception(self.logger, "cmd start启动失败，尝试使用ShellExecuteEx作为备选方案1")
                 try:
                     # 备用方案1: ShellExecuteExW
                     proxy_env = proxy_mgr.get_proxy_env() if proxy_mgr else {}
@@ -1027,7 +1027,7 @@ class Game:
                             else:
                                 os.environ[k] = v
                 except Exception as e2:
-                    self.logger.exception(f"ShellExecuteEx启动失败，使用普通 Popen 备选启动2: {str(e2)}")
+                    safe_exception(self.logger, "ShellExecuteEx启动失败，使用普通 Popen 备选启动2")
                     cmd = [game_path] + (shlex.split(start_args) if start_args else [])
                     subprocess.Popen(
                         cmd,
@@ -1078,7 +1078,7 @@ class Game:
                 except Exception:
                     continue
         except Exception as e:
-            self.logger.debug(f"扫描已有工具快捷方式失败: {e}")
+            safe_exception(self.logger, "扫描已有工具快捷方式失败")
         return ""
 
     def create_tool_launch_shortcut(
@@ -1125,7 +1125,7 @@ class Game:
             desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
         
         if not os.path.exists(desktop_path):
-            self.logger.error(f"桌面路径不存在: {desktop_path}")
+            self.logger.error("桌面路径不存在")
             return False
         
         try:
@@ -1159,7 +1159,7 @@ class Game:
             expected_args = f'--uri "{uri_arg}"'
             existing_shortcut = self._find_existing_tool_launch_shortcut(desktop_path, bat_path, expected_args)
             if existing_shortcut:
-                self.logger.info(f"已存在工具启动快捷方式，跳过创建: {existing_shortcut}")
+                self.logger.info("已存在工具启动快捷方式，跳过创建")
                 return True
 
             shortcut_path = self._build_unique_shortcut_path(desktop_path, name)
@@ -1182,10 +1182,10 @@ class Game:
             shortcut.IconLocation = f"{icon_path},0"
             
             shortcut.save()
-            self.logger.info(f"创建工具启动快捷方式成功: {shortcut_path}")
+            self.logger.info("创建工具启动快捷方式成功")
             return True
         except Exception as e:
-            self.logger.error(f"创建工具启动快捷方式失败: {e}")
+            safe_exception(self.logger, "创建工具启动快捷方式失败")
             return False
 
     def get_root_path(self, installation_id: str = "") -> str:
@@ -1314,7 +1314,7 @@ class Game:
         except InterruptedError:
             raise
         except OSError as exc:
-            self.logger.warning(f"识别游戏分发时读取文件失败: {exc}")
+            safe_exception(self.logger, "识别游戏分发时读取文件失败")
             scored = []
 
         if scored:
@@ -1449,7 +1449,7 @@ class Game:
                 genv.set("launcher_data_cache", cache, cached=False)
             return data
         except Exception as e:
-            self.logger.exception(f"请求启动器信息失败: {str(e)}")
+            safe_exception(self.logger, "请求启动器信息失败")
         return None
     
     def get_file_distribution_info(self, distribution_id: int) -> Optional[dict]:
@@ -1492,7 +1492,7 @@ class Game:
                 genv.set("file_distribution_info_cache", cache, cached=False)
             return data
         except Exception as e:
-            self.logger.exception(f"请求文件分发信息失败: {str(e)}")
+            safe_exception(self.logger, "请求文件分发信息失败")
             return None
             
     def try_update(
@@ -1519,7 +1519,7 @@ class Game:
             return False
         download_root = self.get_root_path(installation.installation_id)
         if not download_root or not os.path.exists(download_root):
-            self.logger.error(f"游戏路径无效或不存在: {installation.path}")
+            self.logger.error("游戏路径无效或不存在")
             return False
         file_distribution_info = self.get_file_distribution_info(dist_id)
         if not file_distribution_info:
@@ -1600,7 +1600,7 @@ class Game:
                 json.dump(task_data, f, ensure_ascii=False)
             return task_file_path
         except Exception as e:
-            self.logger.exception(f"创建下载任务文件失败: {e}")
+            safe_exception(self.logger, "创建下载任务文件失败")
             return None
 
     def _create_repair_list_file(self, repair_paths: List[str]) -> Optional[str]:
@@ -1614,7 +1614,7 @@ class Game:
                 f.write("\n".join(repair_paths))
             return file_path
         except Exception as e:
-            self.logger.exception(f"创建repair列表文件失败: {e}")
+            safe_exception(self.logger, "创建repair列表文件失败")
             return None
 
     def _spawn_download_process(self, task_file_path: str) -> bool:
@@ -1647,7 +1647,7 @@ class Game:
             )
             return True
         except Exception as e:
-            self.logger.exception(f"启动下载子进程失败: {e}")
+            safe_exception(self.logger, "启动下载子进程失败")
             return False
     def version_check(
         self,
@@ -1801,7 +1801,7 @@ class GameManager:
                 self._save_games()
                 self.logger.info("已将旧版单路径游戏记录迁移为安装实例模型")
         except Exception as e:
-            self.logger.exception(f"加载游戏设置失败: {str(e)}")
+            safe_exception(self.logger, "加载游戏设置失败")
             # 初始化空数据以恢复
             genv.set(self.GAMES_CACHE_KEY, {}, cached=True)
 
@@ -1817,7 +1817,7 @@ class GameManager:
                 genv.set(self.GAMES_CACHE_KEY, game_settings, cached=True)
                 genv.set(self.INSTALLATIONS_CACHE_KEY, installation_settings, cached=True)
             except Exception as e:
-                self.logger.exception(f"保存游戏设置失败: {str(e)}")
+                safe_exception(self.logger, "保存游戏设置失败")
 
     def save_account_switching(self, settings, choices):
         """Game owns its list; global preferences and game choices commit together."""
@@ -2613,7 +2613,7 @@ class GameManager:
                 if notify:
                     app_state.toast(f"成功导入发烧平台游戏，下次启动请使用桌面上的{game.name}(IDV-LOGIN)快捷方式", duration=3000)
             except Exception:
-                self.logger.exception("导入Fever游戏后创建快捷方式失败")
+                safe_exception(self.logger, "导入Fever游戏后创建快捷方式失败")
         self._save_games()
         return final_game_id
 

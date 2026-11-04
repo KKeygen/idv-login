@@ -80,7 +80,7 @@ def configure_windows_app_identity():
             "KKeygen.idv-login.GUI"
         )
     except Exception as exc:
-        logger.debug(f"设置 Windows 应用标识失败: {exc}")
+        logger.debug(f"设置 Windows 应用标识失败: {type(exc).__name__}")
 
 
 def _launcher_icon_path() -> str:
@@ -108,7 +108,7 @@ def configure_application_icon(app):
         return
     icon = QIcon(icon_path)
     if icon.isNull():
-        logger.warning(f"启动器图标无法读取: {icon_path}")
+        logger.warning("启动器图标无法读取")
         return
     app.setWindowIcon(icon)
 
@@ -123,7 +123,7 @@ def _minimize_console_window():
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
     except Exception as exc:
-        logger.debug(f"最小化控制台窗口失败: {exc}")
+        logger.debug(f"最小化控制台窗口失败: {type(exc).__name__}")
 
 
 def _get_cdn_cache_dir() -> str:
@@ -182,7 +182,7 @@ def _save_cdn_to_disk(url: str, content_type: str, body: bytes):
         write_file_restricted(meta_path, meta)
         write_file_restricted(data_path, body)
     except Exception as exc:
-        logger.debug(f"CDN 磁盘缓存写入失败: {url}: {exc}")
+        logger.debug(f"CDN 磁盘缓存写入失败 [{_url_cache_key(url)[:12]}]: {type(exc).__name__}")
 
 
 def _fetch_cdn_resource(url: str) -> tuple[str, bytes, bool]:
@@ -210,7 +210,8 @@ def _fetch_cdn_resource(url: str) -> tuple[str, bytes, bool]:
         ct = resp.headers.get("Content-Type", "application/octet-stream")
         body = resp.content
     except Exception as exc:
-        logger.warning(f"CDN 资源获取失败: {url}: {exc}")
+        status = getattr(getattr(exc, 'response', None), 'status_code', None)
+        logger.warning(f"CDN 资源获取失败 [{_url_cache_key(url)[:12]}]: {type(exc).__name__} status={status}")
         return "text/plain", b"", False
     _cdn_cache[url] = (ct, body)
     if body:
@@ -312,7 +313,7 @@ class IDVLoginSchemeHandler(QWebEngineUrlSchemeHandler):
                 path, method.upper(), args, json_body
             )
         except Exception as e:
-            self.ui_logger.exception(f"处理本地请求失败: {path}")
+            self.ui_logger.error(f"处理本地请求失败: {type(e).__name__}")
             body = json.dumps({"error": str(e)}).encode("utf-8")
             headers = {"Content-Type": "application/json"}
 
@@ -333,13 +334,14 @@ class IDVLoginSchemeHandler(QWebEngineUrlSchemeHandler):
         if query:
             original_url += "?" + query
 
-        logger.debug(f"[CDN代理] 获取: {original_url}")
+        resource_id = _url_cache_key(original_url)[:12]
+        logger.debug(f"[CDN代理] 获取: {resource_id}")
         ct, body, ok = _fetch_cdn_resource(original_url)
         if not ok:
-            logger.warning(f"[CDN代理] 失败，返回错误: {original_url}")
+            logger.warning(f"[CDN代理] 失败，返回错误: {resource_id}")
             job.fail(QWebEngineUrlRequestJob.Error.RequestFailed)
             return
-        logger.debug(f"[CDN代理] 完成: {original_url} ({len(body)} bytes, {ct})")
+        logger.debug(f"[CDN代理] 完成: {resource_id} ({len(body)} bytes)")
         buf = QBuffer(parent=job)
         buf.setData(QByteArray(body))
         buf.open(QIODevice.OpenModeFlag.ReadOnly)
@@ -366,14 +368,15 @@ class _LoggingWebPage(QWebEnginePage):
     and intercepts ``idvlogin://open/…`` navigations to open them in the system browser."""
 
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-        logger.debug(f"[JS:{level}] {message} (line {lineNumber}, {sourceID})")
+        # JS output and source URLs can contain credentials or signed links.
+        logger.debug(f"[JS:{level}] 控制台消息 (line {lineNumber})")
 
     def acceptNavigationRequest(self, url, nav_type, is_main_frame):
         if url.scheme() == "idvlogin" and url.host() == _OPEN_PROXY_HOST:
             original = _extract_original_url(url)
             import webbrowser
             webbrowser.open(original)
-            logger.debug(f"[外部链接] 系统浏览器打开: {original}")
+            logger.debug("[外部链接] 已交给系统浏览器打开")
             return False
         return True
 
@@ -665,7 +668,7 @@ class _WindowsFramelessWindow(QMainWindow):
                 native_hwnd, ctypes.byref(margins)
             )
         except Exception as exc:
-            logger.debug(f"Windows DWM 窗口样式不可用: {exc}")
+            logger.debug(f"Windows DWM 窗口样式不可用: {type(exc).__name__}")
 
     def nativeEvent(self, event_type, message):
         if not self.isMaximized() and bytes(event_type) == b"windows_generic_MSG":

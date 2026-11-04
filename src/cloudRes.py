@@ -5,6 +5,7 @@ import requests
 from envmgr import genv
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
+from cloud_signature import canonical_cloud_config, signatures_required, verify_cloud_config
 from channelHandler.channelUtils import cmp_game_id
 
 logger = setup_logger()
@@ -31,6 +32,9 @@ class CloudRes:
             self.urls = urls
             self.cache_dir = cache_dir
             self.cache_file = os.path.join(cache_dir, 'cache.json')
+            self.signed_cache_file = os.path.join(cache_dir, 'cache.signed.json')
+            self.signatures_required = signatures_required()
+            self._verified_payload = None
             self.local_data = self.load_local_cache()
             self.session = requests.Session()
             self.session.trust_env = False
@@ -58,7 +62,9 @@ class CloudRes:
                 - (_NOT_MODIFIED, None): 304 未修改
                 - (_ERROR, None): 所有 URL 均失败
         """
-        for url in self.urls:
+        if self.signatures_required:
+            return self._fetch_verified_json()
+        for index, url in enumerate(self.urls, 1):
             try:
                 headers = {}
                 url_meta = self._get_url_meta(url)
@@ -72,7 +78,7 @@ class CloudRes:
                 )
 
                 if response.status_code == 304:
-                    logger.info(f"云端配置未变化 (304): {url}")
+                    logger.info(f"云端配置未变化 (304): 源 {index}")
                     return (_NOT_MODIFIED, None)
 
                 response.raise_for_status()
@@ -89,28 +95,83 @@ class CloudRes:
 
                 return (_MODIFIED, data)
             except requests.RequestException as e:
-                logger.debug(f"Failed to fetch JSON from URL {url}: {e}")
+                status = getattr(getattr(e, 'response', None), 'status_code', None)
+                logger.debug(f"Failed to fetch JSON from source {index}: {type(e).__name__} status={status}")
             except json.JSONDecodeError as e:
-                logger.debug(f"Invalid JSON received from URL {url}: {e}")
+                logger.debug(f"Invalid JSON received from source {index}: {type(e).__name__}")
             except Exception as e:
-                logger.debug(f"Unexpected error while fetching JSON from URL {url}: {e}")
+                logger.debug(f"Unexpected error while fetching JSON from source {index}: {type(e).__name__}")
         logger.error("Failed to fetch JSON from all provided URLs.")
         return (_ERROR, None)
 
+    def _fetch_verified_json(self):
+        """Never use validators or a 304 for an unverified network response."""
+        import base64
+        current_version = self.local_data.get('lastModified', 0)
+        current_payload = (canonical_cloud_config(base64.b64decode(self._verified_payload['payload'], validate=True))[1]
+                           if self._verified_payload else None)
+        saw_current = False
+        for url in self.urls:
+            try:
+                response = self.session.get(url, timeout=10, verify=should_verify_ssl())
+                response.raise_for_status()
+                payload = response.content
+                if not verify_cloud_config(payload):
+                    logger.warning('云配置签名无效，尝试下一个来源')
+                    continue
+                data = json.loads(payload)
+                version = data.get('lastModified')
+                if type(version) is not int or version <= 0:
+                    logger.warning('云配置版本无效，尝试下一个来源')
+                    continue
+                if version < current_version:
+                    logger.warning('云配置版本回退，尝试下一个来源')
+                    continue
+                if version == current_version:
+                    if current_payload == canonical_cloud_config(payload)[1]:
+                        saw_current = True
+                    else:
+                        logger.error('相同云配置版本内容不一致，尝试下一个来源')
+                    continue
+                # Preserve the exact signed payload in one atomic cache file.
+                candidate = {'payload': base64.b64encode(payload).decode('ascii')}
+                return (_MODIFIED, (data, candidate))
+            except (requests.RequestException, ValueError, UnicodeError) as e:
+                logger.debug(f'获取已签名云配置失败: {type(e).__name__}')
+        if saw_current:
+            return (_NOT_MODIFIED, None)
+        logger.error('无法获取有效签名的云配置')
+        return (_ERROR, None)
+
     def load_local_cache(self):
+        if self.signatures_required:
+            import base64
+            try:
+                with open(self.signed_cache_file, 'r', encoding='utf-8') as f:
+                    entry = json.load(f)
+                payload = base64.b64decode(entry['payload'], validate=True)
+                if verify_cloud_config(payload):
+                    data = json.loads(payload)
+                    if type(data.get('lastModified')) is int and data['lastModified'] > 0:
+                        self._verified_payload = entry
+                        return data
+            except (OSError, ValueError, KeyError, TypeError, UnicodeError):
+                pass
+            logger.warning('没有有效签名的云配置缓存')
+            return {}
         try:
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             return {}
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse cache file: {e}")
+            logger.error(f"Failed to parse cache file: {type(e).__name__} line={e.lineno} column={e.colno}")
             return {}
         except IOError as e:
-            logger.error(f"Failed to read cache file: {e}")
+            logger.error(f"Failed to read cache file: {type(e).__name__} errno={e.errno}")
             return {}
         except Exception as e:
-            logger.error(f"Unexpected error while loading cache file: {e}")
+            logger.error(f"Unexpected error while loading cache file: {type(e).__name__}")
             return {}
 
     def update_cache_if_needed(self):
@@ -124,12 +185,19 @@ class CloudRes:
             logger.warning("获取云端配置失败，将继续使用本地配置")
             return
 
+        if self.signatures_required:
+            cloud_data, signed_cache = cloud_data
+
         cloud_last_modified = cloud_data.get('lastModified', 0)
         local_last_modified = self.local_data.get('lastModified', 0)
         if cloud_last_modified > local_last_modified:
-            self.local_data = cloud_data
             from secure_write import write_json_restricted
-            write_json_restricted(self.cache_file, cloud_data)
+            if self.signatures_required:
+                write_json_restricted(self.signed_cache_file, signed_cache, atomic_required=True)
+                self._verified_payload = signed_cache
+            else:
+                write_json_restricted(self.cache_file, cloud_data)
+            self.local_data = cloud_data
             logger.info("云端配置有更新，应用成功")
         else:
             logger.info("本地配置已是最新")

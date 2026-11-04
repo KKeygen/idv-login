@@ -15,7 +15,7 @@ from PyQt6.QtCore import QTimer
 
 import app_state
 from envmgr import genv
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 from ssl_utils import should_verify_ssl
 from channelHandler.WebLoginUtils import WebBrowser
 
@@ -203,7 +203,7 @@ class HonorAccountLogin:
             return self._wait_for_account(client)
         except Exception:
             self._update_qrcode_cache("failed")
-            self.logger.exception("荣耀账号扫码登录失败")
+            safe_exception(self.logger, "荣耀账号扫码登录失败")
             return False
 
     def _wait_for_account(self, client):
@@ -270,7 +270,7 @@ class HonorAccountLogin:
                     success = self._wait_for_account(client)
                     game_ready = success is True and not self._account_login_cancelled() and self.loginWithAccount()
                 except Exception:
-                    self.logger.exception("荣耀账号网页登录失败")
+                    safe_exception(self.logger, "荣耀账号网页登录失败")
                     success, game_ready = False, False
 
                 def complete_browser():
@@ -300,14 +300,14 @@ class HonorAccountLogin:
                 try:
                     info = client.get_qr_info()
                 except Exception:
-                    self.logger.exception("荣耀账号网页登录准备失败")
+                    safe_exception(self.logger, "荣耀账号网页登录准备失败")
                     app_state.run_on_main_thread(lambda: on_complete(False, False))
                     return
                 def open_browser():
                     try:
                         show(info)
                     except Exception:
-                        self.logger.exception("荣耀账号登录页打开失败")
+                        safe_exception(self.logger, "荣耀账号登录页打开失败")
                         on_complete(False, False)
                 app_state.run_on_main_thread(open_browser)
             threading.Thread(target=prepare, daemon=True).start()
@@ -315,7 +315,7 @@ class HonorAccountLogin:
         try:
             return show(client.get_qr_info())
         except Exception:
-            self.logger.exception("荣耀账号网页登录失败")
+            safe_exception(self.logger, "荣耀账号网页登录失败")
             return False, False
 
     def newOAuthLogin(self, on_complete=None, *, cancelled=None):
@@ -349,7 +349,7 @@ class HonorAccountLogin:
             code = HonorAccountSession(self.accountSession).authorization_code(self.channelConfig)
             return bool(code) and self._game_center_login(code)
         except Exception:
-            self.logger.exception("荣耀账号静默登录失败")
+            safe_exception(self.logger, "荣耀账号静默登录失败")
             return False
 
     def canReauthorize(self):

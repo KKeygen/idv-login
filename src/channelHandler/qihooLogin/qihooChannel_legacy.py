@@ -18,7 +18,7 @@ import urllib.parse
 
 import requests
 
-from logutil import setup_logger
+from logutil import setup_logger, user_notice, safe_exception
 from ssl_utils import should_verify_ssl
 
 from channelHandler.WebLoginUtils import WebBrowser
@@ -153,7 +153,7 @@ class QihooLogin:
             resp = requests.get(url, timeout=timeout, headers=headers,
                                 verify=should_verify_ssl())
         except Exception as exc:
-            self.logger.debug(f"{TAG} 请求异常 method={method}: {exc}")
+            self.logger.debug(f"{TAG} 请求异常 method={method}: {type(exc).__name__}")
             return {"ok": False, "errno": None, "errmsg": str(exc), "data": {}}
 
         body = resp.text or ""
@@ -175,7 +175,10 @@ class QihooLogin:
                     continue
 
         if payload is None:
-            self.logger.debug(f"{TAG} 响应无法解析 method={method}: {body[:200]!r}")
+            if resp.status_code >= 400:
+                self.logger.debug(f"{TAG} 响应无法解析 method={method}: {body!r}")
+            else:
+                self.logger.debug(f"{TAG} 响应无法解析 method={method}")
             return {"ok": False, "errno": None, "errmsg": "响应无法解析", "data": {}}
 
         errno = payload.get(C.KEY_ERRNO)
@@ -288,13 +291,13 @@ class QihooLogin:
                     try:
                         cookie = getattr(browser_ref, "qt_cookie", "") or ""
                         if not cookie:
-                            self.logger.warning(f"{TAG} 登录未完成，请重试")
+                            user_notice(f"{TAG} 登录未完成，请重试")
                             on_complete(None)
                             return
                         result = self.login_by_qt(cookie)
                         on_complete(result if result["ok"] else False)
                     except Exception:
-                        self.logger.exception(f"{TAG} 异步登录处理失败")
+                        safe_exception(self.logger, f"{TAG} 异步登录处理失败")
                         on_complete(False)
 
                 browser._async_completion_callback = _on_done
@@ -302,7 +305,7 @@ class QihooLogin:
 
         cookie = getattr(browser, "qt_cookie", "") or ""
         if not cookie:
-            self.logger.warning(f"{TAG} 登录未完成，请重试")
+            user_notice(f"{TAG} 登录未完成，请重试")
             if on_complete is not None:
                 on_complete(None)
                 return None

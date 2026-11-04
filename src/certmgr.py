@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     NoEncryption,
 )
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception, user_notice
 
 
 class certmgr:
@@ -40,7 +40,7 @@ class certmgr:
 
     def is_certificate_expired(self, cert_path: str) -> bool:
         if not os.path.exists(cert_path):
-            self.logger.info(f"证书文件 {cert_path} 不存在，将进行创建。")
+            self.logger.info(f"证书文件 {os.path.basename(cert_path)} 不存在，将进行创建。")
             return False  # Not expired because it will be (re)created
         try:
             with open(cert_path, "rb") as f:
@@ -48,13 +48,13 @@ class certmgr:
             cert = x509.load_pem_x509_certificate(cert_data)
             # Use timezone-aware datetime for comparison
             if datetime.datetime.now(datetime.timezone.utc) > cert.not_valid_after_utc:
-                self.logger.warning(f"证书 {cert_path} 已于 {cert.not_valid_after_utc} 过期。")
+                self.logger.warning(f"证书 {os.path.basename(cert_path)} 已于 {cert.not_valid_after_utc} 过期。")
                 return True
             else:
-                self.logger.debug(f"证书 {cert_path} 有效期至 {cert.not_valid_after_utc}。")
+                self.logger.debug(f"证书 {os.path.basename(cert_path)} 有效期至 {cert.not_valid_after_utc}。")
                 return False
         except Exception as e:
-            self.logger.error(f"检查证书 {cert_path} 有效期失败: {e}", exc_info=True)
+            safe_exception(self.logger, "检查证书有效期失败")
             return True  # Treat as expired if an error occurs during check
 
     def generate_private_key(self, bits: int):
@@ -164,7 +164,7 @@ class certmgr:
                 return True
             return self.import_to_root(cert_path) and self.is_root_installed(cert_path)
         except (OSError, ValueError, subprocess.SubprocessError):
-            self.logger.error("检查CA证书安装状态失败。", exc_info=True)
+            safe_exception(self.logger, "检查CA证书安装状态失败")
             return False
 
     def import_to_root(self, cert_path):
@@ -183,7 +183,7 @@ class certmgr:
                 if os.path.exists("/etc/arch-release"):
                     # Arch Linux
                     self.logger.info("Detected OS Arch Linux")
-                    print(f"Copying certificate {cert_path} to /usr/local/share/ca-certificates/")
+                    print("正在复制证书到系统证书目录")
                     subprocess.check_call(
                         ['sudo', 'cp', cert_path, '/etc//ca-certificates/trust-source/anchors/']
                     )
@@ -201,7 +201,8 @@ class certmgr:
                     )
             return True
         except subprocess.CalledProcessError as e:
-            self.logger.error("导入CA证书失败。请关闭杀毒软件后重试。报错信息：", exc_info=True)
+            safe_exception(self.logger, "导入CA证书失败")
+            user_notice("导入CA证书失败。请关闭杀毒软件后重试。", level="ERROR")
             return False
 
     def export_key(self, fn, key):
@@ -211,8 +212,7 @@ class certmgr:
                 Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()
             ))
         except Exception as e:
-            self.logger.error(str(e))
-            self.logger.error("导出私钥失败！")
+            safe_exception(self.logger, "导出私钥失败")
             sys.exit()
 
     def export_cert(self, fn, cert):
@@ -220,6 +220,5 @@ class certmgr:
             with open(fn, "wb") as f:
                 f.write(cert.public_bytes(Encoding.PEM))
         except Exception as e:
-            self.logger.error(str(e))
-            self.logger.error("导出证书失败！")
+            safe_exception(self.logger, "导出证书失败")
             sys.exit()

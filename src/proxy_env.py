@@ -185,7 +185,7 @@ def _unset_win():
                         pass
                 elif var in _PROXY_ENV_VARS_WIN and not _is_proxy_reachable(old_val):
                     # 旧代理不可达，恢复它会导致用户无法上网
-                    _get_logger().warning(f"旧代理 {var}={old_val} 不可达，已删除而非恢复")
+                    _get_logger().warning(f"旧代理 {var} 不可达，已删除而非恢复")
                     try:
                         winreg.DeleteValue(key, var)
                     except FileNotFoundError:

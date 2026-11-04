@@ -20,7 +20,7 @@ def configure_windows_app_identity():
         set_app_id.restype = ctypes.c_long
         set_app_id("KKeygen.idv-login.GUI")
     except Exception as exc:
-        logger.debug(f"设置 Windows 应用标识失败: {exc}")
+        logger.debug(f"设置 Windows 应用标识失败: {type(exc).__name__}")
 
 
 def _launcher_icon_path() -> str:
@@ -47,7 +47,7 @@ def configure_application_icon(app):
         return
     icon = QIcon(icon_path)
     if icon.isNull():
-        logger.warning(f"启动器图标无法读取: {icon_path}")
+        logger.warning("启动器图标无法读取")
         return
     app.setWindowIcon(icon)
 
@@ -68,7 +68,7 @@ def _minimize_console_window():
         if hwnd:
             show_window(hwnd, 6)
     except Exception as exc:
-        logger.debug(f"最小化控制台窗口失败: {exc}")
+        logger.debug(f"最小化控制台窗口失败: {type(exc).__name__}")
 
 
 def register_url_scheme():

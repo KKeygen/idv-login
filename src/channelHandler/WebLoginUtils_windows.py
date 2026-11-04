@@ -1,13 +1,12 @@
 from __future__ import annotations
 import os
-from urllib.parse import urlsplit
 from PyQt6.QtCore import QEvent, Qt, QUrl, QTimer
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLabel
 import app_state
 from browser_runtime import BrowserSession
 from native_ui.dialogs import configure_close_button, configure_login_window, fit_login_window
 from envmgr import genv
-from logutil import setup_logger
+from logutil import setup_logger, safe_exception
 _CURRENT_COOKIE_TOKEN = object()
 
 class WebView2Page:
@@ -386,8 +385,7 @@ class WebBrowser(QWidget):
             self.logger.debug("[WebBrowser] 页面导航中断或加载失败")
 
     def handle_url_change(self, url):
-        parsed = urlsplit(url.toString())
-        self.logger.debug(f"[WebBrowser] 页面变化: {parsed.scheme}://{parsed.hostname or ''}{parsed.path}")
+        self.logger.debug("[WebBrowser] 页面变化")
         if self.verify(url.toString()) and self.parseReslt(url.toString()):
             self.cleanup()
 
@@ -480,7 +478,7 @@ class WebBrowser(QWidget):
             try:
                 callback(self)
             except Exception:
-                self.logger.exception("[WebBrowser] 异步登录回调执行失败")
+                safe_exception(self.logger, "[WebBrowser] 异步登录回调执行失败")
         self.close()
         self.deleteLater()
         if self.app and not self.app.property("_main_loop_running"):
