@@ -1152,12 +1152,13 @@ class ChannelManager:
                 on_complete(result)
             return result
 
+        # Live logins must renew credentials; cached packets are for MPay projection.
         if on_complete is not None:
-            channel.request_unisdk(game_id, on_complete=_do_confirm)
+            channel.request_unisdk(game_id, on_complete=_do_confirm, force=True)
             return None
 
         try:
-            channel_data = channel.request_unisdk(game_id)
+            channel_data = channel.request_unisdk(game_id, force=True)
         except Exception as error:
             channel_data = error
         return _do_confirm(channel_data)
