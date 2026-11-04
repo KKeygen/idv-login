@@ -1,6 +1,9 @@
 import datetime
 import json
 import logging
+import os
+import subprocess
+import textwrap
 import pathlib
 import sys
 import tempfile
@@ -41,44 +44,49 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(hotfixmgr._restart_debug_args(['app.py', '--test'], True), ['app.py', '--test', '--debug'])
 
     def test_same_body_and_no_notices(self):
-        # Capture the actual Loguru pipeline and verify identical text reaches
-        # file and the async envelope, including an untouched HTTP error body.
-        with tempfile.TemporaryDirectory() as folder:
-            import os
-            previous = os.getcwd()
-            os.chdir(folder)
+        # Isolate the real Loguru pipeline: its file sink remains open until
+        # process exit, which otherwise prevents temp-directory cleanup on Windows.
+        probe = textwrap.dedent(r"""
+            import json, logging, pathlib, threading
+            import logutil, telemetry
+
+            sent = []
+            ready = threading.Event()
+            def transport(data):
+                sent.append(data)
+                ready.set()
+            worker = telemetry.Telemetry('v6.3.3-beta', transport)
+            worker.batch_window = 0.1
+            with telemetry._lock:
+                telemetry._current = worker
+            text = 'HTTP 401 response={"token":"literal-error", "detail":"失败"}'
+            logutil.logger.warning(text)
             try:
-                import logutil
-                sent = []
-                ready = threading.Event()
-                def transport(data):
-                    sent.append(data)
-                    ready.set()
-                worker = telemetry.Telemetry('v6.3.3-beta', transport)
-                worker.batch_window = 0.1
-                with telemetry._lock:
-                    telemetry._current = worker
-                text = 'HTTP 401 response={"token":"literal-error", "detail":"失败"}'
-                logutil.logger.warning(text)
-                try:
-                    raise RuntimeError('synthetic-exception-detail')
-                except RuntimeError:
-                    logutil.logger.exception('synthetic-exception-message')
-                logutil.user_notice('NOTICE-MUST-NOT-BE-UPLOADED')
-                self.assertTrue(ready.wait(3))
-                worker.close()
-                local = pathlib.Path('log.txt').read_text()
-                bodies = [item['body'] for payload in sent for item in json.loads(payload.splitlines()[2])['items']]
-                self.assertIn(text, local)
-                self.assertIn(text, ''.join(bodies))
-                self.assertIn('synthetic-exception-detail', local)
-                self.assertEqual(local, ''.join(bodies))
-                self.assertNotIn('NOTICE-MUST-NOT-BE-UPLOADED', local)
-                self.assertNotIn('NOTICE-MUST-NOT-BE-UPLOADED', ''.join(bodies))
-                logging.getLogger('hotfixmgr').warning('standard-logging-example')
-                self.assertIn('standard-logging-example', pathlib.Path('log.txt').read_text())
-            finally:
-                os.chdir(previous)
+                raise RuntimeError('synthetic-exception-detail')
+            except RuntimeError:
+                logutil.logger.exception('synthetic-exception-message')
+            logutil.user_notice('NOTICE-MUST-NOT-BE-UPLOADED')
+            assert ready.wait(3), 'telemetry batch timed out'
+            worker.close()
+            local = pathlib.Path('log.txt').read_text(encoding='utf-8')
+            bodies = [item['body'] for payload in sent
+                      for item in json.loads(payload.splitlines()[2])['items']]
+            assert text in local and text in ''.join(bodies)
+            assert 'synthetic-exception-detail' in local
+            assert local == ''.join(bodies)
+            assert 'NOTICE-MUST-NOT-BE-UPLOADED' not in local
+            assert 'NOTICE-MUST-NOT-BE-UPLOADED' not in ''.join(bodies)
+            logging.getLogger('hotfixmgr').warning('standard-logging-example')
+            assert 'standard-logging-example' in pathlib.Path('log.txt').read_text(encoding='utf-8')
+            telemetry.stop_telemetry()
+        """)
+        env = dict(os.environ, PYTHONUTF8='1')
+        src = str(pathlib.Path(__file__).resolve().parents[1] / 'src')
+        env['PYTHONPATH'] = os.pathsep.join(filter(None, (src, env.get('PYTHONPATH', ''))))
+        with tempfile.TemporaryDirectory() as folder:
+            result = subprocess.run([sys.executable, '-c', probe], cwd=folder, env=env,
+                                    capture_output=True, text=True, encoding='utf-8', timeout=15)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_distributed_records_batch_and_shutdown_flushes(self):
         sent = []
