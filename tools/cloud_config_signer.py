@@ -29,13 +29,15 @@ def git(repo, *args):
         proxies = urllib.request.getproxies_macosx_sysconf()
     except (AttributeError, OSError):
         proxies = {}
-    for scheme in ('http', 'https'):
-        lower, upper = scheme + '_proxy', scheme.upper() + '_PROXY'
-        value = env.get(lower) or env.get(upper) or proxies.get(scheme)
-        if value:
-            env[lower] = env[upper] = value
-        elif args and args[0] == 'fetch':
-            raise ValueError(f'未配置 {scheme.upper()} 代理，已停止网络操作')
+    values = {scheme: env.get(scheme + '_proxy') or env.get(scheme.upper() + '_PROXY')
+              or proxies.get(scheme) for scheme in ('http', 'https')}
+    fallback = values['https'] or values['http']
+    if fallback:
+        for scheme, value in values.items():
+            env[scheme + '_proxy'] = env[scheme.upper() + '_PROXY'] = value or fallback
+        env['no_proxy'] = env['NO_PROXY'] = 'localhost,127.0.0.1,::1,[::1]'
+    elif args and args[0] == 'fetch':
+        raise ValueError('未配置 HTTP/HTTPS 代理，已停止网络操作')
     return subprocess.run(['git', '-C', str(repo), *args], env=env, check=True,
                           stdout=subprocess.PIPE).stdout
 
