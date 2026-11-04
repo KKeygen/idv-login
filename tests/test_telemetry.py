@@ -104,7 +104,7 @@ class TelemetryTests(unittest.TestCase):
     def test_full_batches_respect_429_backoff(self):
         sent = []
         def transport(data):
-            sent.append(time.monotonic())
+            sent.append((time.monotonic(), data))
             return 429 if len(sent) == 1 else 200
         worker = telemetry.Telemetry('v6.3.3-beta', transport)
         worker.batch_window = 0.02
@@ -120,7 +120,13 @@ class TelemetryTests(unittest.TestCase):
             time.sleep(0.01)
         worker.close()
         self.assertEqual(len(sent), 2)
-        self.assertGreaterEqual(sent[1] - sent[0], 0.23)
+        self.assertGreaterEqual(sent[1][0] - sent[0][0], 0.23)
+        first = [x['body'] for x in json.loads(sent[0][1].splitlines()[2])['items']]
+        retry = [x['body'] for x in json.loads(sent[1][1].splitlines()[2])['items']]
+        self.assertEqual(first, retry)
+        self.assertEqual(telemetry._retry_after('0', 30), 1)
+        self.assertEqual(telemetry._retry_after('500', 30), 120)
+        self.assertEqual(telemetry._retry_after('invalid', 30), 30)
 
     def test_sender_uses_direct_fixed_https_and_no_redirects(self):
         captured = {}

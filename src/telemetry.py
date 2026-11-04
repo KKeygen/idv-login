@@ -1,5 +1,6 @@
 """Opt-in, asynchronous upload of the same application records written to log.txt."""
 import atexit
+import email.utils
 import json
 import queue
 import re
@@ -63,9 +64,23 @@ def _send(payload):
             response.read(1)
             return response.status
     except urllib.error.HTTPError as error:
-        return error.code
+        return error.code, error.headers.get('Retry-After') if error.headers else None
     except Exception:
         return None
+
+
+def _retry_after(value, default):
+    """Honor a valid Retry-After within 1–120 seconds."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        try:
+            seconds = email.utils.parsedate_to_datetime(value).timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError, AttributeError):
+            return default
+    if not 0 <= seconds < float('inf'):
+        return default
+    return min(120.0, max(1.0, seconds))
 
 
 def _envelope(batch, version, session):
@@ -132,15 +147,27 @@ class Telemetry:
                     batch.append(self.queue.get(timeout=min(0.2, remaining)))
                 except queue.Empty:
                     pass
-            while not self.discard and time.monotonic() < next_send:
-                time.sleep(min(0.2, max(0, next_send - time.monotonic())))
-            if not self.discard:
+            # Retry only explicit 429 responses; never retry ambiguous network
+            # failures, which may have succeeded on the server. Bound retries.
+            attempts = 0
+            while not self.discard:
+                while not self.discard and time.monotonic() < next_send:
+                    time.sleep(min(0.2, max(0, next_send - time.monotonic())))
+                if self.discard:
+                    break
                 try:
-                    status = self.transport(_envelope(batch, self.version, self.session))
-                    delay = self.rate_limit_backoff if status == 429 else self.send_interval
-                    next_send = time.monotonic() + delay
+                    response = self.transport(_envelope(batch, self.version, self.session))
+                    status, retry_after = response if isinstance(response, tuple) else (response, None)
                 except Exception:
+                    status, retry_after = None, None
+                if status == 429:
+                    next_send = time.monotonic() + _retry_after(retry_after, self.rate_limit_backoff)
+                    attempts += 1
+                    if attempts <= 2:
+                        continue
+                else:
                     next_send = time.monotonic() + self.send_interval
+                break
 
     def close(self, flush=False):
         # User disable discards queued messages. Normal exit waits a bounded
