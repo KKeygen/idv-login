@@ -2941,6 +2941,12 @@
   },
   {
     "module": "src.fever_uimgr",
+    "marshal_sha256": "c7a3851a81eceb12ce42e053b0221ca64bbe6bd2355b6ef9d1373534198d4830",
+    "source_sha256": "9a21f01b893409039f131ac48bc8773ec370ab603f5bc6e4c10efa923bc836d5",
+    "commit_sha": "01f0c9313438fe6b603813addc8f67a87e726ac7"
+  },
+  {
+    "module": "src.fever_uimgr",
     "marshal_sha256": "571c1a1f70557e117e1ba65424ef14ddf0b5ec68ed7159fde09d8c03905b20a1",
     "source_sha256": "e15a106c636598dba044e4d6c2b2deac5d36d2770140493eab4c60d6d24c39b9",
     "commit_sha": "0245fed1f5c80248fb5cac4b706aa611d79c7b8f"
