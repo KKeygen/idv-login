@@ -57,10 +57,10 @@ class CloudSignerTest(unittest.TestCase):
             run('/usr/bin/openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', str(key))
             run('/usr/bin/openssl', 'pkey', '-in', str(key), '-pubout', '-out', str(pub))
             mock_signer = root / 'mock-signer'
-            mock_signer.write_text('#!/bin/sh\n/usr/bin/openssl dgst -sha256 -sign "$TEST_SIGN_KEY" -out "$3.der" "$2" || exit 1\n/usr/bin/openssl base64 -A -in "$3.der" > "$3"\nprintf "\\n" >> "$3"\n')
+            mock_signer.write_text('#!/bin/sh\n/usr/bin/openssl dgst -sha256 -sign "$TEST_SIGN_KEY" -out "$4.der" "$3" || exit 1\n/usr/bin/openssl base64 -A -in "$4.der" > "$4"\nprintf "\\n" >> "$4"\n')
             mock_signer.chmod(0o700)
             state = json.loads((out / 'candidate.json').read_text())
-            options = type('Args', (), {'candidate': str(out), 'signer': str(mock_signer), 'public_key': str(pub)})
+            options = type('Args', (), {'candidate': str(out), 'signer': str(mock_signer), 'key_handle': str(key), 'public_key': str(pub)})
             with patch.dict(os.environ, {'TEST_SIGN_KEY': str(key)}), patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', return_value=state['signing_sha256']):
                 signer.sign(options)
             signer.check(options)

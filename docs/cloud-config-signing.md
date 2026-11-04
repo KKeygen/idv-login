@@ -23,10 +23,10 @@ swiftc -O tools/cloud_sign_enclave.swift -o /绝对路径/cloud-sign-enclave
 `generate` 会实际创建绑定本机的 P-256 私钥，须由设备主人明确知情后手动执行：
 
 ```sh
-/绝对路径/cloud-sign-enclave generate > /安全位置/cloud-sign-public.pem
+/绝对路径/cloud-sign-enclave generate /安全目录/cloud-sign-key.handle > /安全位置/cloud-sign-public.pem
 ```
 
-公开密钥须经独立核对后内置在未来客户端中。该密钥受当前生物识别配置保护；设备损坏或生物识别集合变化可能使密钥不可用，必须先设计独立的恢复/轮换机制。`public` 可导出已有公钥；`sign` 使用新认证上下文，具体系统环境是否逐次提示需实机验证。工具本身不应从不可信 staging 更新。
+公开密钥须经独立核对后内置在未来客户端中。私钥的设备绑定加密封装 handle 保存在指定的 0600 文件，不能复制到 Git、远程服务或其他用户位置。工具拒绝覆盖已有路径及符号链接；读取时检查属主、权限、链接数与常规文件类型。该密钥受当前生物识别配置保护；设备损坏或生物识别集合变化可能使密钥不可用，必须先设计独立的恢复/轮换机制。`public <key-handle>` 可导出已有公钥；`sign` 使用新认证上下文，具体系统环境是否逐次提示需实机验证。工具本身不应从不可信 staging 更新。
 
 ## 准备和审阅
 
@@ -48,6 +48,7 @@ python3 -I tools/cloud_config_signer.py prepare \
 ```sh
 python3 -I tools/cloud_config_signer.py sign /安全目录/本次候选 \
   --signer /绝对路径/cloud-sign-enclave \
+  --key-handle /安全目录/cloud-sign-key.handle \
   --public-key /安全位置/cloud-sign-public.pem
 python3 -I tools/cloud_config_signer.py check /安全目录/本次候选 \
   --public-key /安全位置/cloud-sign-public.pem

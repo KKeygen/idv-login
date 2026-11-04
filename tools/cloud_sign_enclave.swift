@@ -1,11 +1,9 @@
-// Local, device-bound cloud-configuration signing key. No key is created unless
-// the user explicitly invokes `generate`.
+// Local, device-bound cloud signing. `generate` is the only key-creation path.
 import Foundation
 import Security
 import LocalAuthentication
+import CryptoKit
 import Darwin
-
-private let tag = Data("dev.idv-login.cloud-signing.v1".utf8)
 
 private enum SignerError: Error, CustomStringConvertible {
     case failure(String)
@@ -19,81 +17,94 @@ private func fail(_ message: String) -> Never {
     exit(1)
 }
 
-private func keyQuery(context: LAContext? = nil) -> [CFString: Any] {
-    var query: [CFString: Any] = [
-        kSecClass: kSecClassKey,
-        kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
-        kSecAttrKeyClass: kSecAttrKeyClassPrivate,
-        kSecAttrApplicationTag: tag,
-        kSecAttrTokenID: kSecAttrTokenIDSecureEnclave,
-        kSecReturnRef: true,
-        kSecMatchLimit: kSecMatchLimitOne
-    ]
-    if let context { query[kSecUseAuthenticationContext] = context }
-    return query
+private func freshContext() -> LAContext {
+    let context = LAContext()
+    context.localizedReason = "确认签署 idv-login 云配置"
+    context.touchIDAuthenticationAllowableReuseDuration = 0
+    return context
 }
 
-private func createKey() throws -> SecKey {
-    var existingQuery = keyQuery()
-    existingQuery.removeValue(forKey: kSecReturnRef)
-    existingQuery[kSecReturnAttributes] = true
-    let noInteraction = LAContext()
-    noInteraction.interactionNotAllowed = true
-    defer { noInteraction.invalidate() }
-    existingQuery[kSecUseAuthenticationContext] = noInteraction
-    var item: CFTypeRef?
-    let existing = SecItemCopyMatching(existingQuery as CFDictionary, &item)
-    guard existing == errSecItemNotFound else {
-        if existing == errSecSuccess || existing == errSecInteractionNotAllowed || existing == errSecAuthFailed {
-            throw SignerError.failure("signing key already exists or requires authentication; refusing replacement")
+// Anchor file operations to an opened directory descriptor.  Reject symlinks in
+// the directory path and use O_NOFOLLOW/O_EXCL for the final component.
+private func parentDirectory(_ path: String) throws -> (Int32, String) {
+    let url = URL(fileURLWithPath: path).standardizedFileURL
+    let directory = url.deletingLastPathComponent()
+    guard directory.path == directory.resolvingSymlinksInPath().path else {
+        throw SignerError.failure("key or output directory contains a symbolic link")
+    }
+    let name = url.lastPathComponent
+    guard !name.isEmpty && name != "." && name != ".." else {
+        throw SignerError.failure("invalid file name")
+    }
+    let fd = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    guard fd >= 0 else { throw SignerError.failure("could not open parent directory (errno \(errno))") }
+    return (fd, name)
+}
+
+private func writeNewFile(_ data: Data, at path: String) throws {
+    let (dir, name) = try parentDirectory(path)
+    defer { close(dir) }
+    let temp = ".idv-cloud-sign-" + UUID().uuidString + ".tmp"
+    let fd = openat(dir, temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
+    guard fd >= 0 else { throw SignerError.failure("could not create temporary file (errno \(errno))") }
+    defer { close(fd); unlinkat(dir, temp, 0) }
+    try data.withUnsafeBytes { bytes in
+        var offset = 0
+        while offset < bytes.count {
+            let n = write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+            if n < 0 && errno == EINTR { continue }
+            guard n > 0 else { throw SignerError.failure("could not write temporary file (errno \(errno))") }
+            offset += n
         }
-        throw SignerError.failure("could not check existing key (OSStatus \(existing))")
     }
-    var error: Unmanaged<CFError>?
-    guard let access = SecAccessControlCreateWithFlags(nil,
-        kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        [.privateKeyUsage, .biometryCurrentSet], &error) else {
-        throw SignerError.failure("could not configure biometric key protection")
+    guard fsync(fd) == 0 else { throw SignerError.failure("could not sync temporary file (errno \(errno))") }
+    // linkat fails if the final name already exists, including an existing symlink.
+    guard linkat(dir, temp, dir, name, 0) == 0 else {
+        throw SignerError.failure("refusing to replace existing file or link (errno \(errno))")
     }
-    let attributes: [CFString: Any] = [
-        kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
-        kSecAttrKeySizeInBits: 256,
-        kSecAttrTokenID: kSecAttrTokenIDSecureEnclave,
-        kSecPrivateKeyAttrs: [
-            kSecAttrIsPermanent: true,
-            kSecAttrApplicationTag: tag,
-            kSecAttrAccessControl: access
-        ] as [CFString: Any]
-    ]
-    guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-        throw SignerError.failure("Secure Enclave key generation failed: \(error?.takeRetainedValue().localizedDescription ?? "unknown error")")
-    }
-    return key
+    _ = fsync(dir)
 }
 
-private func loadKey(context: LAContext) throws -> SecKey {
-    var item: CFTypeRef?
-    let status = SecItemCopyMatching(keyQuery(context: context) as CFDictionary, &item)
-    guard status == errSecSuccess, let item, CFGetTypeID(item) == SecKeyGetTypeID() else {
-        throw SignerError.failure("could not access Secure Enclave key (OSStatus \(status))")
+private func requireAbsent(_ path: String) throws {
+    let (dir, name) = try parentDirectory(path)
+    defer { close(dir) }
+    var info = stat()
+    if fstatat(dir, name, &info, AT_SYMLINK_NOFOLLOW) == 0 {
+        throw SignerError.failure("refusing to replace existing file or link")
     }
-    // Type checked by CFGetTypeID above; SecKey is a CF opaque type.
-    return (item as! SecKey)
+    guard errno == ENOENT else { throw SignerError.failure("could not inspect key path (errno \(errno))") }
 }
 
-private func publicPEM(_ key: SecKey) throws -> String {
-    guard let publicKey = SecKeyCopyPublicKey(key) else {
-        throw SignerError.failure("could not obtain public key")
+private func readHandle(_ path: String) throws -> Data {
+    let (dir, name) = try parentDirectory(path)
+    defer { close(dir) }
+    let fd = openat(dir, name, O_RDONLY | O_NOFOLLOW)
+    guard fd >= 0 else { throw SignerError.failure("could not open key handle (errno \(errno))") }
+    defer { close(fd) }
+    var info = stat()
+    guard fstat(fd, &info) == 0,
+          (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+          info.st_uid == getuid(), (info.st_mode & mode_t(0o077)) == 0,
+          info.st_nlink == 1, info.st_size > 0, info.st_size <= 16_384 else {
+        throw SignerError.failure("key handle must be an owner-only regular file with one link")
     }
-    var error: Unmanaged<CFError>?
-    guard let raw = SecKeyCopyExternalRepresentation(publicKey, &error) as Data?,
-          raw.count == 65, raw.first == 4 else {
-        throw SignerError.failure("unexpected P-256 public key format")
+    var data = Data(count: Int(info.st_size))
+    let count = try data.withUnsafeMutableBytes { bytes -> Int in
+        var offset = 0
+        while offset < bytes.count {
+            let n = read(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+            if n < 0 && errno == EINTR { continue }
+            guard n > 0 else { throw SignerError.failure("could not read complete key handle") }
+            offset += n
+        }
+        return offset
     }
-    // P-256 SubjectPublicKeyInfo header for a 65-byte X9.63 public point.
-    let header: [UInt8] = [0x30,0x59,0x30,0x13,0x06,0x07,0x2a,0x86,0x48,0xce,0x3d,0x02,0x01,
-                           0x06,0x08,0x2a,0x86,0x48,0xce,0x3d,0x03,0x01,0x07,0x03,0x42,0x00]
-    let encoded = (Data(header) + raw).base64EncodedString()
+    guard count == data.count else { throw SignerError.failure("incomplete key handle") }
+    return data
+}
+
+private func publicPEM(_ key: SecureEnclave.P256.Signing.PrivateKey) -> String {
+    let encoded = key.publicKey.derRepresentation.base64EncodedString()
     var lines: [String] = []
     var index = encoded.startIndex
     while index < encoded.endIndex {
@@ -104,50 +115,41 @@ private func publicPEM(_ key: SecKey) throws -> String {
     return "-----BEGIN PUBLIC KEY-----\n" + lines.joined(separator: "\n") + "\n-----END PUBLIC KEY-----\n"
 }
 
-private func freshContext() -> LAContext {
-    let context = LAContext()
-    context.localizedReason = "确认签署 idv-login 云配置"
-    // Do not request reuse of a previous Touch ID authorization. A fresh
-    // context is used for the one private-key operation in this invocation.
-    context.touchIDAuthenticationAllowableReuseDuration = 0
-    return context
-}
-
 let args = CommandLine.arguments
-let usage = "usage: cloud-sign-enclave generate | public | sign <cloudRes.json> <cloudRes.json.sig>"
+let usage = "usage: cloud-sign-enclave generate <key-handle> | public <key-handle> | sign <key-handle> <payload> <signature>"
 guard args.count >= 2 else { fail(usage) }
 do {
+    guard SecureEnclave.isAvailable else { throw SignerError.failure("Secure Enclave unavailable") }
     switch args[1] {
     case "generate":
-        guard args.count == 2 else { fail(usage) }
-        let key = try createKey()
-        print(try publicPEM(key), terminator: "")
-    case "public":
-        guard args.count == 2 else { fail(usage) }
-        let context = freshContext()
-        defer { context.invalidate() }
-        print(try publicPEM(loadKey(context: context)), terminator: "")
-    case "sign":
-        guard args.count == 4 else { fail(usage) }
-        let input = URL(fileURLWithPath: args[2])
-        let output = URL(fileURLWithPath: args[3])
-        guard input.standardizedFileURL != output.standardizedFileURL else {
-            throw SignerError.failure("input and signature output must be different")
-        }
-        let data = try Data(contentsOf: input)
-        let context = freshContext()
-        defer { context.invalidate() }
-        let key = try loadKey(context: context)
-        let algorithm = SecKeyAlgorithm.ecdsaSignatureMessageX962SHA256
-        guard SecKeyIsAlgorithmSupported(key, .sign, algorithm) else {
-            throw SignerError.failure("key does not support P-256 SHA-256 signatures")
-        }
+        guard args.count == 3 else { fail(usage) }
+        try requireAbsent(args[2])
         var error: Unmanaged<CFError>?
-        guard let signature = SecKeyCreateSignature(key, algorithm, data as CFData, &error) as Data? else {
-            throw SignerError.failure("signature failed: \(error?.takeRetainedValue().localizedDescription ?? "unknown error")")
+        guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                [.privateKeyUsage, .biometryCurrentSet], &error) else {
+            throw SignerError.failure("could not configure biometric key protection")
         }
-        let bytes = Data((signature.base64EncodedString() + "\n").utf8)
-        try bytes.write(to: output, options: .atomic)
+        let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access)
+        try writeNewFile(key.dataRepresentation, at: args[2])
+        print(publicPEM(key), terminator: "")
+    case "public":
+        guard args.count == 3 else { fail(usage) }
+        let context = freshContext()
+        defer { context.invalidate() }
+        let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: readHandle(args[2]), authenticationContext: context)
+        print(publicPEM(key), terminator: "")
+    case "sign":
+        guard args.count == 5 else { fail(usage) }
+        guard URL(fileURLWithPath: args[2]).standardizedFileURL != URL(fileURLWithPath: args[4]).standardizedFileURL,
+              URL(fileURLWithPath: args[3]).standardizedFileURL != URL(fileURLWithPath: args[4]).standardizedFileURL else {
+            throw SignerError.failure("output must differ from key handle and payload")
+        }
+        let data = try Data(contentsOf: URL(fileURLWithPath: args[3]))
+        let context = freshContext()
+        defer { context.invalidate() }
+        let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: readHandle(args[2]), authenticationContext: context)
+        let signature = try key.signature(for: data).derRepresentation
+        try writeNewFile(Data((signature.base64EncodedString() + "\n").utf8), at: args[4])
     default:
         fail(usage)
     }

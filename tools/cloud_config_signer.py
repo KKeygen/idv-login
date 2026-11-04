@@ -222,7 +222,7 @@ def sign(args):
         path = Path(temp) / 'cloudRes.json'
         path.write_bytes(signing_bytes(config))
         sig = Path(temp) / 'cloudRes.json.sig'
-        subprocess.run([signer, 'sign', str(path), str(sig)], check=True)
+        subprocess.run([signer, 'sign', args.key_handle, str(path), str(sig)], check=True)
         signature = sig.read_bytes()
         verify('/usr/bin/openssl', pub, signing_bytes(config), signature)
         if config_path.read_bytes() != data:
@@ -269,6 +269,7 @@ def main():
     p = commands.add_parser('sign')
     p.add_argument('candidate')
     p.add_argument('--signer', required=True, help='trusted compiled Secure Enclave signer')
+    p.add_argument('--key-handle', required=True, help='device-bound wrapped key file')
     p.add_argument('--public-key', required=True, help='pinned public key PEM')
     p.set_defaults(func=sign)
     p = commands.add_parser('check')
