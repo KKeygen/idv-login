@@ -24,7 +24,10 @@ def web_url(value):
             and url.host() and not url.userInfo() else QUrl())
 
 
-def _download_image(url, cancelled, max_bytes, max_pixels):
+_image_open_lock = threading.Lock()
+
+
+def _download_image(url, cancelled):
     import requests
     from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -45,26 +48,27 @@ def _download_image(url, cancelled, max_bytes, max_pixels):
                     url = target
                     continue
                 response.raise_for_status()
-                if int(response.headers.get('Content-Length', '0') or 0) > max_bytes:
-                    return None
                 read = getattr(response.raw, 'read1', response.raw.read)
                 while not cancelled.is_set() and time.monotonic() < deadline:
                     chunk = read(16 * 1024, decode_content=True)
                     if not chunk:
                         break
-                    if len(data) + len(chunk) > max_bytes:
-                        return None
                     data.extend(chunk)
                 break
     if cancelled.is_set() or time.monotonic() >= deadline:
         return None
     try:
-        source = Image.open(io.BytesIO(data), formats=['PNG', 'JPEG', 'GIF', 'WEBP', 'BMP'])
+        # Pillow's default pixel limit would otherwise reject large release images.
+        with _image_open_lock:
+            previous_limit = Image.MAX_IMAGE_PIXELS
+            try:
+                Image.MAX_IMAGE_PIXELS = None
+                source = Image.open(io.BytesIO(data), formats=['PNG', 'JPEG', 'GIF', 'WEBP', 'BMP'])
+            finally:
+                Image.MAX_IMAGE_PIXELS = previous_limit
     except UnidentifiedImageError:
         return None
     with source:
-        if source.width * source.height > max_pixels:
-            return None
         source.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
         rgba = ImageOps.exif_transpose(source).convert('RGBA')
         pixels = rgba.tobytes()
@@ -75,10 +79,6 @@ def _download_image(url, cancelled, max_bytes, max_pixels):
 class ReleaseNotesBrowser(QTextBrowser):
     imageStatusChanged = pyqtSignal(str)
     _imageCompleted = pyqtSignal(str, object)
-    MAX_IMAGE_BYTES = 8 * 1024 * 1024
-    MAX_IMAGE_PIXELS = 16_000_000
-    MAX_IMAGES = 16
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setOpenLinks(False)
@@ -198,7 +198,7 @@ class ReleaseNotesBrowser(QTextBrowser):
         if key in self._images:
             return self._images[key]
         if key not in self._failed and key not in self._pending and not self._closed:
-            if web_url(name).isValid() and len(self._images) + len(self._pending) < self.MAX_IMAGES:
+            if web_url(name).isValid():
                 self._pending[key] = None
                 QTimer.singleShot(0, self._start_downloads)
             else:
@@ -217,11 +217,9 @@ class ReleaseNotesBrowser(QTextBrowser):
                 continue
             receiver = weakref.ref(self)
             cancelled = self._cancelled
-            max_bytes, max_pixels = self.MAX_IMAGE_BYTES, self.MAX_IMAGE_PIXELS
-
             def run(url=key):
                 try:
-                    result = _download_image(url, cancelled, max_bytes, max_pixels)
+                    result = _download_image(url, cancelled)
                 except Exception:
                     result = None
                 target = receiver()
