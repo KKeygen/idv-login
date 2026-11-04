@@ -41,10 +41,11 @@ def start_honor_relogin(record, game):
 
 
 class ExpiredChannelLogin:
-    def __init__(self, sync, record, game, on_finished):
+    def __init__(self, sync, record, game, on_finished, *, try_silent=False):
         self.sync, self.record, self.game = sync, record, game
         self.manager = sync.manager if sync is not None else app_state.channels_helper
         self.on_finished = on_finished
+        self.try_silent = try_silent
         self.task_id = uuid.uuid4().hex
         self.finished = False
         self.started = False
@@ -77,6 +78,10 @@ class ExpiredChannelLogin:
             app_state.toast('此扫码账号登录已过期，请重新扫码登录；不会自动转换或替换账号。', duration=7000)
             self._finish(None, notify=False)
             return
+        if self.try_silent:
+            self.try_silent = False
+            self._restore_honor_session()
+            return
         app_state.toast('账号登录已过期，请完成渠道重新登录；完成后需重启游戏。', duration=7000)
         try:
             if app_state.ui_mgr is None:
@@ -84,6 +89,45 @@ class ExpiredChannelLogin:
             app_state.ui_mgr.open_for_game(self.game, 'accounts', relogin_task=self.task_id)
         except Exception as error:
             self._finish(error)
+
+    def _restore_honor_session(self):
+        """A projected Honor cache deadline is not an account-login rejection."""
+        self.status = 'pending'
+        self.started = True
+        self.message = '正在验证荣耀游戏会话…'
+        initial = self.sync._renewal_state(self.record, self.game)
+
+        def complete(clone, packet):
+            if self.finished or self.cancel_event.is_set():
+                return
+            if not self._available() or self.sync._renewal_state(self.record, self.game) != initial:
+                self._finish(None, notify=False)
+                return
+            if isinstance(packet, dict):
+                from channel_cache import credential_expires_at
+                self.record.unionToken = clone.unionToken
+                self.record.honorLogin = clone.honorLogin
+                self.record.cache_unisdk(packet, credential_expires_at(clone))
+                self._packet_ready(packet)
+            elif isinstance(packet, Exception):
+                self._finish(packet)
+            elif clone is not None and not clone.honorLogin.canReauthorize():
+                self._finish(False)
+            else:
+                self.status = 'waiting'
+                self.started = False
+                self.start()
+
+        def worker():
+            clone = None
+            try:
+                clone = self.sync._clone(self.record)
+                packet = clone.request_unisdk(self.game, interactive=False, cancel_event=self.cancel_event)
+            except Exception as error:
+                packet = error
+            app_state.run_on_main_thread(lambda: complete(clone, packet))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _login_windows(self):
         windows = {}
@@ -156,11 +200,12 @@ class ExpiredChannelLogin:
             return
         self.message = '渠道登录完成，正在更新游戏登录凭据…'
         try:
+            options = {'_session_ready': True} if self.record.channel_name in ('honor', 'honor_sdk') else {}
             self.record.request_unisdk(
                 self.game, force=True, interactive=self.record.channel_name in ('oppo', 'huawei'),
                 cancel_event=self.cancel_event,
                 on_complete=lambda packet: app_state.run_on_main_thread(
-                    lambda: self._packet_ready(packet)))
+                    lambda: self._packet_ready(packet)), **options)
         except Exception as error:
             self._finish(error)
 

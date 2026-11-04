@@ -5,7 +5,9 @@
 支持 configLogin 以及账号 serviceToken 静默重新授权。
 """
 import json
+import copy
 import time
+import threading
 import base64
 from urllib.parse import urlencode
 
@@ -147,7 +149,83 @@ class honorChannel(channelmgr.channel):
 
     # ── UniSDK 数据 ──────────────────────────────────────────
 
-    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True):
+    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False,
+                       cancel_event=None, _session_ready=False):
+        # Only the continuation of a successful interactive login may skip CL.
+        # A separate request always validates, regardless of its cached deadline.
+        game = getShortGameId(game_id or self.game_id)
+
+        def request(record, allow_interactive):
+            if not _session_ready:
+                return super(honorChannel, record).request_unisdk(
+                    game_id, interactive=allow_interactive, force=True, cancel_event=cancel_event)
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            result = record.get_uniSdk_data(game_id, interactive=False, _session_ready=True)
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            if isinstance(result, dict):
+                from channel_cache import credential_expires_at
+                record.cache_unisdk(result, credential_expires_at(record))
+            return result
+
+        if on_complete is None:
+            return request(self, interactive)
+
+        def session_state():
+            return (id(self.unionToken), id(self.accountSession), id(self.honorLogin),
+                    self.last_login_time, self.name, id(self.unisdk_cache.get(game)))
+
+        initial = session_state()
+        clone = copy.copy(self)
+        clone.unionToken = copy.deepcopy(self.unionToken)
+        clone.accountSession = copy.deepcopy(self.accountSession)
+        clone.unisdk_cache = copy.deepcopy(self.unisdk_cache)
+        clone.honorLogin = copy.copy(self.honorLogin)
+        clone.honorLogin.accountSession = clone.accountSession
+
+        def cancelled():
+            return cancel_event is not None and cancel_event.is_set()
+
+        def logged_in(success):
+            if cancelled():
+                on_complete(None)
+            elif success is True:
+                self.request_unisdk(game_id, on_complete=on_complete, interactive=False,
+                                    cancel_event=cancel_event, _session_ready=True)
+            else:
+                on_complete(success)
+
+        def complete(result):
+            if cancelled() or session_state() != initial:
+                on_complete(None)
+                return
+            if isinstance(result, dict):
+                self.unionToken = clone.unionToken
+                self.honorLogin = clone.honorLogin
+                self.name = clone.name
+                self.observe_sdkuid(clone.active_sdkuid, game)
+                self.unisdk_cache[game] = clone.unisdk_cache[game]
+                self.expires_at = None
+            elif result is False:
+                self.expire_unisdk(game)
+                self.honorLogin.lastSessionError = clone.honorLogin.lastSessionError
+                if interactive and clone.honorLogin.canReauthorize():
+                    self.request_user_login(on_complete=logged_in)
+                    return
+            on_complete(result)
+
+        def worker():
+            try:
+                result = request(clone, False)
+            except Exception as error:
+                result = error
+            app_state.run_on_main_thread(lambda: complete(result))
+
+        threading.Thread(target=worker, daemon=True).start()
+        return None
+
+    def get_uniSdk_data(self, game_id: str = "", on_complete=None, *, interactive=True, _session_ready=False):
         genv.set("GLOB_LOGIN_UUID", self.uuid)
         if not game_id:
             game_id = self.game_id
@@ -212,13 +290,11 @@ class honorChannel(channelmgr.channel):
                 "cv": "a1.5.0",
             }
 
-        # 有账号长期态但没有游戏会话时，先无感获取，后台预刷新也可使用。
-        if not self.is_token_valid() and self.accountSession.get("serviceToken"):
-            self._refresh_session()
-
-        # 检查 token 是否有效
-        if not self.is_token_valid():
-            if not interactive:
+        # Match game initialization: validate the old token with the server even
+        # when its local cache deadline has not passed, then recover through ST.
+        if not _session_ready and not self._refresh_session():
+            self.expire_unisdk(game_id)
+            if not interactive or not self.honorLogin.canReauthorize():
                 if on_complete is not None:
                     on_complete(False)
                     return None
@@ -228,44 +304,17 @@ class honorChannel(channelmgr.channel):
                     if success is True and self.is_token_valid():
                         try:
                             result = _build_result()
-                            on_complete(result)
-                        except Exception as e:
-                            self.logger.error(f"Honor UniSDK error: {e}")
-                            on_complete(False)
+                        except Exception:
+                            self.logger.error("构建渠道登录数据失败")
+                            result = False
+                        on_complete(result)
                     else:
                         on_complete(success)
                 self.request_user_login(on_complete=_on_login_done)
                 return None
-            else:
-                success = self.request_user_login()
-                if success is not True:
-                    return success
-
-        # 尝试 configLogin 刷新
-        if self.honorLogin.is_token_expired():
-            if not self._refresh_session():
-                if not interactive:
-                    if on_complete is not None:
-                        on_complete(False)
-                    return False
-                # 刷新失败，需要重新 OAuth
-                if on_complete is not None:
-                    def _on_relogin_done(success):
-                        if success is True and self.is_token_valid():
-                            try:
-                                result = _build_result()
-                                on_complete(result)
-                            except Exception as e:
-                                self.logger.error(f"Honor UniSDK error after re-login: {e}")
-                                on_complete(False)
-                        else:
-                            on_complete(success)
-                    self.request_user_login(on_complete=_on_relogin_done)
-                    return None
-                else:
-                    success = self.request_user_login()
-                    if success is not True:
-                        return success
+            success = self.request_user_login()
+            if success is not True:
+                return success
 
         try:
             result = _build_result()

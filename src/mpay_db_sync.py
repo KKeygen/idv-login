@@ -390,7 +390,8 @@ class MpayDBSync:
             for record in records:
                 try:
                     # These channels exchange durable login state for a fresh game token at startup.
-                    force = force_game_token and record.record_source == 'manual' and record.channel_name in ('huawei', 'nearme_vivo', 'oppo', 'xiaomi_app')
+                    force = record.record_source == 'manual' and (record.channel_name in ('honor', 'honor_sdk') or
+                        force_game_token and record.channel_name in ('huawei', 'nearme_vivo', 'oppo', 'xiaomi_app'))
                     if force:
                         record.expire_unisdk(game)
                     if not force and self._packet(record, game):
@@ -478,10 +479,11 @@ class MpayDBSync:
             return result
         if self.stopping:
             return ready(False)
+        options = {'_session_ready': True} if record.record_source == 'manual' and record.channel_name in ('honor', 'honor_sdk') else {}
         if on_complete:
-            record.request_unisdk(record.game_id, on_complete=ready, interactive=True)
+            record.request_unisdk(record.game_id, on_complete=ready, interactive=True, **options)
             return None
-        return ready(record.request_unisdk(record.game_id, interactive=True))
+        return ready(record.request_unisdk(record.game_id, interactive=True, **options))
 
     @staticmethod
     def _placeholder(key):
@@ -655,7 +657,8 @@ class MpayDBSync:
             return
         from channel_relogin import ExpiredChannelLogin
         attempt = ExpiredChannelLogin(self, record, game,
-            lambda: self._relogins.pop(record.uuid, None))
+            lambda: self._relogins.pop(record.uuid, None),
+            try_silent=record.record_source == 'manual' and record.channel_name in ('honor', 'honor_sdk'))
         self._relogin_tasks = {key: value for key, value in self._relogin_tasks.items()
                                if value.record.uuid != record.uuid}
         self._relogins[record.uuid] = attempt

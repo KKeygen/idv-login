@@ -99,14 +99,30 @@ class HonorAccountSession:
         ET.SubElement(root, "loginType").text = "1"
         response = self._post(site, 1, "/AccountServer/IDM/loginByQrCode",
                               ET.tostring(root, encoding="utf-8", xml_declaration=True), "text/html; charset=UTF-8")
-        result = ET.fromstring(response.content)
+        try:
+            result = ET.fromstring(response.content)
+        except ET.ParseError:
+            self.logger.error("荣耀扫码登录失败：账号响应不是有效 XML")
+            return None
         token = result.findtext(".//serviceToken") or ""
         if result.get("resultCode", "0") != "0" or not token:
-            self.logger.error("荣耀扫码登录失败: {}", response.text)
+            # The response may still contain credentials or personal information.
+            self.logger.error("荣耀扫码登录失败：账号响应未通过校验")
             return None
         return {"serviceToken": token, "siteId": site, "deviceId": self.device_id, "deviceType": "6",
                 "userId": result.findtext(".//userID") or scan.get("userID", ""),
-                "nickName": result.findtext(".//nickName") or ""}
+                "nickName": result.findtext(".//nickName") or "",
+                # Keep the complete response, not a field allowlist: unknown fields,
+                # attributes, repeated elements and future expiry metadata survive.
+                # Base64 preserves the exact XML bytes in the private account JSON;
+                # it is an encoding, not encryption. Never include this in logs/UI.
+                "accountExchangeResponse": {
+                    "endpoint": "/AccountServer/IDM/loginByQrCode",
+                    "format": "xml",
+                    "bodyBase64": base64.b64encode(response.content).decode("ascii"),
+                    "httpStatus": response.status_code,
+                    "capturedAtUnix": time.time(),
+                }}
 
     def authorization_code(self, game_config):
         token = self.saved.get("serviceToken", "")
@@ -302,7 +318,33 @@ class HonorAccountLogin:
             self.logger.exception("荣耀账号网页登录失败")
             return False, False
 
+    def newOAuthLogin(self, on_complete=None, *, cancelled=None):
+        def open_browser():
+            if cancelled is not None and cancelled():
+                if on_complete is not None:
+                    on_complete(None)
+                return None
+            try:
+                return self._openOAuthLogin(on_complete=on_complete)
+            except Exception:
+                self.logger.error("荣耀 OAuth 登录页打开失败")
+                if on_complete is not None:
+                    on_complete(False)
+                return False
+        if on_complete is not None:
+            def prepare():
+                self.gameConfig()
+                app_state.run_on_main_thread(open_browser)
+            threading.Thread(target=prepare, daemon=True).start()
+            return None
+        self.gameConfig()
+        return open_browser()
+
     def loginWithAccount(self):
+        if not self.accountSession.get("serviceToken"):
+            return False
+        self.lastSessionError = None
+        self.gameConfig()
         try:
             code = HonorAccountSession(self.accountSession).authorization_code(self.channelConfig)
             return bool(code) and self._game_center_login(code)
@@ -310,9 +352,15 @@ class HonorAccountLogin:
             self.logger.exception("荣耀账号静默登录失败")
             return False
 
+    def canReauthorize(self):
+        return not getattr(getattr(self, "lastSessionError", None), "blocks_reauthorization", False)
+
     def refreshSession(self):
+        self.lastSessionError = None
         if self.unionToken and self.configLogin():
             return True
+        if not self.canReauthorize():
+            return False
         return self.loginWithAccount()
 
     def newAccountLogin(self, on_complete=None, cancel_event=None, on_qrcode=None, login_method="qr"):
@@ -331,6 +379,11 @@ class HonorAccountLogin:
                 if on_complete is not None:
                     on_complete(True)
                 return True
+            if not self.canReauthorize():
+                self._update_qrcode_cache("failed")
+                if on_complete is not None:
+                    on_complete(False)
+                return False
             # 设备账号登录不等于已授权这个游戏，沿用现有游戏 OAuth 交互。
             def oauth_done(result):
                 if self._account_login_cancelled():
@@ -339,11 +392,11 @@ class HonorAccountLogin:
                 on_complete(result)
             if on_complete is not None:
                 try:
-                    return self.newOAuthLogin(on_complete=oauth_done)
+                    return self.newOAuthLogin(on_complete=oauth_done, cancelled=self._account_login_cancelled)
                 except Exception as error:
                     oauth_done(error)
                     return None
-            result = self.newOAuthLogin()
+            result = self.newOAuthLogin(cancelled=self._account_login_cancelled)
             if self._account_login_cancelled():
                 result = None
             self._update_qrcode_cache("verified" if result is True else "cancelled" if result is None else "failed")

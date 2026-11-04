@@ -24,7 +24,7 @@ from channelHandler.honorLogin.consts import (
 )
 from channelHandler.honorLogin.utils import get_authorization_code
 from channelHandler.honorLogin.account import HonorAccountLogin
-from channelHandler.honorLogin.session import parse_session, valid_redirect
+from channelHandler.honorLogin.session import HonorSessionError, app_version_code, parse_session, valid_redirect
 from channelHandler.WebLoginUtils import WebBrowser
 
 DEVICE_RECORD = "honor_device.json"
@@ -63,6 +63,7 @@ class HonorLogin(HonorAccountLogin):
         self.code_verifier = None
         self.lastLoginTime = 0
         self.expiredTime = 0
+        self.lastSessionError = None
         self._active_browser: HonorBrowser = None
 
         if os.path.exists(DEVICE_RECORD):
@@ -88,8 +89,8 @@ class HonorLogin(HonorAccountLogin):
 
     # ── OAuth 登录 ──────────────────────────────────────────
 
-    def newOAuthLogin(self, on_complete=None):
-        """打开浏览器进行荣耀 OAuth 登录。"""
+    def _openOAuthLogin(self, on_complete=None):
+        """打开已准备配置的荣耀 OAuth 浏览器。"""
         client_id = str(self.channelConfig["app_id"])
         auth_url, self.code_verifier = get_authorization_code(client_id, HONOR_REDIRECT_URI, HONOR_SCOPE)
 
@@ -157,6 +158,7 @@ class HonorLogin(HonorAccountLogin):
             "Content-Type": "application/json",
         }
 
+        self.lastSessionError = None
         data = None
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=30, verify=should_verify_ssl())
@@ -167,15 +169,15 @@ class HonorLogin(HonorAccountLogin):
             self.unionToken = ut
             self.displayName = name
             self.lastLoginTime = now
-            self.expiredTime = now + lifetime
+            self.expiredTime = now + lifetime if lifetime is not None else None
             self.logger.info("荣耀登录成功")
             return True
-        except Exception:
-            if isinstance(data, dict):
-                login_wrapper = data.get("loginData") or data.get("data") or {}
-                if isinstance(login_wrapper, dict) and login_wrapper.get("errorMessage"):
-                    self.logger.error(f"荣耀 Game Center login 错误: {login_wrapper.get('errorMessage')}")
-            self.logger.exception("荣耀 Game Center login 请求失败")
+        except HonorSessionError as error:
+            self.lastSessionError = error
+            self.logger.warning("荣耀 Game Center login 失败，错误码: {}", error.code)
+            return False
+        except Exception as error:
+            self.logger.error("荣耀 Game Center login 请求失败（{}）", type(error).__name__)
             return False
 
     def _build_terminal_info(self, open_id: str = "", access_token: str = "") -> dict:
@@ -194,19 +196,46 @@ class HonorLogin(HonorAccountLogin):
             "language": "zh_CN",
         }
 
+    def gameConfig(self):
+        """首次/重新授权前的配置请求；失败不阻断账号登录。"""
+        body = {
+            "amsPackageName": HONOR_AMS_PACKAGE,
+            "appVersionCode": app_version_code(self.channelConfig),
+            "tInfo": self._build_terminal_info(),
+        }
+        headers = {
+            "apkVer": str(HONOR_APK_VER), "core-version": str(HONOR_CORE_VERSION),
+            "Area-Id": HONOR_AREA_ID, "sdk-version": str(HONOR_CORE_VERSION),
+            "x-uuid": self.device["deviceId"], "Content-Type": "application/json",
+        }
+        try:
+            resp = requests.post(f"{HONOR_GAMECENTER_API}/game/union/sdk/v1/aggregate/config",
+                                 json=body, headers=headers, timeout=30, verify=should_verify_ssl())
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict) or data.get("errorCode") not in (None, 0, "0"):
+                return False
+            self.gameConfigResponse = data
+            return True
+        except Exception as error:
+            self.logger.warning("荣耀配置请求未完成，继续登录（{}）", type(error).__name__)
+            return False
+
     # ── Session 刷新 ──────────────────────────────────────────
 
     def configLogin(self):
         """通过 configLogin 接口用现有 unionToken 刷新 session（无需重新 OAuth）。"""
-        if not self.unionToken:
+        self.lastSessionError = None
+        if not isinstance(self.unionToken, dict) or not all(
+                isinstance(self.unionToken.get(key), str) and self.unionToken[key]
+                for key in ("openId", "token")):
             return False
 
         url = f"{HONOR_GAMECENTER_API}/game/union/sdk/v1/aggregate/configLogin"
 
         body = {
             "amsPackageName": HONOR_AMS_PACKAGE,
-            "appId": str(self.channelConfig["app_id"]),
-            "oauthCode": "",
+            "appVersionCode": app_version_code(self.channelConfig),
             "realNameAuthMode": 0,
             "scene": 0,
             "trackingStr": "",
@@ -233,11 +262,15 @@ class HonorLogin(HonorAccountLogin):
             self.unionToken = ut
             self.displayName = name
             self.lastLoginTime = now
-            self.expiredTime = now + lifetime
+            self.expiredTime = now + lifetime if lifetime is not None else None
             self.logger.info("荣耀 configLogin 刷新成功")
             return True
-        except Exception:
-            self.logger.exception("荣耀 configLogin 请求失败")
+        except HonorSessionError as error:
+            self.lastSessionError = error
+            self.logger.warning("荣耀 configLogin 失败，错误码: {}", error.code)
+            return False
+        except Exception as error:
+            self.logger.error("荣耀 configLogin 请求失败（{}）", type(error).__name__)
             return False
 
     # ── 状态检查 ──────────────────────────────────────────────
@@ -246,4 +279,4 @@ class HonorLogin(HonorAccountLogin):
         if self.unionToken is None:
             return True
         now = int(time.time())
-        return now >= self.expiredTime
+        return self.expiredTime is not None and now >= self.expiredTime
