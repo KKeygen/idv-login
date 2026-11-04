@@ -300,6 +300,7 @@ class LocalRequestHandler:
             "myapp": "WECHAT_QRCODE_CACHE",
             "bilibili_sdk": "BILIBILI_QRCODE_CACHE",
             "huawei": "HUAWEI_QRCODE_CACHE",
+            "honor_sdk": "HONOR_QRCODE_CACHE",
         }.get(channel, "WECHAT_QRCODE_CACHE")
 
         cache = genv.get(cache_key, {})
@@ -407,8 +408,8 @@ class LocalRequestHandler:
         channel = args.get("channel", "myapp")
         task_id = args.get("task_id")
         if task_id:
-            sync = getattr(app_state.channels_helper, 'db_sync', None)
-            attempt = getattr(sync, '_relogin_tasks', {}).get(task_id)
+            from channel_relogin import get_relogin_task
+            attempt = get_relogin_task(task_id)
             if (attempt is None or not cmp_game_id(str(game_id), attempt.game)
                     or channel != attempt.record.channel_name):
                 return self._json_response(404, {'error': '重新登录任务已失效。'})
@@ -437,6 +438,9 @@ class LocalRequestHandler:
                 return self._json_response(200, {"success": True})
             if pending and hasattr(pending, "huaweiLogin"):
                 pending.huaweiLogin.cancel_qr()
+                return self._json_response(200, {"success": True})
+            if pending and hasattr(pending, "honorLogin"):
+                pending.honorLogin.cancel_qr()
                 return self._json_response(200, {"success": True})
         except Exception:
             self.logger.exception("取消 QR 失败")
@@ -538,8 +542,8 @@ class LocalRequestHandler:
 
     def _relogin_channel(self, args, body, method):
         values = body if method == 'POST' and isinstance(body, dict) else args
-        sync = getattr(app_state.channels_helper, 'db_sync', None)
-        attempt = getattr(sync, '_relogin_tasks', {}).get(values.get('task_id', ''))
+        from channel_relogin import get_relogin_task
+        attempt = get_relogin_task(values.get('task_id', ''))
         if attempt is None or not cmp_game_id(str(values.get('game_id', '')), attempt.game):
             return self._json_response(404, {'error': '重新登录任务已失效，请返回游戏重试。'})
         if method == 'POST':

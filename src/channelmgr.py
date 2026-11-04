@@ -843,6 +843,11 @@ class ChannelManager:
                         tmp_channel.request_user_login(
                             on_complete=_login_finished, login_method="web"
                         )
+                elif channle_name == "honor_sdk":
+                    # 荣耀复用通用二维码 UI；账号模块自行在线程中轮询，OAuth 回退回主线程。
+                    tmp_channel.request_user_login(
+                        on_complete=_login_finished, login_method=login_method or "qr"
+                    )
                 else:
                     tmp_channel.request_user_login(on_complete=_login_finished)
             except Exception as error:
