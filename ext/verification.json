@@ -403,6 +403,12 @@
   },
   {
     "module": "src.certmgr",
+    "marshal_sha256": "ec4905625fc8830622fbfba5fcfb036c882a492654894c6a1f33039c7bae56e1",
+    "source_sha256": "90d78462c85a241499e43cfda97834e385759d11895d82e9e7bdc6d876cf5c55",
+    "commit_sha": "67199365a564c4e83d140b54fc7c92f1ea6be258"
+  },
+  {
+    "module": "src.certmgr",
     "marshal_sha256": "533a6c27a641ab31033df7efc8f79bbcecc5993d2b9113dd555e5ce5294ee45a",
     "source_sha256": "dbaddb0df6b7fa030b6bf517d063bb0653994ee0529d9196f03e7e1ffe7f83c2",
     "commit_sha": "1ae094a2998fb74174b83564b50aa0283f0c5da2"
