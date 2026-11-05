@@ -4812,6 +4812,12 @@
     "commit_sha": "0245fed1f5c80248fb5cac4b706aa611d79c7b8f"
   },
   {
+    "module": "src.webview2_com_loader",
+    "marshal_sha256": "3833b2cd57482e8f26ef63b2dc6566aaf298a98c3b3cf0a181dc2222e9f32e60",
+    "source_sha256": "f9aa8c8f34cad24df3a2b6b7e1ffdaaaeb2b4a36e6372d5958fc0572fab69b41",
+    "commit_sha": "79356b2919a4769de037e1bf55997187a64c6985"
+  },
+  {
     "module": "src.webview2_host",
     "marshal_sha256": "7e7678b81e3a00b84fff19556897d5756e2da3a06909c37f79991d93789d0766",
     "source_sha256": "7c43a329ca2bc7ce90abdd4070da494d776e88adf639d5b7aaf91c999e3bff15",
