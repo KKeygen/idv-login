@@ -102,6 +102,12 @@
     "commit_sha": "0245fed1f5c80248fb5cac4b706aa611d79c7b8f"
   },
   {
+    "module": "src.browser_runtime",
+    "marshal_sha256": "9f9fb329b287b28739fc7e09f93948817c15759ce307e36b7777d49c4cc25373",
+    "source_sha256": "7f45436a27da322e6cf6f6d72a7a511d0b91748f1655703367b60b44e0188c14",
+    "commit_sha": "e0319d2dadf2435aa01cadff08b12118e1540429"
+  },
+  {
     "module": "src.browser_setup",
     "marshal_sha256": "3550c37e33874d23d94103ac2894330d8445b221ee16bcccb58f751d25e6aa84",
     "source_sha256": "1393e57a6c231819ce20337e4c6a25875999a6b35b98e330c826fb51292679cd",
