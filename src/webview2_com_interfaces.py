@@ -46,6 +46,9 @@ class ICoreWebView2CreateCoreWebView2ControllerCompletedHandler(IUnknown):
 class ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler(IUnknown):
     _iid_ = GUID("{4e8a3389-c9d8-4bd2-b6b5-124fee6cc14d}")
 
+class ICoreWebView2CustomSchemeRegistration(IUnknown):
+    _iid_ = GUID("{d60ac92c-37a6-4b26-a39e-95cfe59047bb}")
+
 class ICoreWebView2Deferral(IUnknown):
     _iid_ = GUID("{c10e7f7b-b585-46f0-a623-8befbf3e4ee0}")
 
@@ -90,6 +93,9 @@ class ICoreWebView2EnvironmentOptions(IUnknown):
 
 class ICoreWebView2EnvironmentOptions2(IUnknown):
     _iid_ = GUID("{ff85c98a-1ba7-4a6b-90c8-2b752c89e9e2}")
+
+class ICoreWebView2EnvironmentOptions4(IUnknown):
+    _iid_ = GUID("{ac52d13f-0d38-475a-9dca-876580d6793e}")
 
 class ICoreWebView2EnvironmentOptions7(IUnknown):
     _iid_ = GUID("{c48d539f-e39f-441c-ae68-1f66e570bdc5}")
@@ -415,6 +421,16 @@ ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler._methods_ = [
     COMMETHOD([], HRESULT, 'Invoke' , (['in'], HRESULT, 'errorCode'), (['in'], POINTER(ICoreWebView2Environment), 'result')),
 ]
 
+ICoreWebView2CustomSchemeRegistration._methods_ = [
+    COMMETHOD([], HRESULT, 'get_SchemeName' , (['out'], POINTER(c_void_p), 'schemeName')),
+    COMMETHOD([], HRESULT, 'get_TreatAsSecure' , (['out'], POINTER(c_int32), 'treatAsSecure')),
+    COMMETHOD([], HRESULT, 'put_TreatAsSecure' , (['in'], c_int32, 'value')),
+    COMMETHOD([], HRESULT, 'GetAllowedOrigins' , (['out'], POINTER(c_uint32), 'allowedOriginsCount'), (['out'], POINTER(POINTER(c_void_p)), 'allowedOrigins')),
+    COMMETHOD([], HRESULT, 'SetAllowedOrigins' , (['in'], c_uint32, 'allowedOriginsCount'), (['in'], POINTER(c_wchar_p), 'allowedOrigins')),
+    COMMETHOD([], HRESULT, 'get_HasAuthorityComponent' , (['out'], POINTER(c_int32), 'hasAuthorityComponent')),
+    COMMETHOD([], HRESULT, 'put_HasAuthorityComponent' , (['in'], c_int32, 'hasAuthorityComponent')),
+]
+
 ICoreWebView2Deferral._methods_ = [
     COMMETHOD([], HRESULT, 'Complete'),
 ]
@@ -495,6 +511,11 @@ ICoreWebView2EnvironmentOptions._methods_ = [
 ICoreWebView2EnvironmentOptions2._methods_ = [
     COMMETHOD([], HRESULT, 'get_ExclusiveUserDataFolderAccess' , (['out'], POINTER(c_int32), 'value')),
     COMMETHOD([], HRESULT, 'put_ExclusiveUserDataFolderAccess' , (['in'], c_int32, 'value')),
+]
+
+ICoreWebView2EnvironmentOptions4._methods_ = [
+    COMMETHOD([], HRESULT, 'GetCustomSchemeRegistrations' , (['out'], POINTER(c_uint32), 'count'), (['out'], POINTER(POINTER(POINTER(ICoreWebView2CustomSchemeRegistration))), 'schemeRegistrations')),
+    COMMETHOD([], HRESULT, 'SetCustomSchemeRegistrations' , (['in'], c_uint32, 'count'), (['in'], POINTER(POINTER(ICoreWebView2CustomSchemeRegistration)), 'schemeRegistrations')),
 ]
 
 ICoreWebView2EnvironmentOptions7._methods_ = [
