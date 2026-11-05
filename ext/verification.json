@@ -4777,6 +4777,12 @@
   },
   {
     "module": "src.webview2_com",
+    "marshal_sha256": "7961490f243b711e237d7982758d13c63e6bec47bd324acb6a314866aae49fe8",
+    "source_sha256": "f57d0c6d726b02ffc8c8c2c459d78a84329729877a3726e913e05131f1ef7902",
+    "commit_sha": "fadd9776eb94a2a73dab00ff0ccc7f4d7cf96915"
+  },
+  {
+    "module": "src.webview2_com",
     "marshal_sha256": "11f7de02bf6c2bc6ee30e20abce1bba5e6504b9714225fdc5ef46c3405ef4167",
     "source_sha256": "fcbc5c48ef8075217d7c675f5461e037dfa39ef57a9ca86136aa59f867bc7097",
     "commit_sha": "0cee1f6b5c03b93d999a94bfc6e4baf745456d1b"
