@@ -178,7 +178,7 @@ class RegistrationContractTests(unittest.TestCase):
 
 class CallbackRouteTests(unittest.TestCase):
     def make_session(self, scheme):
-        cls = source_class('browser_runtime.py', 'BrowserSession', {'_callback', '_event'})
+        cls = source_class('browser_runtime.py', 'BrowserSession', {'_callback', '_event', '_navigation_policy'})
         session = cls()
         session.callback_schemes = (scheme,)
         session._started, session.is_closing, session._clear_pending = True, False, False
@@ -188,6 +188,18 @@ class CallbackRouteTests(unittest.TestCase):
         captured = []
         session.emit = lambda *args: captured.append(args)
         return session, page, captured
+
+    def test_malformed_qq_redirect_is_intercepted_and_normalized(self):
+        session, page, captured = self.make_session('auth')
+        url = 'http://auth//tauth.qq.com/?code=synthetic&pf=mock'
+        self.assertFalse(session._navigation_policy(1, url, False))
+        self.assertTrue(session._callback(page, url))
+        self.assertEqual(captured[0][2], 'auth://tauth.qq.com/?code=synthetic&pf=mock')
+
+        for other in ('http://auth.evil//tauth.qq.com/?code=x',
+                      'http://auth//tauth.qq.com.evil/?code=x',
+                      'http://auth:80//tauth.qq.com/?code=x'):
+            self.assertFalse(session._callback(page, other))
 
     def test_event_routes_preserve_qq_miqq_and_honor_callback_validation(self):
         qq = source_class('channelHandler/qqLogin/qqChannel_windows.py', 'QQBrowser', {'verify'})()
