@@ -103,7 +103,88 @@ class CloudSignatureTests(unittest.TestCase):
                 cloud.session.get = mock.Mock(return_value=Response())
                 cloud.update_cache_if_needed()
                 self.assertEqual(cloud.local_data, {})
-                self.assertEqual(cloud.session.get.call_count, 2)
+                self.assertEqual(cloud.session.get.call_count, 4)
+                cloudRes.CloudRes._instance = None
+                cloudRes.CloudRes._initialized = False
+
+    def test_etag_is_bound_to_verified_source_and_exact_cached_bytes(self):
+        channel_utils = types.ModuleType('channelHandler.channelUtils')
+        channel_utils.cmp_game_id = lambda left, right: left == right
+        dynamic = types.ModuleType('gamecatalog')
+        dynamic.DynamicGameCatalog = lambda **kwargs: object()
+        class Response:
+            def __init__(self, content=b'', status=200, etag=None):
+                self.content = content
+                self.status_code = status
+                self.headers = {'ETag': etag} if etag else {}
+            def raise_for_status(self): pass
+        with mock.patch.dict(sys.modules, {'channelHandler.channelUtils': channel_utils, 'gamecatalog': dynamic}):
+            import cloudRes
+            with tempfile.TemporaryDirectory() as directory, mock.patch.object(cloud_signature, 'CLOUD_CONFIG_PUBLIC_KEY_PEM', _TEST_PUBLIC):
+                def new_cloud(urls):
+                    cloudRes.CloudRes._instance = None
+                    cloudRes.CloudRes._initialized = False
+                    return cloudRes.CloudRes(urls, directory)
+                first = new_cloud(['a', 'b'])
+                payload = sign(b'{"lastModified":2,"value":"current"}')
+                first.session.get = mock.Mock(return_value=Response(payload, etag='"first"'))
+                first.update_cache_if_needed()
+                self.assertEqual(first.session.get.call_count, 1)
+                self.assertEqual(first.session.get.call_args.kwargs['headers'], {})
+                again = new_cloud(['a', 'b'])
+                again.session.get = mock.Mock(return_value=Response(status=304))
+                again.update_cache_if_needed()
+                self.assertEqual(again.session.get.call_count, 1)
+                self.assertEqual(again.session.get.call_args.kwargs['headers'], {'If-None-Match':'"first"'})
+                self.assertEqual(again.local_data['value'], 'current')
+                # An ETag for another URL is never attached to this request.
+                other = new_cloud(['b'])
+                other.session.get = mock.Mock(side_effect=[Response(payload, etag='"second"')])
+                other.update_cache_if_needed()
+                self.assertEqual(other.session.get.call_args.kwargs['headers'], {})
+                # A newly signed encoding of the same canonical object binds
+                # the new validator to the new bytes, not the previous file.
+                new_payload = sign(b'{"lastModified":2,"value":"current"}')
+                other.session.get = mock.Mock(return_value=Response(new_payload, etag='"third"'))
+                other.update_cache_if_needed()
+                entry = json.loads(Path(directory, 'cache.signed.json').read_text())
+                self.assertEqual(base64.b64decode(entry['payload']), new_payload)
+                self.assertEqual(entry['validators']['b']['payload_sha256'], hashlib.sha256(new_payload).hexdigest())
+                self.assertNotIn('a', entry['validators'])
+                restart = new_cloud(['b'])
+                restart.session.get = mock.Mock(return_value=Response(status=304))
+                restart.update_cache_if_needed()
+                self.assertEqual(restart.session.get.call_args.kwargs['headers'], {'If-None-Match':'"third"'})
+                # Damaged validator metadata never authorizes a conditional request.
+                entry['validators']['b']['payload_sha256'] = '0' * 64
+                Path(directory, 'cache.signed.json').write_text(json.dumps(entry))
+                damaged = new_cloud(['b'])
+                damaged.session.get = mock.Mock(return_value=Response(new_payload, etag='"third"'))
+                damaged.update_cache_if_needed()
+                self.assertEqual(damaged.session.get.call_args.kwargs['headers'], {})
+                cloudRes.CloudRes._instance = None
+                cloudRes.CloudRes._initialized = False
+
+    def test_unexpected_304_retries_same_source_without_condition(self):
+        channel_utils = types.ModuleType('channelHandler.channelUtils')
+        channel_utils.cmp_game_id = lambda left, right: left == right
+        dynamic = types.ModuleType('gamecatalog')
+        dynamic.DynamicGameCatalog = lambda **kwargs: object()
+        class Response:
+            def __init__(self, content=b'', status=200):
+                self.content, self.status_code, self.headers = content, status, {}
+            def raise_for_status(self): pass
+        with mock.patch.dict(sys.modules, {'channelHandler.channelUtils': channel_utils, 'gamecatalog': dynamic}):
+            import cloudRes
+            with tempfile.TemporaryDirectory() as directory, mock.patch.object(cloud_signature, 'CLOUD_CONFIG_PUBLIC_KEY_PEM', _TEST_PUBLIC):
+                cloudRes.CloudRes._instance = None
+                cloudRes.CloudRes._initialized = False
+                cloud = cloudRes.CloudRes(['first', 'second'], directory)
+                cloud.session.get = mock.Mock(side_effect=[Response(status=304), Response(sign(b'{"lastModified":1}'))])
+                cloud.update_cache_if_needed()
+                self.assertEqual(cloud.local_data['lastModified'], 1)
+                self.assertEqual([x.args[0] for x in cloud.session.get.call_args_list], ['first', 'first'])
+                self.assertTrue(all(x.kwargs['headers'] == {} for x in cloud.session.get.call_args_list))
                 cloudRes.CloudRes._instance = None
                 cloudRes.CloudRes._initialized = False
 

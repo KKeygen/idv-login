@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import re
 import requests
 from envmgr import genv
@@ -105,15 +106,30 @@ class CloudRes:
         return (_ERROR, None)
 
     def _fetch_verified_json(self):
-        """Never use validators or a 304 for an unverified network response."""
+        """Use only validators tied to the exact, previously verified cache."""
         import base64
         current_version = self.local_data.get('lastModified', 0)
-        current_payload = (canonical_cloud_config(base64.b64decode(self._verified_payload['payload'], validate=True))[1]
-                           if self._verified_payload else None)
-        saw_current = False
+        cached_bytes = (base64.b64decode(self._verified_payload['payload'], validate=True)
+                        if self._verified_payload else None)
+        current_payload = canonical_cloud_config(cached_bytes)[1] if cached_bytes else None
+        cached_hash = hashlib.sha256(cached_bytes).hexdigest() if cached_bytes else None
+        validators = self._verified_payload.get('validators', {}) if self._verified_payload else {}
+        if not isinstance(validators, dict):
+            validators = {}
         for url in self.urls:
             try:
-                response = self.session.get(url, timeout=10, verify=should_verify_ssl())
+                meta = validators.get(url, {})
+                etag = (meta.get('etag') if isinstance(meta, dict)
+                        and meta.get('payload_sha256') == cached_hash else None)
+                headers = {'If-None-Match': etag} if cached_bytes and isinstance(etag, str) and etag else {}
+                response = self.session.get(url, timeout=10, verify=should_verify_ssl(), headers=headers)
+                if getattr(response, 'status_code', 200) == 304:
+                    if headers:
+                        return (_NOT_MODIFIED, None)
+                    # A 304 without a matching validated cache is unusable.
+                    response = self.session.get(url, timeout=10, verify=should_verify_ssl(), headers={})
+                    if getattr(response, 'status_code', 200) == 304:
+                        continue
                 response.raise_for_status()
                 payload = response.content
                 if not verify_cloud_config(payload):
@@ -127,19 +143,24 @@ class CloudRes:
                 if version < current_version:
                     logger.warning('云配置版本回退，尝试下一个来源')
                     continue
-                if version == current_version:
-                    if current_payload == canonical_cloud_config(payload)[1]:
-                        saw_current = True
-                    else:
-                        logger.error('相同云配置版本内容不一致，尝试下一个来源')
+                if version == current_version and current_payload != canonical_cloud_config(payload)[1]:
+                    logger.error('相同云配置版本内容不一致，尝试下一个来源')
                     continue
-                # Preserve the exact signed payload in one atomic cache file.
+                # Store the ETag alongside the exact bytes it describes.
+                etag = getattr(response, 'headers', {}).get('ETag')
                 candidate = {'payload': base64.b64encode(payload).decode('ascii')}
+                kept = dict(validators) if payload == cached_bytes else {}
+                if isinstance(etag, str) and etag:
+                    kept[url] = {'etag': etag, 'payload_sha256': hashlib.sha256(payload).hexdigest()}
+                else:
+                    kept.pop(url, None)
+                if kept:
+                    candidate['validators'] = kept
+                if version == current_version:
+                    return (_NOT_MODIFIED, candidate if candidate != self._verified_payload else None)
                 return (_MODIFIED, (data, candidate))
             except (requests.RequestException, ValueError, UnicodeError) as e:
                 logger.debug(f'获取已签名云配置失败: {type(e).__name__}')
-        if saw_current:
-            return (_NOT_MODIFIED, None)
         logger.error('无法获取有效签名的云配置')
         return (_ERROR, None)
 
@@ -178,7 +199,16 @@ class CloudRes:
         status, cloud_data = self.fetch_json_from_url()
 
         if status == _NOT_MODIFIED:
-            logger.info("本地配置已是最新 (HTTP 304)")
+            if self.signatures_required and cloud_data is not None:
+                # Updating a same-version ETag is optional: preserve the valid
+                # existing cache if the metadata cannot be written.
+                try:
+                    from secure_write import write_json_restricted
+                    write_json_restricted(self.signed_cache_file, cloud_data, atomic_required=True)
+                    self._verified_payload = cloud_data
+                except Exception:
+                    logger.warning("无法保存云配置缓存验证器")
+            logger.info("本地配置已是最新")
             return
 
         if status == _ERROR or cloud_data is None:
