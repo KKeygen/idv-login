@@ -2443,6 +2443,12 @@
   },
   {
     "module": "src.cloudRes",
+    "marshal_sha256": "8fe59313f0598f8303b108495866dc557ae3730540d7672d031380249c6caf09",
+    "source_sha256": "26db519b0f7b100bd4a3981564249439750b3f09d11832385534be0e4cb86bcf",
+    "commit_sha": "e565d3bbba8f628ecf6488b2e75fa1fec79ccbd5"
+  },
+  {
+    "module": "src.cloudRes",
     "marshal_sha256": "680dad40816611d6d8551d68639a4c58095ddc6cc1ab7324a4887813f29960e1",
     "source_sha256": "27822d36c46bb5314e51c8abc3b1cefafa856a642e4890f69a4afa2c12a4bfdd",
     "commit_sha": "9d6dda398fdb36dcf6c7cd94c5189824777fff81"
