@@ -9,6 +9,31 @@ import winreg
 from comtypes import COMObject, COMError
 import webview2_com_interfaces as I
 
+# A hotfix can replace this loader while the packaged interface module is old.
+# Define the new interfaces locally in that case so the update is self-contained.
+if not hasattr(I, 'ICoreWebView2CustomSchemeRegistration'):
+    class _CustomSchemeRegistration(I.IUnknown):
+        _iid_ = I.GUID('{d60ac92c-37a6-4b26-a39e-95cfe59047bb}')
+        _methods_ = [
+            I.COMMETHOD([], I.HRESULT, 'get_SchemeName', (['out'], C.POINTER(C.c_void_p), 'schemeName')),
+            I.COMMETHOD([], I.HRESULT, 'get_TreatAsSecure', (['out'], C.POINTER(C.c_int32), 'treatAsSecure')),
+            I.COMMETHOD([], I.HRESULT, 'put_TreatAsSecure', (['in'], C.c_int32, 'value')),
+            I.COMMETHOD([], I.HRESULT, 'GetAllowedOrigins', (['out'], C.POINTER(C.c_uint32), 'allowedOriginsCount'), (['out'], C.POINTER(C.POINTER(C.c_void_p)), 'allowedOrigins')),
+            I.COMMETHOD([], I.HRESULT, 'SetAllowedOrigins', (['in'], C.c_uint32, 'allowedOriginsCount'), (['in'], C.POINTER(C.c_wchar_p), 'allowedOrigins')),
+            I.COMMETHOD([], I.HRESULT, 'get_HasAuthorityComponent', (['out'], C.POINTER(C.c_int32), 'hasAuthorityComponent')),
+            I.COMMETHOD([], I.HRESULT, 'put_HasAuthorityComponent', (['in'], C.c_int32, 'value')),
+        ]
+
+    class _EnvironmentOptions4(I.IUnknown):
+        _iid_ = I.GUID('{ac52d13f-0d38-475a-9dca-876580d6793e}')
+        _methods_ = [
+            I.COMMETHOD([], I.HRESULT, 'GetCustomSchemeRegistrations', (['out'], C.POINTER(C.c_uint32), 'count'), (['out'], C.POINTER(C.POINTER(C.POINTER(_CustomSchemeRegistration))), 'schemeRegistrations')),
+            I.COMMETHOD([], I.HRESULT, 'SetCustomSchemeRegistrations', (['in'], C.c_uint32, 'count'), (['in'], C.POINTER(C.POINTER(_CustomSchemeRegistration)), 'schemeRegistrations')),
+        ]
+
+    I.ICoreWebView2CustomSchemeRegistration = _CustomSchemeRegistration
+    I.ICoreWebView2EnvironmentOptions4 = _EnvironmentOptions4
+
 from webview2_setup import MINIMUM_RUNTIME_VERSION as MINIMUM_VERSION
 E_FAIL = -2147467259
 E_ACCESSDENIED = -2147024891
