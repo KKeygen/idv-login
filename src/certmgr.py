@@ -150,7 +150,8 @@ class certmgr:
         result = subprocess.run(command, capture_output=True, timeout=15, env=env)
         if result.returncode == 0:
             return True
-        if sys.platform == "win32" and result.returncode & 0xffffffff == 0x80092004:
+        # certutil -store reports either code when the certificate is absent.
+        if sys.platform == "win32" and result.returncode & 0xffffffff in (0x80092004, 0x80090011):
             return False
         if sys.platform == "darwin" and result.returncode == 1 and b'CSSMERR_TP_NOT_TRUSTED' in result.stderr:
             return False
