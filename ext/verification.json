@@ -2587,6 +2587,12 @@
   },
   {
     "module": "src.cloudSync",
+    "marshal_sha256": "9a7dded451b9760fc0c796bdf2750d47820771c3d8986bae6689654fd06f95fc",
+    "source_sha256": "6a4bfc2a7ac500aa46b61d9e34f3af23b926ee21ed38762ed0099467e731a209",
+    "commit_sha": "38cbf0073a1ea3f9633bf111a534af2bc249d741"
+  },
+  {
+    "module": "src.cloudSync",
     "marshal_sha256": "20d0566440658e49a7f7fed30709bc16619827bfbd4226a7ea7d1fa882e889e8",
     "source_sha256": "855581723e8002d878ed58646f43d6991b9c2cfb8d227f5f5e6a259bfd8cce64",
     "commit_sha": "110cf3af3e34412d8882704e752b8d37a05dd1f1"
