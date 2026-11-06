@@ -3943,6 +3943,12 @@
   },
   {
     "module": "src.mitm_addon",
+    "marshal_sha256": "4d28cdbd217a6833750b73103645df9188d3a06410951d9503bd9316006f81a8",
+    "source_sha256": "530900f25da6822190d3cf1454d587766a7fd3b6de2c8aa910d38a8ce3e122cd",
+    "commit_sha": "22ef8b098550940dd55a166a9f322b59c5174330"
+  },
+  {
+    "module": "src.mitm_addon",
     "marshal_sha256": "aa643bccd1b9e02ff737f6d10cf1bcc36dd6da1253e6b9ad5d83961a2c41643d",
     "source_sha256": "626ebfae1ac0fe00ce61adc3fb49fa1586c1d385a46380e8d28fffca45149f14",
     "commit_sha": "46dbaabb96daeddae387651f64b628e3109255d7"
@@ -4006,6 +4012,12 @@
     "marshal_sha256": "7321193cfc05fb5b129fbdbfecb6b176322261873545ba9d19f874b4031bd04e",
     "source_sha256": "940fc1f3be92ec71fdb2c6d12a207c09cb39ecb38b55910d4962d166048d6d42",
     "commit_sha": "680f1327ae9a4dbb531ea845c87cf63aa82b6df8"
+  },
+  {
+    "module": "src.mitm_addon",
+    "marshal_sha256": "2e69823c29e0d680ab3973727dfc35a91acf77c3b7b090179575e804bcda273c",
+    "source_sha256": "94eb48ce2b81e55a06bbe6ef2f4ad11522a2d33cc74a38ee449e180350b38729",
+    "commit_sha": "8312a9099e07012c86cef1836e94ffb768f77f0b"
   },
   {
     "module": "src.mitm_addon",
@@ -4192,6 +4204,18 @@
     "marshal_sha256": "eea34ed55c8e3ca8f4ec9eef432b33814270beee0f8ca16240de0e438805c1bf",
     "source_sha256": "484f41294c005c90d2ec847a3555bda32712b890e427450bee52cc7e99402c8f",
     "commit_sha": "c6b196ae503e20b94b0d792c749900ed5ca1b471"
+  },
+  {
+    "module": "src.mpay_db_sync",
+    "marshal_sha256": "858eed4fe933c86101448a9fa1b52c61894b41484ae76a879b042bee810c3259",
+    "source_sha256": "6b25251b4bcd1a041f271427344f00517fd925de4e25d2451b9ed257788e6d23",
+    "commit_sha": "22ef8b098550940dd55a166a9f322b59c5174330"
+  },
+  {
+    "module": "src.mpay_db_sync",
+    "marshal_sha256": "06008d28e75e3c2c4941ca93272cffd8929ec185c89c154e8652b74c92712499",
+    "source_sha256": "7fbab513d38f02286ea8f2d875937089b9acdd537a8259df7f3dc0c693e1c7f9",
+    "commit_sha": "8312a9099e07012c86cef1836e94ffb768f77f0b"
   },
   {
     "module": "src.mpay_db_sync",
