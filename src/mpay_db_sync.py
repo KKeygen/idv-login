@@ -134,6 +134,10 @@ class MpayDBSync:
         # Successful writes only: (path, SDK identity, created by this process).
         # No DB addresses, credentials, display-name copies or Channel bindings.
         self.projected = set()
+        # MPay deletes its row when we send is_remember=false. Keep this
+        # exemption for this process: delayed SDK writes can follow a refresh.
+        # Explicit tool deletion and projection cleanup still run normally.
+        self._unremembered_accounts = set()
         self._relogins = {}
         self._relogin_tasks = {}
         self._order_states = {}
@@ -271,6 +275,11 @@ class MpayDBSync:
             previous = {(p, k, c) for p, k, c in self.projected if p == path and k == key}
             self.projected.difference_update(previous)
             self.projected.add((path, key, created or any(c for _, _, c in previous)))
+
+    def preserve_unremembered_account(self, key):
+        """Protect the actual response SDK identity, not the UI selection."""
+        with self.lock:
+            self._unremembered_accounts.add(key)
 
     def _delete(self, path, key):
         self.operate(path, 'delete_account', **self._args(key))
@@ -666,36 +675,37 @@ class MpayDBSync:
         attempt.start()
 
     def reconcile_game_changes(self):
-        missing = set()
-        for path in {path for path, _, _ in self.projected}:
-            if not path.exists():
-                continue
-            try:
-                response = self.operate(path, 'list_accounts')
-                rows = {self._key(item) for item in response['accounts']}
-                blocked = {self._key(error) for error in response['errors']
-                           if error['reason'] == 'duplicate_sdk_identity'}
-                for _, key, _ in tuple(item for item in self.projected if item[0] == path):
-                    if self._menu_role(key) or key in blocked:
-                        continue
-                    for record in self.manager.channels:
-                        try:
-                            if self._target(record, key[0]) != key:
-                                continue
-                        except ValueError as error:
-                            self._record_error(record, key[0], error, stage='reconcile.identity')
-                            continue
-                        if key not in rows:
-                            missing.add(record.uuid)
-                            self.projected = {(p, k, c) for p, k, c in self.projected if (p, k) != (path, key)}
-            except Exception as error:
-                log_failure(self.logger, f'[mpay-db] path={path.name} stage=reconcile.read 无法检查游戏删除', error)
-        for uuid in missing:
-            if self.manager.query_channel(uuid) is not None:
+        with self.lock:
+            missing = set()
+            for path in {path for path, _, _ in self.projected}:
+                if not path.exists():
+                    continue
                 try:
-                    self.manager.delete(uuid)
+                    response = self.operate(path, 'list_accounts')
+                    rows = {self._key(item) for item in response['accounts']}
+                    blocked = {self._key(error) for error in response['errors']
+                               if error['reason'] == 'duplicate_sdk_identity'}
+                    for _, key, _ in tuple(item for item in self.projected if item[0] == path):
+                        if self._menu_role(key) or key in blocked or key in self._unremembered_accounts:
+                            continue
+                        for record in self.manager.channels:
+                            try:
+                                if self._target(record, key[0]) != key:
+                                    continue
+                            except ValueError as error:
+                                self._record_error(record, key[0], error, stage='reconcile.identity')
+                                continue
+                            if key not in rows:
+                                missing.add(record.uuid)
+                                self.projected = {(p, k, c) for p, k, c in self.projected if (p, k) != (path, key)}
                 except Exception as error:
-                    log_failure(self.logger, f'[mpay-db] account={uuid} stage=reconcile.delete 单个账号删除同步失败，继续其余账号', error)
+                    log_failure(self.logger, f'[mpay-db] path={path.name} stage=reconcile.read 无法检查游戏删除', error)
+            for uuid in missing:
+                if self.manager.query_channel(uuid) is not None:
+                    try:
+                        self.manager.delete(uuid)
+                    except Exception as error:
+                        log_failure(self.logger, f'[mpay-db] account={uuid} stage=reconcile.delete 单个账号删除同步失败，继续其余账号', error)
 
     def related_uuids(self, uuid):
         source = self.manager.query_channel(uuid)

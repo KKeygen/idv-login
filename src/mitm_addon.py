@@ -900,7 +900,14 @@ class IDVLoginAddon:
                 from channel_cache import packet_identity
                 try:
                     identity = packet_identity({'login_channel': login_channel,
-                        'extra_unisdk_data': (user.get('pc_ext_info') or {}).get('extra_unisdk_data', '')})
+                        'extra_unisdk_data': (user.get('pc_ext_info') or {}).get('extra_unisdk_data')
+                            or (resp_data.get('ext_info') or {}).get('extra_unisdk_data', '')})
+                    # Before returning the rewritten response: MPay removes this
+                    # account for is_remember=false, even if later SAUTH fails.
+                    # The actual response may differ from the UI selection.
+                    sync = getattr(manager, 'db_sync', None)
+                    if not remember and sync is not None:
+                        sync.preserve_unremembered_account(identity)
                     self._pending_tool_auth.add(identity)
                 except ValueError:
                     self.logger.debug("exchange_token 的渠道 SAUTH 身份无效；不使用外层账号 ID 代替 SDKUID")
