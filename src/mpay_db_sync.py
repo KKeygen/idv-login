@@ -134,13 +134,8 @@ class MpayDBSync:
         # Successful writes only: (path, SDK identity, created by this process).
         # No DB addresses, credentials, display-name copies or Channel bindings.
         self.projected = set()
-        # MPay deletes its row when we send is_remember=false. Keep this
-        # exemption for this process: delayed SDK writes can follow a refresh.
-        # Explicit tool deletion and projection cleanup still run normally.
+        # Keep this process's non-remembered accounts during reconciliation.
         self._unremembered_accounts = set()
-        self._relogins = {}
-        self._relogin_tasks = {}
-        self._order_states = {}
 
     def paths(self, game):
         return sorted(self.root.glob(f'*-g-{getShortGameId(game)}-64-mpay.db'))
@@ -163,9 +158,9 @@ class MpayDBSync:
             if len(original) > MAX_DB_BYTES:
                 raise ValueError('MPay database exceeds supported size')
             result = self.wasm.invoke(operation, original, **args)
-            if operation in ('list_accounts', 'native_head'):
+            if operation == 'list_accounts':
                 response = json.loads(result)
-                for error in response.get('errors', []):
+                for error in response['errors']:
                     self.logger.debug('[mpay-db] {} 渠道记录 #{}：{}；跳过此记录',
                                       path.name, error['record_index'], error['reason'])
                 return response
@@ -187,89 +182,6 @@ class MpayDBSync:
                 raise
             return created
 
-    @staticmethod
-    def _order_path(path):
-        return os.path.normcase(str(path.resolve()))
-
-    def _cache_head(self, path, value):
-        saved = genv.get('mpay_account_heads', {})
-        saved = dict(saved) if isinstance(saved, dict) else {}
-        key = self._order_path(path)
-        if value is None:
-            if key not in saved:
-                return
-            saved.pop(key)
-        else:
-            saved[key] = value
-        genv.set('mpay_account_heads', saved, cached=True, require_saved=True)
-
-    def _track_head(self, path, game):
-        try:
-            excluded = [self._args(key) for p, key, created in self.projected if p == path and created]
-            head = self.operate(path, 'native_head', exclude=excluded)['head']
-            if head is not None and (not isinstance(head, str) or not re.fullmatch(r'v1:[0-9a-f]{32}', head)):
-                raise ValueError('Invalid account head marker')
-            state = self._order_states.get(path)
-            if state is None:
-                saved = genv.get('mpay_account_heads', {})
-                entry = saved.get(self._order_path(path)) if isinstance(saved, dict) else None
-                winner = entry.get('winner') if isinstance(entry, dict) and 'head' in entry and entry['head'] == head else None
-                if winner is not None:
-                    key = winner.get('key') if isinstance(winner, dict) else None
-                    if (not isinstance(winner, dict) or not isinstance(winner.get('record'), str) or not winner['record']
-                            or not isinstance(key, list) or len(key) != 3
-                            or any(not isinstance(item, str) or not item for item in key) or key[0] != game):
-                        winner = None
-                self._cache_head(path, None)
-                state = {'game': game, 'head': head, 'winner': winner, 'restore': winner is not None}
-                self._order_states[path] = state
-            elif state['head'] != head:
-                state.update(head=head, winner=None, restore=False)
-            return state
-        except Exception as error:
-            log_failure(self.logger, f'[mpay-db] game={game} path={path.name} stage=order.read 账号首位记录暂不可用，保留游戏当前顺序', error)
-            return None
-
-    def _restore_head(self, path, game, records, written):
-        state = self._order_states.get(path)
-        if not state or not state['restore']:
-            return
-        state = self._track_head(path, game)
-        if not state or not state['restore']:
-            return
-        winner = state['winner']
-        key = tuple(winner['key'])
-        if key not in written:
-            state.update(winner=None, restore=False)
-            return
-        record = next((r for r in records if r.uuid == winner['record']), None)
-        if record is None:
-            state.update(winner=None, restore=False)
-            return
-        try:
-            if self._target(record, game) != key:
-                state.update(winner=None, restore=False)
-                return
-            from account_list_policy import AccountListPolicy
-            name = AccountListPolicy(self.manager).account_label(record, expired=self.is_expired(record.uuid, game))
-            self.operate(path, 'put_account', **self._args(key), name=name, position='head')
-            state['restore'] = False
-        except Exception as error:
-            self._record_error(record, game, error, stage=f'order.restore path={path.name}',
-                               message='账号已同步，但未能恢复首位，请关闭游戏后重试')
-
-    def _save_heads(self):
-        for path, state in self._order_states.items():
-            if not path.exists() or any(p == path and created for p, _, created in self.projected):
-                continue
-            state = self._track_head(path, state['game'])
-            if state is None:
-                continue
-            try:
-                self._cache_head(path, {'head': state['head'], 'winner': state['winner']})
-            except Exception as error:
-                log_failure(self.logger, f'[mpay-db] path={path.name} stage=order.save 账号首位记录未保存', error)
-
     def _remember_put(self, path, key, created):
         with self.lock:
             previous = {(p, k, c) for p, k, c in self.projected if p == path and k == key}
@@ -284,9 +196,6 @@ class MpayDBSync:
     def _delete(self, path, key):
         self.operate(path, 'delete_account', **self._args(key))
         self.projected = {(p, k, c) for p, k, c in self.projected if (p, k) != (path, key)}
-        state = self._order_states.get(path)
-        if state and state['winner'] and tuple(state['winner']['key']) == key:
-            state['restore'] = True
 
     @staticmethod
     def _scan_packet(record):
@@ -399,8 +308,7 @@ class MpayDBSync:
             for record in records:
                 try:
                     # These channels exchange durable login state for a fresh game token at startup.
-                    force = record.record_source == 'manual' and (record.channel_name in ('honor', 'honor_sdk') or
-                        force_game_token and record.channel_name in ('huawei', 'nearme_vivo', 'oppo', 'xiaomi_app'))
+                    force = force_game_token and record.record_source == 'manual' and record.channel_name in ('huawei', 'nearme_vivo', 'oppo', 'xiaomi_app')
                     if force:
                         record.expire_unisdk(game)
                     if not force and self._packet(record, game):
@@ -466,13 +374,9 @@ class MpayDBSync:
             if key is None:
                 return
             name = AccountListPolicy(self.manager).account_label(record)
-            for path, projected, created in tuple(self.projected):
+            for path, projected, _ in tuple(self.projected):
                 if projected != key:
                     continue
-                state = self._track_head(path, game)
-                if state is not None:
-                    state.update(winner={'record': record.uuid, 'key': list(key)} if created else None,
-                                 restore=False)
                 try:
                     self.operate(path, 'put_account', **self._args(key), name=name, position='head')
                 except Exception as error:
@@ -488,11 +392,10 @@ class MpayDBSync:
             return result
         if self.stopping:
             return ready(False)
-        options = {'_session_ready': True} if record.record_source == 'manual' and record.channel_name in ('honor', 'honor_sdk') else {}
         if on_complete:
-            record.request_unisdk(record.game_id, on_complete=ready, interactive=True, **options)
+            record.request_unisdk(record.game_id, on_complete=ready, interactive=True)
             return None
-        return ready(record.request_unisdk(record.game_id, interactive=True, **options))
+        return ready(record.request_unisdk(record.game_id, interactive=True))
 
     @staticmethod
     def _placeholder(key):
@@ -560,13 +463,14 @@ class MpayDBSync:
         if not allowed:
             return
         failure = None
+        latest = max(selected, key=lambda item: item.last_login_time, default=None)
         with self.lock:
             if self.stopping:
                 return
             for path in self.paths(game):
                 try:
-                    self._track_head(path, game)
-                    if self._write_record(path, record, game, 'preserve') is None:
+                    if self._write_record(path, record, game,
+                            'head' if record is latest and record.last_login_time else 'tail') is None:
                         raise ValueError('field=unisdk_cache.packet: unavailable after refresh')
                     if not any(self.is_expired(item.uuid, game) for item in selected):
                         for menu_path, menu_key, _ in tuple(self.projected):
@@ -583,8 +487,8 @@ class MpayDBSync:
             if self.stopping:
                 return
             game = getShortGameId(game_id)
+            latest = max(records, key=lambda r: r.last_login_time, default=None)
             for path in self.paths(game):
-                self._track_head(path, game)
                 desired, written = set(), set()
                 for record in records:
                     try:
@@ -594,7 +498,8 @@ class MpayDBSync:
                         if key in desired:
                             continue  # Renewal may reveal two saved entries for the same SDK account.
                         desired.add(key)
-                        if self._write_record(path, record, game, 'preserve') is not None:
+                        if self._write_record(path, record, game,
+                                'head' if record is latest and record.last_login_time else 'tail') is not None:
                             written.add(key)
                     except Exception as error:
                         self._record_error(record, game, error,
@@ -627,7 +532,6 @@ class MpayDBSync:
                             self.projected.discard((path, key, created))
                     except Exception as error:
                         log_failure(self.logger, f'[mpay-db] game={game} path={path.name} stage=projection.cleanup 临时旧账号清理失败，保留退出重试', error)
-                self._restore_head(path, game, records, written)
 
     def intercept_auth(self, data):
         if not isinstance(data, dict) or data.get('login_channel') == 'netease':
@@ -637,42 +541,27 @@ class MpayDBSync:
         if not any(projected == key for _, projected, _ in self.projected):
             return False
         role = self._menu_role(key)
-        expired_record = None
+        expired = False
         if role is None:
-            records = (self.manager._sauth_matches(data, game)
-                       if key[1] == 'lenovo_open' else self.manager.channels)
-            for record in records:
+            for record in self.manager.channels:
                 try:
                     if self._target(record, game) == key and self.is_expired(record.uuid, game):
-                        expired_record = record
+                        expired = True
                         break
                 except ValueError as error:
                     self._record_error(record, game, error, stage='menu.identity')
                     continue
-        if role is None and expired_record is None:
+        if role is None and not expired:
             return False
         import app_state
         if role == 'help':
             import webbrowser
             cloud = app_state.cloud_res
             url = cloud.get_by_game_id_and_key(game, 'account_help_url') if cloud else None
-            return lambda: webbrowser.open(url or 'https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e')
-        if role is not None:
-            return lambda: app_state.ui_mgr.open_for_game(game, 'accounts') if app_state.ui_mgr else None
-        return lambda: self._relogin_expired(expired_record, game)
-
-    def _relogin_expired(self, record, game):
-        if record.uuid in self._relogins or not self.is_expired(record.uuid, game):
-            return
-        from channel_relogin import ExpiredChannelLogin
-        attempt = ExpiredChannelLogin(self, record, game,
-            lambda: self._relogins.pop(record.uuid, None),
-            try_silent=record.record_source == 'manual' and record.channel_name in ('honor', 'honor_sdk'))
-        self._relogin_tasks = {key: value for key, value in self._relogin_tasks.items()
-                               if value.record.uuid != record.uuid}
-        self._relogins[record.uuid] = attempt
-        self._relogin_tasks[attempt.task_id] = attempt
-        attempt.start()
+            app_state.run_on_main_thread(lambda: webbrowser.open(url or 'https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e'))
+        else:
+            app_state.run_on_main_thread(lambda: app_state.ui_mgr.open_for_game(game, 'accounts') if app_state.ui_mgr else None)
+        return True
 
     def reconcile_game_changes(self):
         with self.lock:
@@ -774,9 +663,6 @@ class MpayDBSync:
     def shutdown(self):
         with self.lock:
             self.stopping = True
-            for attempt in tuple(self._relogins.values()):
-                attempt.cancel()
             self.reconcile_game_changes()
             for game in {key[0] for _, key, _ in self.projected}:
                 self._clear_projection(game)
-            self._save_heads()
