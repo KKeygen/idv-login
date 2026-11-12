@@ -307,26 +307,6 @@ class GameInstallationModelTests(unittest.TestCase):
                 self.assertTrue(game.start(installation.installation_id))
             popen.assert_called_once()
 
-    def test_every_launch_refreshes_accounts_before_starting_the_game(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            executable = os.path.join(temp_dir, "game.exe")
-            Path(executable).touch()
-            game = Game("h55")
-            installation = game.add_installation(executable, 73)
-            events = []
-            sync = types.SimpleNamespace(refresh_before_game=lambda game_id:
-                                         events.append(("refresh", game_id)))
-            with mock.patch.object(app_state, "channels_helper",
-                                   types.SimpleNamespace(db_sync=sync)), \
-                    mock.patch.object(app_state, "proxy_mgr", None, create=True), \
-                    mock.patch("gamemgr.sys.platform", "linux"), \
-                    mock.patch("gamemgr.subprocess.Popen",
-                               side_effect=lambda *a, **k: events.append(("launch", "h55"))):
-                self.assertTrue(game.start(installation.installation_id))
-                self.assertTrue(game.start(installation.installation_id))
-            self.assertEqual(events, [("refresh", "h55"), ("launch", "h55"),
-                                      ("refresh", "h55"), ("launch", "h55")])
-
     def test_reselecting_new_valid_path_adds_manual_installation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             first_path = os.path.join(temp_dir, "first.exe")

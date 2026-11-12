@@ -398,10 +398,9 @@ class MpayDBSync:
         for game, records in selected.items():
             for record in records:
                 try:
-                    # Every manual channel must rebuild its game packet at startup
-                    # and before each launch, even while its cached token is valid.
-                    force = record.record_source == 'manual' and (force_game_token or
-                        record.channel_name in ('honor', 'honor_sdk'))
+                    # These channels exchange durable login state for a fresh game token at startup.
+                    force = record.record_source == 'manual' and (record.channel_name in ('honor', 'honor_sdk') or
+                        force_game_token and record.channel_name in ('huawei', 'nearme_vivo', 'oppo', 'xiaomi_app'))
                     if force:
                         record.expire_unisdk(game)
                     if not force and self._packet(record, game):
@@ -521,7 +520,7 @@ class MpayDBSync:
         if game not in selected:
             self._clear_projection(game)
             return
-        self._prepare_selected(selected, force_game_token=True)
+        self._prepare_selected(selected)
         self._project_game(game, selected[game])
 
     def _write_record(self, path, record, game, position):
