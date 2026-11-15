@@ -45,6 +45,8 @@ class CloudRes:
             self.session = requests.Session()
             self.session.trust_env = False
             self._meta_lock = threading.Lock()
+            from gamecatalog import DynamicGameCatalog
+            self.dynamic_game_catalog = DynamicGameCatalog(cache_dir=self.cache_dir)
             self._initialized = True
 
     def _get_url_meta(self, url):
@@ -185,7 +187,7 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId:
                 return item
-        return None
+        return self.dynamic_game_catalog.get_cloud_config(shortGameId)
     
     def get_netease_style_pkgname_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -202,7 +204,37 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId:
                 return item
-        return None
+        return self.dynamic_game_catalog.get_feature(shortGameId)
+
+    def has_manual_game_feature(self, shortGameId):
+        """Whether launcher behavior is explicitly maintained in cloudRes."""
+        for item in self.local_data.get('feature_game_short_ids', []):
+            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId):
+                return True
+        return False
+
+    def is_fever_managed_game(self, shortGameId, distribution_id=-1):
+        catalog_item = self.dynamic_game_catalog.get_game(shortGameId) or {}
+        platform_type = catalog_item.get('platform_type')
+        if platform_type:
+            return platform_type == 'fever'
+        feature = next((
+            item for item in self.local_data.get('feature_game_short_ids', [])
+            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId)
+        ), None)
+        distributions = feature.get('download_distributions', []) if feature else []
+        normalized = []
+        for item in distributions:
+            value = item.get('distribution_id') if isinstance(item, dict) else item
+            try:
+                normalized.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        try:
+            requested = int(distribution_id)
+        except (TypeError, ValueError):
+            requested = -1
+        return requested in normalized if requested != -1 else bool(normalized)
     
     def get_all_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -217,7 +249,28 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId and item.get(key) != "" and item.get(key) != None:
                 return item.get(key)
+        dynamic_item = self.dynamic_game_catalog.get_cloud_config(shortGameId)
+        if dynamic_item and dynamic_item.get(key) not in ("", None):
+            return dynamic_item.get(key)
         return None
+
+    def start_dynamic_game_catalog_update(self):
+        """后台刷新可下载游戏与云端游戏 ID 映射。"""
+        return self.dynamic_game_catalog.start_background_refresh()
+
+    def get_dynamic_game_catalog(self):
+        return self.dynamic_game_catalog.get_games()
+
+    def get_dynamic_game_catalog_status(self):
+        return self.dynamic_game_catalog.get_status()
+
+    def get_cloud_game_config(self, game_id):
+        """按短游戏代号返回公开云端游戏配置。"""
+        return self.dynamic_game_catalog.get_cloud_config(game_id)
+
+    def resolve_cloud_game_id(self, game_id):
+        """将 h55 类短代号转为 aec...-g-h55 形式。"""
+        return self.dynamic_game_catalog.resolve_cloud_game_id(game_id)
 
     def get_version(self):
         return self.local_data.get('version', genv.get('VERSION'))
@@ -265,7 +318,16 @@ class CloudRes:
     
     def get_login_page(self):
         import base64
-        return base64.b64decode(self.local_data.get('login_base64_page', '')).decode()
+        import binascii
+        for key in ('login_base64_page_fever', 'login_base64_page'):
+            encoded = self.local_data.get(key, '')
+            if not encoded:
+                continue
+            try:
+                return base64.b64decode(encoded, validate=True).decode()
+            except (binascii.Error, UnicodeDecodeError, TypeError, ValueError):
+                logger.warning(f"云端页面字段无效，尝试兼容回退: {key}")
+        return ""
     
     def get_shortcuts(self):
         return self.local_data.get('shortcuts', [])
@@ -326,3 +388,22 @@ class CloudRes:
         if not isinstance(domains, list):
             return []
         return domains
+
+    def should_start_from_exe_path(self):
+        """返回需要从 exe 所在目录启动的 game_id 名单。
+
+        名单记录的是游戏库接口反推出来的 game_id 字段（如 "h74"）。
+        模拟发烧平台托管启动时，名单内的游戏继续以 exe 所在目录为工作目录，
+        其余游戏以安装目录作为启动路径。
+        """
+        data = self.local_data or {}
+        names = data.get("should_start_from_exe_path") or []
+        if not isinstance(names, list):
+            return []
+        return [str(name) for name in names]
+
+    def is_should_start_from_exe_path(self, shortGameId):
+        return any(
+            cmp_game_id(item, str(shortGameId))
+            for item in self.should_start_from_exe_path()
+        )
