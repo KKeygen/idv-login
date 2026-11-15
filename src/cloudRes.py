@@ -201,10 +201,48 @@ class CloudRes:
     #same with data, but key is feature_game_short_ids
     def get_feature_by_game_id(self,shortGameId):
         data=self.local_data.get('feature_game_short_ids', [])
+        manual_feature = None
         for item in data:
             if item.get('game_id') == shortGameId:
-                return item
-        return self.dynamic_game_catalog.get_feature(shortGameId)
+                manual_feature = item
+                break
+        dynamic_feature = self.dynamic_game_catalog.get_feature(shortGameId)
+        if manual_feature is None:
+            return dynamic_feature
+        if not dynamic_feature:
+            return manual_feature
+
+        # Keep hand-maintained behavior authoritative, but append distributions
+        # discovered from LoadingBay (including the international catalog).
+        merged = dict(manual_feature)
+        merged_distributions = list(manual_feature.get('download_distributions', []))
+        seen = set()
+        for item in merged_distributions:
+            value = item.get('distribution_id') if isinstance(item, dict) else item
+            if isinstance(item, dict) and value is None:
+                value = item.get('app_id')
+            try:
+                seen.add(int(value))
+            except (TypeError, ValueError):
+                pass
+        for item in dynamic_feature.get('download_distributions', []):
+            value = item.get('distribution_id') if isinstance(item, dict) else item
+            if isinstance(item, dict) and value is None:
+                value = item.get('app_id')
+            try:
+                normalized = int(value)
+            except (TypeError, ValueError):
+                continue
+            if normalized not in seen:
+                merged_distributions.append(item)
+                seen.add(normalized)
+        merged['download_distributions'] = merged_distributions
+        distribution_sources = dict(manual_feature.get('distribution_sources', {}))
+        for key, value in dynamic_feature.get('distribution_sources', {}).items():
+            distribution_sources.setdefault(str(key), value)
+        if distribution_sources:
+            merged['distribution_sources'] = distribution_sources
+        return merged
 
     def has_manual_game_feature(self, shortGameId):
         """Whether launcher behavior is explicitly maintained in cloudRes."""
@@ -264,10 +302,6 @@ class CloudRes:
     def get_dynamic_game_catalog_status(self):
         return self.dynamic_game_catalog.get_status()
 
-    def get_cloud_game_config(self, game_id):
-        """按短游戏代号返回公开云端游戏配置。"""
-        return self.dynamic_game_catalog.get_cloud_config(game_id)
-
     def resolve_cloud_game_id(self, game_id):
         """将 h55 类短代号转为 aec...-g-h55 形式。"""
         return self.dynamic_game_catalog.resolve_cloud_game_id(game_id)
@@ -277,13 +311,6 @@ class CloudRes:
 
     def get_netease_qrcode_login_game_list(self):
         return self.local_data.get('netease_qrcode_login_game_list', [])
-
-    def is_game_in_qrcode_login_list(self,game_id):
-        game_list = self.get_netease_qrcode_login_game_list()
-        for item in game_list:
-            if cmp_game_id(item.get('game_id'), game_id):
-                return True
-        return False
 
     def get_qrcode_app_channel(self,game_id):
         config = self.get_qrcode_login_config(game_id)
@@ -303,9 +330,6 @@ class CloudRes:
 
     def get_downloadUrl(self):
         return self.local_data.get('downloadUrl', '')
-    
-    def get_guideUrl(self):
-        return self.local_data.get('guideUrl', '')
     
     def get_detail(self):
         return self.local_data.get('detail', '')
@@ -341,17 +365,34 @@ class CloudRes:
             return ""
         return features.get('start_argument', "")
 
-    def get_version_code_checkpoint(self,shortGameId):
-        features = self.get_feature_by_game_id(shortGameId)
-        if not features:
-            return ""
-        return features.get('version_code_checkpoint', "")
-    
     def get_download_distributions(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
         if not features:
             return []
         return features.get('download_distributions', [])
+
+    def get_distribution_source(self, shortGameId, distribution_id):
+        """Return ``cn`` or ``oversea`` for a LoadingBay distribution."""
+        features = self.get_feature_by_game_id(shortGameId) or {}
+        try:
+            target_id = int(distribution_id)
+        except (TypeError, ValueError):
+            return "cn"
+        for item in features.get('download_distributions', []):
+            if not isinstance(item, dict):
+                continue
+            value = item.get('distribution_id', item.get('app_id'))
+            try:
+                if int(value) == target_id and item.get('source'):
+                    return str(item.get('source'))
+            except (TypeError, ValueError):
+                continue
+        sources = features.get('distribution_sources', {})
+        if isinstance(sources, dict):
+            source = str(sources.get(str(target_id)) or "").strip().lower()
+            if source in ("cn", "oversea"):
+                return source
+        return "cn"
     
     def is_convert_to_normal(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
