@@ -13,6 +13,7 @@ from channelHandler.channelUtils import cmp_game_id
 
 logger = setup_logger()
 
+# fetch_json_from_url 返回状态
 _MODIFIED = "modified"
 _NOT_MODIFIED = "not_modified"
 _ERROR = "error"
@@ -31,27 +32,68 @@ class CloudRes:
     def __init__(self, urls=[], cache_dir='./'):
         # 防止重复初始化
         if not self._initialized:
+            # On macOS, hotfixmgr was imported before the overlay hook was installed.
+            if sys.platform == 'darwin' and getattr(sys, 'frozen', False):
+                import importlib
+                import hotfixmgr
+                if 'hotfixmgr' in getattr(hotfixmgr, '_get_active_overlay_paths', lambda: {})():
+                    importlib.reload(hotfixmgr)
             self.urls = urls
             self.cache_dir = cache_dir
             self.cache_file = os.path.join(cache_dir, 'cache.json')
             self.local_data = self.load_local_cache()
             self.session = requests.Session()
             self.session.trust_env = False
+            self._meta_lock = threading.Lock()
             self._initialized = True
+
+    def _get_url_meta(self, url):
+        """获取指定 URL 的 HTTP 缓存验证器"""
+        all_meta = genv.get("_cloud_http_meta", {})
+        return all_meta.get(url, {})
+
+    def _set_url_meta(self, url, meta):
+        """保存指定 URL 的 HTTP 缓存验证器"""
+        with self._meta_lock:
+            all_meta = dict(genv.get("_cloud_http_meta", {}))
+            all_meta[url] = meta
+            genv.set("_cloud_http_meta", all_meta, True)
 
     def fetch_json_from_url(self, urls=None, snapshot=None):
         local_data = snapshot[1] if snapshot is not None else self.local_data
         for url in self.urls if urls is None else urls:
             try:
-                response = self.session.get(url, timeout=60, verify=should_verify_ssl())
+                meta = self._get_url_meta(url)
+                headers = {}
+                if local_data:
+                    if meta.get('etag'):
+                        headers['If-None-Match'] = meta['etag']
+                    if meta.get('last_modified'):
+                        headers['If-Modified-Since'] = meta['last_modified']
+                response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers=headers)
+                if response.status_code == 304:
+                    if headers:
+                        return (_NOT_MODIFIED, None)
+                    response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers={})
+                    if response.status_code == 304:
+                        continue
                 response.raise_for_status()
                 data = response.json()
-                if (isinstance(data, dict) and type(data.get('lastModified')) is int
-                        and data['lastModified'] >= local_data.get('lastModified', 0)):
-                    return data
+                if not isinstance(data, dict) or type(data.get('lastModified')) is not int:
+                    continue
+                if data['lastModified'] < local_data.get('lastModified', 0):
+                    continue
+                meta = {}
+                if response.headers.get('ETag'):
+                    meta['etag'] = response.headers['ETag']
+                if response.headers.get('Last-Modified'):
+                    meta['last_modified'] = response.headers['Last-Modified']
+                if meta:
+                    self._set_url_meta(url, meta)
+                return (_MODIFIED, data)
             except (requests.RequestException, ValueError):
                 pass
-        return None
+        return (_ERROR, None)
 
     def load_local_cache(self):
         try:
@@ -79,8 +121,7 @@ class CloudRes:
 
         def fetch(url):
             try:
-                data = self.fetch_json_from_url([url], snapshot)
-                result = (_MODIFIED, data) if data else (_ERROR, None)
+                result = self.fetch_json_from_url([url], snapshot)
             except Exception:
                 result = (_ERROR, None)
             results.put(result)
@@ -237,6 +278,12 @@ class CloudRes:
         if not features:
             return ""
         return features.get('start_argument', "")
+
+    def get_version_code_checkpoint(self,shortGameId):
+        features = self.get_feature_by_game_id(shortGameId)
+        if not features:
+            return ""
+        return features.get('version_code_checkpoint', "")
     
     def get_download_distributions(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
