@@ -2,6 +2,10 @@ import os
 import json
 import hashlib
 import re
+import queue
+import sys
+import threading
+import time
 import requests
 from envmgr import genv
 from logutil import setup_logger
@@ -30,6 +34,12 @@ class CloudRes:
     def __init__(self, urls=[], cache_dir='./'):
         # 防止重复初始化
         if not self._initialized:
+            # The macOS packaged entry point imports hotfixmgr before its overlay hook.
+            if sys.platform == 'darwin' and getattr(sys, 'frozen', False):
+                import importlib
+                import hotfixmgr
+                if 'hotfixmgr' in hotfixmgr._get_active_overlay_paths():
+                    importlib.reload(hotfixmgr)
             self.urls = urls
             self.cache_dir = cache_dir
             self.cache_file = os.path.join(cache_dir, 'cache.json')
@@ -39,6 +49,7 @@ class CloudRes:
             self.local_data = self.load_local_cache()
             self.session = requests.Session()
             self.session.trust_env = False
+            self._meta_lock = threading.Lock()
             from gamecatalog import DynamicGameCatalog
             self.dynamic_game_catalog = DynamicGameCatalog(cache_dir=self.cache_dir)
             self._initialized = True
@@ -50,11 +61,12 @@ class CloudRes:
 
     def _set_url_meta(self, url, meta):
         """保存指定 URL 的 HTTP 缓存验证器"""
-        all_meta = genv.get("_cloud_http_meta", {})
-        all_meta[url] = meta
-        genv.set("_cloud_http_meta", all_meta, True)
+        with self._meta_lock:
+            all_meta = dict(genv.get("_cloud_http_meta", {}))
+            all_meta[url] = meta
+            genv.set("_cloud_http_meta", all_meta, True)
 
-    def fetch_json_from_url(self):
+    def fetch_json_from_url(self, urls=None, snapshot=None):
         """尝试从云端获取配置，支持 HTTP 条件请求 (ETag/If-Modified-Since)。
         
         Returns:
@@ -64,26 +76,34 @@ class CloudRes:
                 - (_ERROR, None): 所有 URL 均失败
         """
         if self.signatures_required:
-            return self._fetch_verified_json()
-        for index, url in enumerate(self.urls, 1):
+            return self._fetch_verified_json(urls, snapshot)
+        local_data = snapshot[1] if snapshot is not None else self.local_data
+        for index, url in enumerate(self.urls if urls is None else urls, 1):
             try:
                 headers = {}
                 url_meta = self._get_url_meta(url)
-                if url_meta.get("etag"):
+                if local_data and url_meta.get("etag"):
                     headers["If-None-Match"] = url_meta["etag"]
-                if url_meta.get("last_modified"):
+                if local_data and url_meta.get("last_modified"):
                     headers["If-Modified-Since"] = url_meta["last_modified"]
 
                 response = self.session.get(
-                    url, timeout=10, verify=should_verify_ssl(), headers=headers
+                    url, timeout=60, verify=should_verify_ssl(), headers=headers
                 )
 
                 if response.status_code == 304:
-                    logger.info(f"云端配置未变化 (304): 源 {index}")
-                    return (_NOT_MODIFIED, None)
+                    if headers:
+                        return (_NOT_MODIFIED, None)
+                    response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers={})
+                    if response.status_code == 304:
+                        continue
 
                 response.raise_for_status()
                 data = response.json()
+                if not isinstance(data, dict) or type(data.get('lastModified')) is not int:
+                    continue
+                if data['lastModified'] < local_data.get('lastModified', 0):
+                    continue
 
                 # 更新该 URL 的缓存验证器
                 new_meta = {}
@@ -102,49 +122,44 @@ class CloudRes:
                 logger.debug(f"Invalid JSON received from source {index}: {type(e).__name__}")
             except Exception as e:
                 logger.debug(f"Unexpected error while fetching JSON from source {index}: {type(e).__name__}")
-        logger.error("Failed to fetch JSON from all provided URLs.")
         return (_ERROR, None)
 
-    def _fetch_verified_json(self):
+    def _fetch_verified_json(self, urls=None, snapshot=None):
         """Use only validators tied to the exact, previously verified cache."""
         import base64
-        current_version = self.local_data.get('lastModified', 0)
-        cached_bytes = (base64.b64decode(self._verified_payload['payload'], validate=True)
-                        if self._verified_payload else None)
+        cache, local_data = snapshot if snapshot is not None else (self._verified_payload, self.local_data)
+        current_version = local_data.get('lastModified', 0)
+        cached_bytes = base64.b64decode(cache['payload'], validate=True) if cache else None
         current_payload = canonical_cloud_config(cached_bytes)[1] if cached_bytes else None
         cached_hash = hashlib.sha256(cached_bytes).hexdigest() if cached_bytes else None
-        validators = self._verified_payload.get('validators', {}) if self._verified_payload else {}
+        validators = cache.get('validators', {}) if cache else {}
         if not isinstance(validators, dict):
             validators = {}
-        for url in self.urls:
+        for url in self.urls if urls is None else urls:
             try:
                 meta = validators.get(url, {})
                 etag = (meta.get('etag') if isinstance(meta, dict)
                         and meta.get('payload_sha256') == cached_hash else None)
                 headers = {'If-None-Match': etag} if cached_bytes and isinstance(etag, str) and etag else {}
-                response = self.session.get(url, timeout=10, verify=should_verify_ssl(), headers=headers)
+                response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers=headers)
                 if getattr(response, 'status_code', 200) == 304:
                     if headers:
                         return (_NOT_MODIFIED, None)
                     # A 304 without a matching validated cache is unusable.
-                    response = self.session.get(url, timeout=10, verify=should_verify_ssl(), headers={})
+                    response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers={})
                     if getattr(response, 'status_code', 200) == 304:
                         continue
                 response.raise_for_status()
                 payload = response.content
                 if not verify_cloud_config(payload):
-                    logger.warning('云配置签名无效，尝试下一个来源')
                     continue
                 data = json.loads(payload)
                 version = data.get('lastModified')
                 if type(version) is not int or version <= 0:
-                    logger.warning('云配置版本无效，尝试下一个来源')
                     continue
                 if version < current_version:
-                    logger.warning('云配置版本回退，尝试下一个来源')
                     continue
                 if version == current_version and current_payload != canonical_cloud_config(payload)[1]:
-                    logger.error('相同云配置版本内容不一致，尝试下一个来源')
                     continue
                 # Store the ETag alongside the exact bytes it describes.
                 etag = getattr(response, 'headers', {}).get('ETag')
@@ -157,11 +172,10 @@ class CloudRes:
                 if kept:
                     candidate['validators'] = kept
                 if version == current_version:
-                    return (_NOT_MODIFIED, candidate if candidate != self._verified_payload else None)
+                    return (_NOT_MODIFIED, candidate if candidate != cache else None)
                 return (_MODIFIED, (data, candidate))
             except (requests.RequestException, ValueError, UnicodeError) as e:
                 logger.debug(f'获取已签名云配置失败: {type(e).__name__}')
-        logger.error('无法获取有效签名的云配置')
         return (_ERROR, None)
 
     def load_local_cache(self):
@@ -173,7 +187,7 @@ class CloudRes:
                 payload = base64.b64decode(entry['payload'], validate=True)
                 if verify_cloud_config(payload):
                     data = json.loads(payload)
-                    if type(data.get('lastModified')) is int and data['lastModified'] > 0:
+                    if isinstance(data, dict) and type(data.get('lastModified')) is int and data['lastModified'] > 0:
                         self._verified_payload = entry
                         return data
             except (OSError, ValueError, KeyError, TypeError, UnicodeError):
@@ -183,7 +197,8 @@ class CloudRes:
         try:
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    return data if isinstance(data, dict) and type(data.get('lastModified')) is int else {}
             return {}
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse cache file: {type(e).__name__} line={e.lineno} column={e.colno}")
@@ -196,10 +211,58 @@ class CloudRes:
             return {}
 
     def update_cache_if_needed(self):
-        status, cloud_data = self.fetch_json_from_url()
+        results = queue.Queue()
+        ready = threading.Event()
+        deadline = time.monotonic() + 60
+        snapshot = (self._verified_payload, self.local_data)
+        urls = tuple(self.urls)
+
+        def fetch(url):
+            try:
+                result = self.fetch_json_from_url([url], snapshot)
+            except Exception:
+                result = (_ERROR, None)
+            results.put(result)
+
+        def collect():
+            applied = False
+            try:
+                for _ in urls:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        status, data = results.get(timeout=remaining)
+                    except queue.Empty:
+                        break
+                    if status == _ERROR:
+                        continue
+                    try:
+                        self._apply_fetch_result(status, data, background=applied)
+                    except OSError:
+                        continue
+                    applied = True
+                    ready.set()
+                if not applied:
+                    self._apply_fetch_result(_ERROR, None)
+            finally:
+                ready.set()
+
+        for url in urls:
+            threading.Thread(target=fetch, args=(url,), daemon=True).start()
+        threading.Thread(target=collect, daemon=True).start()
+        ready.wait(max(0, deadline - time.monotonic()))
+
+    def _apply_fetch_result(self, status, cloud_data, background=False):
 
         if status == _NOT_MODIFIED:
             if self.signatures_required and cloud_data is not None:
+                import base64
+                candidate = base64.b64decode(cloud_data['payload'], validate=True)
+                current = (base64.b64decode(self._verified_payload['payload'], validate=True)
+                           if self._verified_payload else None)
+                if not current or canonical_cloud_config(candidate)[1] != canonical_cloud_config(current)[1]:
+                    return
                 # Updating a same-version ETag is optional: preserve the valid
                 # existing cache if the metadata cannot be written.
                 try:
@@ -208,7 +271,8 @@ class CloudRes:
                     self._verified_payload = cloud_data
                 except Exception:
                     logger.warning("无法保存云配置缓存验证器")
-            logger.info("本地配置已是最新")
+            if not background:
+                logger.info("本地配置已是最新")
             return
 
         if status == _ERROR or cloud_data is None:
@@ -228,9 +292,11 @@ class CloudRes:
             else:
                 write_json_restricted(self.cache_file, cloud_data)
             self.local_data = cloud_data
-            logger.info("云端配置有更新，应用成功")
+            if not background:
+                logger.info("云端配置有更新，应用成功")
         else:
-            logger.info("本地配置已是最新")
+            if not background:
+                logger.info("本地配置已是最新")
 
     def get_channelData(self, channelName,shortGameId):
         data=self.local_data.get('data', [])

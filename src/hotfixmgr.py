@@ -269,20 +269,35 @@ def _compile_to_pyc(source_path: str, pyc_path: str) -> Tuple[bool, str]:
 
 def _download_text(url: str, fallbacks: List[str], expected_sha256: str = "") -> Tuple[bool, bytes, str]:
     from ssl_utils import should_verify_ssl
-    sess = requests.Session()
-    sess.trust_env = False
+    import queue
+    import threading
+    results = queue.Queue()
     headers = {"Accept": "text/plain, */*"}
-    for source_url in [url] + fallbacks:
+
+    def download(source_url):
         try:
+            sess = requests.Session()
+            sess.trust_env = False
             resp = sess.get(source_url, timeout=20, headers=headers, verify=should_verify_ssl())
             if resp.status_code == 200:
                 if expected_sha256 and not hmac.compare_digest(hashlib.sha256(resp.content).hexdigest(), expected_sha256):
-                    last_error = "源码 SHA-256 不匹配"
-                    continue
-                return True, resp.content, ""
-            last_error = f"HTTP {resp.status_code}"
-        except requests.RequestException as e:
-            last_error = str(e)
+                    result = (False, b"", "源码 SHA-256 不匹配")
+                else:
+                    result = (True, resp.content, "")
+            else:
+                result = (False, b"", f"HTTP {resp.status_code}")
+        except Exception as e:
+            result = (False, b"", str(e))
+        results.put(result)
+
+    sources = [url] + fallbacks
+    for source_url in sources:
+        threading.Thread(target=download, args=(source_url,), daemon=True).start()
+    last_error = ""
+    for _ in sources:
+        ok, content, last_error = results.get()
+        if ok:
+            return True, content, ""
     return False, b"", last_error
 
 

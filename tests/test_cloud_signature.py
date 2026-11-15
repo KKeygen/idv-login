@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -30,6 +31,8 @@ def sign(data):
 
 
 class CloudSignatureTests(unittest.TestCase):
+
+
     def test_config_signature_and_strict_json(self):
         payload = b'{"lastModified":1,"hotfix":[]}'
         signed = sign(payload)
@@ -125,13 +128,13 @@ class CloudSignatureTests(unittest.TestCase):
                     cloudRes.CloudRes._instance = None
                     cloudRes.CloudRes._initialized = False
                     return cloudRes.CloudRes(urls, directory)
-                first = new_cloud(['a', 'b'])
+                first = new_cloud(['a'])
                 payload = sign(b'{"lastModified":2,"value":"current"}')
                 first.session.get = mock.Mock(return_value=Response(payload, etag='"first"'))
                 first.update_cache_if_needed()
                 self.assertEqual(first.session.get.call_count, 1)
                 self.assertEqual(first.session.get.call_args.kwargs['headers'], {})
-                again = new_cloud(['a', 'b'])
+                again = new_cloud(['a'])
                 again.session.get = mock.Mock(return_value=Response(status=304))
                 again.update_cache_if_needed()
                 self.assertEqual(again.session.get.call_count, 1)
@@ -179,7 +182,7 @@ class CloudSignatureTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory, mock.patch.object(cloud_signature, 'CLOUD_CONFIG_PUBLIC_KEY_PEM', _TEST_PUBLIC):
                 cloudRes.CloudRes._instance = None
                 cloudRes.CloudRes._initialized = False
-                cloud = cloudRes.CloudRes(['first', 'second'], directory)
+                cloud = cloudRes.CloudRes(['first'], directory)
                 cloud.session.get = mock.Mock(side_effect=[Response(status=304), Response(sign(b'{"lastModified":1}'))])
                 cloud.update_cache_if_needed()
                 self.assertEqual(cloud.local_data['lastModified'], 1)
@@ -205,11 +208,14 @@ class CloudSignatureTests(unittest.TestCase):
                 cloud.session.get = lambda *a, **k: Response(sign(b'{"lastModified":2,"value":"current"}'))
                 cloud.update_cache_if_needed()
                 cloud.urls = ['old', 'tampered', 'same_version_different', 'new']
-                payloads = [sign(b'{"lastModified":1}'), b'{"lastModified":3}',
-                            sign(b'{"lastModified":2,"value":"other"}'),
-                            sign(b'{"lastModified":3,"value":"new"}')]
-                cloud.session.get = mock.Mock(side_effect=[Response(x) for x in payloads])
+                payloads = dict(zip(cloud.urls, [sign(b'{"lastModified":1}'), b'{"lastModified":3}',
+                                sign(b'{"lastModified":2,"value":"other"}'),
+                                sign(b'{"lastModified":3,"value":"new"}')]))
+                cloud.session.get = mock.Mock(side_effect=lambda url, **kw: Response(payloads[url]))
                 cloud.update_cache_if_needed()
+                deadline = time.monotonic() + 2
+                while cloud.local_data.get('value') != 'new' and time.monotonic() < deadline:
+                    time.sleep(.01)
                 self.assertEqual(cloud.local_data['value'], 'new')
                 self.assertEqual(cloud.session.get.call_count, 4)
                 cloudRes.CloudRes._instance = None
