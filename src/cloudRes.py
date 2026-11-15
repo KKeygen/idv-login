@@ -1,21 +1,20 @@
 import os
-import json
-import hashlib
-import re
 import queue
-import sys
 import threading
 import time
+import sys
+import json
+import re
 import requests
+from datetime import datetime
 from envmgr import genv
+from const import manual_login_channels
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
-from cloud_signature import canonical_cloud_config, signatures_required, verify_cloud_config
 from channelHandler.channelUtils import cmp_game_id
 
 logger = setup_logger()
 
-# fetch_json_from_url 返回状态
 _MODIFIED = "modified"
 _NOT_MODIFIED = "not_modified"
 _ERROR = "error"
@@ -34,166 +33,29 @@ class CloudRes:
     def __init__(self, urls=[], cache_dir='./'):
         # 防止重复初始化
         if not self._initialized:
-            # The macOS packaged entry point imports hotfixmgr before its overlay hook.
-            if sys.platform == 'darwin' and getattr(sys, 'frozen', False):
-                import importlib
-                import hotfixmgr
-                if 'hotfixmgr' in hotfixmgr._get_active_overlay_paths():
-                    importlib.reload(hotfixmgr)
             self.urls = urls
             self.cache_dir = cache_dir
             self.cache_file = os.path.join(cache_dir, 'cache.json')
-            self.signed_cache_file = os.path.join(cache_dir, 'cache.signed.json')
-            self.signatures_required = signatures_required()
-            self._verified_payload = None
             self.local_data = self.load_local_cache()
             self.session = requests.Session()
             self.session.trust_env = False
-            self._meta_lock = threading.Lock()
-            from gamecatalog import DynamicGameCatalog
-            self.dynamic_game_catalog = DynamicGameCatalog(cache_dir=self.cache_dir)
             self._initialized = True
 
-    def _get_url_meta(self, url):
-        """获取指定 URL 的 HTTP 缓存验证器"""
-        all_meta = genv.get("_cloud_http_meta", {})
-        return all_meta.get(url, {})
-
-    def _set_url_meta(self, url, meta):
-        """保存指定 URL 的 HTTP 缓存验证器"""
-        with self._meta_lock:
-            all_meta = dict(genv.get("_cloud_http_meta", {}))
-            all_meta[url] = meta
-            genv.set("_cloud_http_meta", all_meta, True)
-
     def fetch_json_from_url(self, urls=None, snapshot=None):
-        """尝试从云端获取配置，支持 HTTP 条件请求 (ETag/If-Modified-Since)。
-        
-        Returns:
-            tuple: (status, data)
-                - (_MODIFIED, dict): 服务器返回了新数据
-                - (_NOT_MODIFIED, None): 304 未修改
-                - (_ERROR, None): 所有 URL 均失败
-        """
-        if self.signatures_required:
-            return self._fetch_verified_json(urls, snapshot)
         local_data = snapshot[1] if snapshot is not None else self.local_data
-        for index, url in enumerate(self.urls if urls is None else urls, 1):
-            try:
-                headers = {}
-                url_meta = self._get_url_meta(url)
-                if local_data and url_meta.get("etag"):
-                    headers["If-None-Match"] = url_meta["etag"]
-                if local_data and url_meta.get("last_modified"):
-                    headers["If-Modified-Since"] = url_meta["last_modified"]
-
-                response = self.session.get(
-                    url, timeout=60, verify=should_verify_ssl(), headers=headers
-                )
-
-                if response.status_code == 304:
-                    if headers:
-                        return (_NOT_MODIFIED, None)
-                    response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers={})
-                    if response.status_code == 304:
-                        continue
-
-                response.raise_for_status()
-                data = response.json()
-                if not isinstance(data, dict) or type(data.get('lastModified')) is not int:
-                    continue
-                if data['lastModified'] < local_data.get('lastModified', 0):
-                    continue
-
-                # 更新该 URL 的缓存验证器
-                new_meta = {}
-                if response.headers.get("ETag"):
-                    new_meta["etag"] = response.headers["ETag"]
-                if response.headers.get("Last-Modified"):
-                    new_meta["last_modified"] = response.headers["Last-Modified"]
-                if new_meta:
-                    self._set_url_meta(url, new_meta)
-
-                return (_MODIFIED, data)
-            except requests.RequestException as e:
-                status = getattr(getattr(e, 'response', None), 'status_code', None)
-                logger.debug(f"Failed to fetch JSON from source {index}: {type(e).__name__} status={status}")
-            except json.JSONDecodeError as e:
-                logger.debug(f"Invalid JSON received from source {index}: {type(e).__name__}")
-            except Exception as e:
-                logger.debug(f"Unexpected error while fetching JSON from source {index}: {type(e).__name__}")
-        return (_ERROR, None)
-
-    def _fetch_verified_json(self, urls=None, snapshot=None):
-        """Use only validators tied to the exact, previously verified cache."""
-        import base64
-        cache, local_data = snapshot if snapshot is not None else (self._verified_payload, self.local_data)
-        current_version = local_data.get('lastModified', 0)
-        cached_bytes = base64.b64decode(cache['payload'], validate=True) if cache else None
-        current_payload = canonical_cloud_config(cached_bytes)[1] if cached_bytes else None
-        cached_hash = hashlib.sha256(cached_bytes).hexdigest() if cached_bytes else None
-        validators = cache.get('validators', {}) if cache else {}
-        if not isinstance(validators, dict):
-            validators = {}
         for url in self.urls if urls is None else urls:
             try:
-                meta = validators.get(url, {})
-                etag = (meta.get('etag') if isinstance(meta, dict)
-                        and meta.get('payload_sha256') == cached_hash else None)
-                headers = {'If-None-Match': etag} if cached_bytes and isinstance(etag, str) and etag else {}
-                response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers=headers)
-                if getattr(response, 'status_code', 200) == 304:
-                    if headers:
-                        return (_NOT_MODIFIED, None)
-                    # A 304 without a matching validated cache is unusable.
-                    response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers={})
-                    if getattr(response, 'status_code', 200) == 304:
-                        continue
+                response = self.session.get(url, timeout=60, verify=should_verify_ssl())
                 response.raise_for_status()
-                payload = response.content
-                if not verify_cloud_config(payload):
-                    continue
-                data = json.loads(payload)
-                version = data.get('lastModified')
-                if type(version) is not int or version <= 0:
-                    continue
-                if version < current_version:
-                    continue
-                if version == current_version and current_payload != canonical_cloud_config(payload)[1]:
-                    continue
-                # Store the ETag alongside the exact bytes it describes.
-                etag = getattr(response, 'headers', {}).get('ETag')
-                candidate = {'payload': base64.b64encode(payload).decode('ascii')}
-                kept = dict(validators) if payload == cached_bytes else {}
-                if isinstance(etag, str) and etag:
-                    kept[url] = {'etag': etag, 'payload_sha256': hashlib.sha256(payload).hexdigest()}
-                else:
-                    kept.pop(url, None)
-                if kept:
-                    candidate['validators'] = kept
-                if version == current_version:
-                    return (_NOT_MODIFIED, candidate if candidate != cache else None)
-                return (_MODIFIED, (data, candidate))
-            except (requests.RequestException, ValueError, UnicodeError) as e:
-                logger.debug(f'获取已签名云配置失败: {type(e).__name__}')
-        return (_ERROR, None)
+                data = response.json()
+                if (isinstance(data, dict) and type(data.get('lastModified')) is int
+                        and data['lastModified'] >= local_data.get('lastModified', 0)):
+                    return data
+            except (requests.RequestException, ValueError):
+                pass
+        return None
 
     def load_local_cache(self):
-        if self.signatures_required:
-            import base64
-            try:
-                with open(self.signed_cache_file, 'r', encoding='utf-8') as f:
-                    entry = json.load(f)
-                payload = base64.b64decode(entry['payload'], validate=True)
-                if verify_cloud_config(payload):
-                    data = json.loads(payload)
-                    if isinstance(data, dict) and type(data.get('lastModified')) is int and data['lastModified'] > 0:
-                        self._verified_payload = entry
-                        return data
-            except (OSError, ValueError, KeyError, TypeError, UnicodeError):
-                pass
-            logger.warning('没有有效签名的云配置缓存')
-            return {}
         try:
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
@@ -201,25 +63,26 @@ class CloudRes:
                     return data if isinstance(data, dict) and type(data.get('lastModified')) is int else {}
             return {}
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse cache file: {type(e).__name__} line={e.lineno} column={e.colno}")
+            logger.error(f"Failed to parse cache file: {e}")
             return {}
         except IOError as e:
-            logger.error(f"Failed to read cache file: {type(e).__name__} errno={e.errno}")
+            logger.error(f"Failed to read cache file: {e}")
             return {}
         except Exception as e:
-            logger.error(f"Unexpected error while loading cache file: {type(e).__name__}")
+            logger.error(f"Unexpected error while loading cache file: {e}")
             return {}
 
     def update_cache_if_needed(self):
         results = queue.Queue()
         ready = threading.Event()
         deadline = time.monotonic() + 60
-        snapshot = (self._verified_payload, self.local_data)
+        snapshot = (None, self.local_data)
         urls = tuple(self.urls)
 
         def fetch(url):
             try:
-                result = self.fetch_json_from_url([url], snapshot)
+                data = self.fetch_json_from_url([url], snapshot)
+                result = (_MODIFIED, data) if data else (_ERROR, None)
             except Exception:
                 result = (_ERROR, None)
             results.put(result)
@@ -254,49 +117,22 @@ class CloudRes:
         ready.wait(max(0, deadline - time.monotonic()))
 
     def _apply_fetch_result(self, status, cloud_data, background=False):
-
         if status == _NOT_MODIFIED:
-            if self.signatures_required and cloud_data is not None:
-                import base64
-                candidate = base64.b64decode(cloud_data['payload'], validate=True)
-                current = (base64.b64decode(self._verified_payload['payload'], validate=True)
-                           if self._verified_payload else None)
-                if not current or canonical_cloud_config(candidate)[1] != canonical_cloud_config(current)[1]:
-                    return
-                # Updating a same-version ETag is optional: preserve the valid
-                # existing cache if the metadata cannot be written.
-                try:
-                    from secure_write import write_json_restricted
-                    write_json_restricted(self.signed_cache_file, cloud_data, atomic_required=True)
-                    self._verified_payload = cloud_data
-                except Exception:
-                    logger.warning("无法保存云配置缓存验证器")
             if not background:
                 logger.info("本地配置已是最新")
             return
-
         if status == _ERROR or cloud_data is None:
-            logger.warning("获取云端配置失败，将继续使用本地配置")
+            if not background:
+                logger.warning("获取云端配置失败，将继续使用本地配置")
             return
-
-        if self.signatures_required:
-            cloud_data, signed_cache = cloud_data
-
-        cloud_last_modified = cloud_data.get('lastModified', 0)
-        local_last_modified = self.local_data.get('lastModified', 0)
-        if cloud_last_modified > local_last_modified:
-            from secure_write import write_json_restricted
-            if self.signatures_required:
-                write_json_restricted(self.signed_cache_file, signed_cache, atomic_required=True)
-                self._verified_payload = signed_cache
-            else:
-                write_json_restricted(self.cache_file, cloud_data)
+        if cloud_data.get('lastModified', 0) > self.local_data.get('lastModified', 0):
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cloud_data, f, ensure_ascii=False, indent=4)
             self.local_data = cloud_data
             if not background:
                 logger.info("云端配置有更新，应用成功")
-        else:
-            if not background:
-                logger.info("本地配置已是最新")
+        elif not background:
+            logger.info("本地配置已是最新")
 
     def get_channelData(self, channelName,shortGameId):
         data=self.local_data.get('data', [])
@@ -310,7 +146,7 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId:
                 return item
-        return self.dynamic_game_catalog.get_cloud_config(shortGameId)
+        return None
     
     def get_netease_style_pkgname_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -324,82 +160,10 @@ class CloudRes:
     #same with data, but key is feature_game_short_ids
     def get_feature_by_game_id(self,shortGameId):
         data=self.local_data.get('feature_game_short_ids', [])
-        manual_feature = None
         for item in data:
             if item.get('game_id') == shortGameId:
-                manual_feature = item
-                break
-        dynamic_feature = self.dynamic_game_catalog.get_feature(shortGameId)
-        if manual_feature is None:
-            return dynamic_feature
-        if not dynamic_feature:
-            return manual_feature
-        if dynamic_feature.get('platform_type') == 'native':
-            # Public visual metadata never grants a Fever distribution or
-            # download capability, even if a manual feature has old defaults.
-            return {**manual_feature, **dynamic_feature}
-
-        # Keep hand-maintained behavior authoritative, but append distributions
-        # discovered from LoadingBay (including the international catalog).
-        merged = dict(manual_feature)
-        merged_distributions = list(manual_feature.get('download_distributions', []))
-        seen = set()
-        for item in merged_distributions:
-            value = item.get('distribution_id') if isinstance(item, dict) else item
-            if isinstance(item, dict) and value is None:
-                value = item.get('app_id')
-            try:
-                seen.add(int(value))
-            except (TypeError, ValueError):
-                pass
-        for item in dynamic_feature.get('download_distributions', []):
-            value = item.get('distribution_id') if isinstance(item, dict) else item
-            if isinstance(item, dict) and value is None:
-                value = item.get('app_id')
-            try:
-                normalized = int(value)
-            except (TypeError, ValueError):
-                continue
-            if normalized not in seen:
-                merged_distributions.append(item)
-                seen.add(normalized)
-        merged['download_distributions'] = merged_distributions
-        distribution_sources = dict(manual_feature.get('distribution_sources', {}))
-        for key, value in dynamic_feature.get('distribution_sources', {}).items():
-            distribution_sources.setdefault(str(key), value)
-        if distribution_sources:
-            merged['distribution_sources'] = distribution_sources
-        return merged
-
-    def has_manual_game_feature(self, shortGameId):
-        """Whether launcher behavior is explicitly maintained in cloudRes."""
-        for item in self.local_data.get('feature_game_short_ids', []):
-            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId):
-                return True
-        return False
-
-    def is_fever_managed_game(self, shortGameId, distribution_id=-1):
-        catalog_item = self.dynamic_game_catalog.get_game(shortGameId) or {}
-        platform_type = catalog_item.get('platform_type')
-        if platform_type:
-            return platform_type == 'fever'
-        feature = next((
-            item for item in self.local_data.get('feature_game_short_ids', [])
-            if isinstance(item, dict) and cmp_game_id(item.get('game_id'), shortGameId)
-        ), None)
-        distributions = feature.get('download_distributions', []) if feature else []
-        normalized = []
-        for item in distributions:
-            value = item.get('distribution_id') if isinstance(item, dict) else item
-            try:
-                normalized.append(int(value))
-            except (TypeError, ValueError):
-                continue
-        try:
-            requested = int(distribution_id)
-        except (TypeError, ValueError):
-            requested = -1
-        return requested in normalized if requested != -1 else bool(normalized)
+                return item
+        return None
     
     def get_all_by_game_id(self,shortGameId):
         data=self.local_data.get('data', [])
@@ -414,24 +178,7 @@ class CloudRes:
         for item in data:
             if item.get('game_id') == shortGameId and item.get(key) != "" and item.get(key) != None:
                 return item.get(key)
-        dynamic_item = self.dynamic_game_catalog.get_cloud_config(shortGameId)
-        if dynamic_item and dynamic_item.get(key) not in ("", None):
-            return dynamic_item.get(key)
         return None
-
-    def start_dynamic_game_catalog_update(self):
-        """后台刷新可下载游戏与云端游戏 ID 映射。"""
-        return self.dynamic_game_catalog.start_background_refresh()
-
-    def get_dynamic_game_catalog(self):
-        return self.dynamic_game_catalog.get_games()
-
-    def get_dynamic_game_catalog_status(self):
-        return self.dynamic_game_catalog.get_status()
-
-    def resolve_cloud_game_id(self, game_id):
-        """将 h55 类短代号转为 aec...-g-h55 形式。"""
-        return self.dynamic_game_catalog.resolve_cloud_game_id(game_id)
 
     def get_version(self):
         return self.local_data.get('version', genv.get('VERSION'))
@@ -439,13 +186,20 @@ class CloudRes:
     def get_netease_qrcode_login_game_list(self):
         return self.local_data.get('netease_qrcode_login_game_list', [])
 
+    def is_game_in_qrcode_login_list(self,game_id):
+        game_list = self.get_netease_qrcode_login_game_list()
+        for item in game_list:
+            if cmp_game_id(item.get('game_id'), game_id):
+                return True
+        return False
+
     def get_qrcode_app_channel(self,game_id):
         config = self.get_qrcode_login_config(game_id)
         return config.get('app_channel') if config else None
 
     def get_qrcode_login_config(self, game_id):
         """返回 netease_qrcode_login_game_list 中指定 game_id 的完整配置字典，
-        包含 app_channel 以及 qrcode_channel_type、dst_jf_game_id、is_remember 等额外参数。"""
+        包含 app_channel 以及 cv、qrcode_channel_type 等额外参数。"""
         game_list = self.get_netease_qrcode_login_game_list()
         for item in game_list:
             if cmp_game_id(item.get('game_id'), game_id):
@@ -458,6 +212,9 @@ class CloudRes:
     def get_downloadUrl(self):
         return self.local_data.get('downloadUrl', '')
     
+    def get_guideUrl(self):
+        return self.local_data.get('guideUrl', '')
+    
     def get_detail(self):
         return self.local_data.get('detail', '')
     
@@ -469,16 +226,7 @@ class CloudRes:
     
     def get_login_page(self):
         import base64
-        import binascii
-        for key in ('login_base64_page_fever', 'login_base64_page'):
-            encoded = self.local_data.get(key, '')
-            if not encoded:
-                continue
-            try:
-                return base64.b64decode(encoded, validate=True).decode()
-            except (binascii.Error, UnicodeDecodeError, TypeError, ValueError):
-                logger.warning(f"云端页面字段无效，尝试兼容回退: {key}")
-        return ""
+        return base64.b64decode(self.local_data.get('login_base64_page', '')).decode()
     
     def get_shortcuts(self):
         return self.local_data.get('shortcuts', [])
@@ -491,35 +239,12 @@ class CloudRes:
         if not features:
             return ""
         return features.get('start_argument', "")
-
+    
     def get_download_distributions(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
         if not features:
             return []
         return features.get('download_distributions', [])
-
-    def get_distribution_source(self, shortGameId, distribution_id):
-        """Return ``cn`` or ``oversea`` for a LoadingBay distribution."""
-        features = self.get_feature_by_game_id(shortGameId) or {}
-        try:
-            target_id = int(distribution_id)
-        except (TypeError, ValueError):
-            return "cn"
-        for item in features.get('download_distributions', []):
-            if not isinstance(item, dict):
-                continue
-            value = item.get('distribution_id', item.get('app_id'))
-            try:
-                if int(value) == target_id and item.get('source'):
-                    return str(item.get('source'))
-            except (TypeError, ValueError):
-                continue
-        sources = features.get('distribution_sources', {})
-        if isinstance(sources, dict):
-            source = str(sources.get(str(target_id)) or "").strip().lower()
-            if source in ("cn", "oversea"):
-                return source
-        return "cn"
     
     def is_convert_to_normal(self,shortGameId):
         features = self.get_feature_by_game_id(shortGameId)
@@ -544,34 +269,3 @@ class CloudRes:
         if not isinstance(hotfixes, list):
             return []
         return hotfixes
-
-    def get_no_proxy_domains(self):
-        """返回云端下发的 NO_PROXY 域名列表。
-
-        每个域名应以 '.' 开头以支持子域名匹配。
-        例如：['.gameyw.netease.com', '.ps.netease.com']
-        """
-        data = self.local_data or {}
-        domains = data.get("no_proxy_domains") or []
-        if not isinstance(domains, list):
-            return []
-        return domains
-
-    def should_start_from_exe_path(self):
-        """返回需要从 exe 所在目录启动的 game_id 名单。
-
-        名单记录的是游戏库接口反推出来的 game_id 字段（如 "h74"）。
-        模拟发烧平台托管启动时，名单内的游戏继续以 exe 所在目录为工作目录，
-        其余游戏以安装目录作为启动路径。
-        """
-        data = self.local_data or {}
-        names = data.get("should_start_from_exe_path") or []
-        if not isinstance(names, list):
-            return []
-        return [str(name) for name in names]
-
-    def is_should_start_from_exe_path(self, shortGameId):
-        return any(
-            cmp_game_id(item, str(shortGameId))
-            for item in self.should_start_from_exe_path()
-        )
