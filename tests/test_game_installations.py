@@ -85,8 +85,8 @@ class GameInstallationModelTests(unittest.TestCase):
     def _shortcut_game(self):
         # Importing the trial distribution last can set this shared game name.
         game = Game("h55", name="第五人格共研服")
-        game.add_installation("D:/Normal/dwrg.exe", 73, installation_id="normal")
-        game.add_installation("D:/Trial/dwrg.exe", 134, installation_id="trial")
+        game.add_installation("D:/dwrg/dwrg.exe", 73, installation_id="normal")
+        game.add_installation("D:/dwrg2/dwrg.exe", 134, installation_id="trial")
         return game
 
     def test_installation_names_ignore_shared_game_name(self):
@@ -163,9 +163,17 @@ class GameInstallationModelTests(unittest.TestCase):
         game = self._shortcut_game()
         cache = {"cn:73": {"display_name": "第五人格"},
                  "cn:134": {"display_name": "第五人格共研服"}}
+        process = types.SimpleNamespace(
+            STARTUPINFO=lambda: types.SimpleNamespace(dwFlags=0),
+            STARTF_USESHOWWINDOW=1, Popen=mock.Mock(),
+        )
         with mock.patch.dict(_genv_store, {"launcher_data_cache": cache}, clear=True), \
                 mock.patch.object(Game, "_distribution_source", return_value="cn"), \
-                mock.patch.object(game, "start") as start:
+                mock.patch("gamemgr.sys", types.SimpleNamespace(platform="win32")), \
+                mock.patch("gamemgr.subprocess", process), \
+                mock.patch("gamemgr.os.path.exists", return_value=True), \
+                mock.patch.object(app_state, "proxy_mgr", None, create=True), \
+                mock.patch.object(game, "start", wraps=game.start) as start:
             for iid, expected in (("normal", "第五人格"), ("trial", "第五人格共研服")):
                 for mode in ("compat", "process", "global", "signal"):
                     with self.subTest(installation=iid, mode=mode):
@@ -181,6 +189,10 @@ class GameInstallationModelTests(unittest.TestCase):
                         prefix = "通过信号启动游戏: " if mode == "signal" else "通过快捷方式启动游戏: "
                         logger.info.assert_any_call(prefix + expected)
                         start.assert_called_with(iid)
+                        command = process.Popen.call_args.args[0]
+                        self.assertIn('"' + game.get_installation(iid).path + '"', command)
+                        other = "trial" if iid == "normal" else "normal"
+                        self.assertNotIn('"' + game.get_installation(other).path + '"', command)
 
     def test_running_state_is_shared_by_game_distributions_and_not_persisted(self):
         game = Game('fixture-g-h55')
