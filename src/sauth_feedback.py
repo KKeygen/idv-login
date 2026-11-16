@@ -2,7 +2,7 @@
 import base64
 
 
-CONFIRM_TIMEOUT_MS = 30000
+CONFIRM_TIMEOUT_MS = 10000
 _dialogs = {}
 
 
@@ -29,7 +29,7 @@ def failure_details(http_status, payload, *, local=False):
     return '\n'.join(lines)
 
 
-def show_message(key, text, on_confirm=None, *, timeout_ms=CONFIRM_TIMEOUT_MS):
+def show_message(key, text, on_confirm=None, *, timeout_ms=30000):
     """Keep all Qt work on the UI thread; close/timeout never means consent."""
     import app_state
 
@@ -76,8 +76,8 @@ def confirm_relogin(key, details, on_confirm, *, note=''):
     text = f'{details}\n\n登录过期，是否重新登录？'
     if note:
         text += '\n' + note
-    text += '\n30 秒内未确认将自动关闭，不会重新登录。'
-    show_message(('confirm', key), text, on_confirm)
+    text += f'\n{CONFIRM_TIMEOUT_MS // 1000} 秒内未确认将自动关闭，不会重新登录。'
+    show_message(('confirm', key), text, on_confirm, timeout_ms=CONFIRM_TIMEOUT_MS)
 
 
 def relogin_succeeded():
