@@ -139,15 +139,15 @@ class ucChannel(channelmgr.channel):
         data = session_data.get("data", session_data)
         if not isinstance(data, dict) or not data.get("sid") or not (data.get("accountId") or data.get("ucid")):
             return False
-        timeout = int(data.get("timeout", session_data.get("timeout", 86400)))
+        timeout = int(data.get("timeout", session_data.get("timeout")) or 0)
         self.ucSession = session_data
         self.observe_sdkuid(data.get("accountId") or data.get("ucid"))
         # 提取 refreshToken
         rt = data.get("refreshToken") or session_data.get("refreshToken", "")
         if rt:
             self.refreshToken = rt
-        # 计算 sid 过期时间（timeout 是持续秒数，默认 86400 = 24h）
-        self.sid_expire_time = int(time.time()) + int(timeout)
+        # Only a service-supplied positive duration establishes B's deadline.
+        self.sid_expire_time = int(time.time()) + timeout if timeout > 0 else 0
         data = self._get_session_data()
         if data:
             # SMS 登录响应中 mobile 字段为脱敏手机号，优先用作显示名
@@ -237,7 +237,8 @@ class ucChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self._has_valid_sid() else False)
 
-        if self._has_valid_sid():
+        if (not self.is_login_expired(game_id) and self._has_valid_sid()
+                and (self.sid_expire_time > 0 or not self.refreshToken)):
             return _deliver(_build())
         if bool(self.refreshToken) and self._try_refresh():
             return _deliver(_build() if self._has_valid_sid() else False)

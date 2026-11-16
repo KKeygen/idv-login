@@ -86,7 +86,7 @@ class qqChannel(channelmgr.channel):
             if resp is None or resp is False:
                 return resp
             if not isinstance(resp, dict) or not all(
-                resp.get(key) for key in ("atk", "openid", "atk_expire")
+                resp.get(key) for key in ("atk", "openid")
             ):
                 return False
             self.session = myappVeriftResp(resp)
@@ -129,9 +129,13 @@ class qqChannel(channelmgr.channel):
             pass
 
     def is_token_valid(self):
-        if self.session is not None and self.session.atk_expire:
-            return self.token_issued_at + self.session.atk_expire > int(time.time())
-        return False
+        if self.session is None or not self.session.atk or not self.session.openid:
+            return False
+        if self.session.atk_expire:
+            return self.token_issued_at + int(self.session.atk_expire) > int(time.time())
+        # No expiry supplied and no implemented QQ refresh endpoint: retain the
+        # same credential until an actual rejection, rather than inventing TTL.
+        return True
 
     def before_save(self):
         self.session_json = self.session.__json__()
@@ -261,7 +265,7 @@ class qqChannel(channelmgr.channel):
                 return False
 
         try:
-            valid = self.is_token_valid()
+            valid = not self.is_login_expired(game_id) and self.is_token_valid()
         except Exception:
             if not interactive:
                 raise

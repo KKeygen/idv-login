@@ -20,13 +20,14 @@ import os
 import copy
 import json
 import random
+import threading
 import time
 import requests
 from envmgr import genv
 from logutil import setup_logger, user_notice
 from const import manual_login_channels
 from channelHandler.channelUtils import cmp_game_id, getShortGameId
-from channel_cache import packet_identity, credential_expires_at, exception_summary, unisdk_expires_at
+from channel_cache import packet_auth, packet_identity, credential_expires_at, exception_summary, unisdk_expires_at
 from ssl_utils import should_verify_ssl
 
 
@@ -97,6 +98,7 @@ class channel:
         self.game_id = ext_info.get("from_game_id", "")
         self.crossGames = type(self) is not channel
         self.unisdk_cache = {}
+        self.expired_games = []
         self.expires_at = None
         if name == "":
             self.name = self.uuid
@@ -124,6 +126,7 @@ class channel:
             if key in data:
                 setattr(self, key, data[key])
         self.active_sdkuid = str(data.get('active_sdkuid') or '')
+        self.expired_games = list(data.get('expired_games') or [])
         self.unisdk_cache = {}
         self.expires_at = data.get('expires_at')
         if self.expires_at is not None:
@@ -278,13 +281,14 @@ class channel:
         self.observe_sdkuid(sdkuid, game)
         self.unisdk_cache[game] = {'packet': copy.deepcopy(packet), 'expires_at': expires_at}
         self.unisdk_cache[game]['expires_at'] = unisdk_expires_at(self.unisdk_cache[game])
+        self.expired_games = [item for item in self.expired_games if item != game]
         self.expires_at = None
         return packet
 
-    def cached_unisdk(self, game_id):
+    def cached_unisdk(self, game_id, *, for_login=False):
         game = getShortGameId(game_id)
         entry = self.unisdk_cache.get(game)
-        if not entry:
+        if not entry or game in self.expired_games:
             return None
         packet = entry['packet']
         try:
@@ -293,13 +297,25 @@ class channel:
         except ValueError:
             return None
         expiry = unisdk_expires_at(entry)
-        if expiry is not None and expiry <= time.time():
+        if expiry is not None and expiry <= time.time() + 5:
+            return None
+        # These adapters can exchange durable A for a different game B. An
+        # unknown B deadline is not evidence it remains reusable. Direct-token
+        # channels retain their normal login behavior instead of forcing UI.
+        renewable = self.channel_name in (
+                'huawei', 'nearme_vivo', 'oppo', 'xiaomi_app', 'honor',
+                'honor_sdk', 'lenovo_open', 'baidu', 'uc_platform',
+                'qihoo', '360_assistant', '4399com') or (
+                    self.channel_name == 'myapp' and self.uuid.removeprefix('idv-').startswith('wx-'))
+        if for_login and expiry is None and renewable:
             return None
         return copy.deepcopy(packet)
 
     def is_login_expired(self, game_id):
         """Read existing expiry only; this does not refresh or validate a login."""
         if self.record_source == 'manual':
+            if getShortGameId(game_id) in self.expired_games:
+                return True
             entry = self.unisdk_cache.get(getShortGameId(game_id))
             deadlines = [unisdk_expires_at(entry) if entry else self.expires_at]
         else:
@@ -315,12 +331,13 @@ class channel:
             self.expires_at = int(time.time())
             return True
         games = [getShortGameId(game_id)] if game_id else list(self.unisdk_cache)
+        self.expired_games = list(dict.fromkeys([*self.expired_games, *games]))
         changed = False
         for game in games:
             if game in self.unisdk_cache:
                 self.unisdk_cache[game]['expires_at'] = int(time.time())
                 changed = True
-        if not changed:
+        if not changed and not game_id:
             self.expires_at = int(time.time())  # No packet yet; retain the existing UI failure status.
         return True
 
@@ -334,14 +351,24 @@ class channel:
         # A cached last choice must not silently remember an OPPO choice that
         # the user deliberately left unfixed in the original login dialog.
         choose_again = interactive and self.record_source == 'manual' and self.channel_name == 'oppo' and not self.chosen_account_id
-        packet = None if force or choose_again or self.record_source == 'scan' else self.cached_unisdk(game_id)
+        packet = None if force or choose_again or self.record_source == 'scan' else self.cached_unisdk(game_id, for_login=True)
         if packet is not None:
             if on_complete is not None:
                 on_complete(packet)
                 return None
             return packet
+        expected_identity = self.sdk_identity(game_id) if not interactive else None
+        previous_entry = copy.deepcopy(self.unisdk_cache.get(getShortGameId(game_id)))
 
         def deliver(result):
+            if not (cancel_event is not None and cancel_event.is_set()) and (
+                    result is False or isinstance(result, Exception)
+                    or result is None and not interactive):
+                if previous_entry is not None:
+                    # Some adapters observe the returned UID before building B.
+                    # Keep the selected old row identifiable if that issue fails.
+                    self.unisdk_cache[getShortGameId(game_id)] = previous_entry
+                self.expire_unisdk(game_id)
             if on_complete is not None:
                 on_complete(result)
                 return None
@@ -358,6 +385,8 @@ class channel:
                 identity = packet_identity(result)
                 if not cmp_game_id(identity[0], game_id):
                     raise ValueError('field=SAUTH_JSON.gameid: differs from requested game')
+                if expected_identity is not None and identity != expected_identity:
+                    raise ValueError('field=SAUTH_JSON.sdkuid: differs from selected account')
                 if self.record_source == 'manual':
                     self.cache_unisdk(result, credential_expires_at(self))
             except (TypeError, ValueError, AttributeError, OverflowError) as error:
@@ -423,6 +452,9 @@ class channel:
 class ChannelManager:
     def __init__(self):
         self.logger = setup_logger()
+        self._credential_stop = threading.Event()
+        self._credential_thread = None
+        self._credential_lock = threading.RLock()
         try:
             genv.discard_cached('native_channel_accounts', 'mpay_db_helpers',
                                 'mpay_db_bindings', 'mpay_db_writes')
@@ -560,6 +592,82 @@ class ChannelManager:
             key=lambda x: x["last_login_time"],
             reverse=True,
         )
+
+    def prepare_game_credential(self, record, game_id, *, force=False):
+        """One silent A→B path for startup, game launch and background refresh."""
+        with self._credential_lock:
+            return self._prepare_game_credential(record, game_id, force=force)
+
+    def _prepare_game_credential(self, record, game_id, *, force=False):
+        from prefetch_context import prefetch_scope
+        game = getShortGameId(game_id)
+        try:
+            # Use the live adapter: rebuilding it discards still-valid upstream
+            # state (Huawei accessToken / vivo selected subaccount).
+            with prefetch_scope():
+                packet = record.request_unisdk(game, interactive=False, force=force)
+            if not isinstance(packet, dict):
+                raise ValueError('field=game_credential: issuance failed')
+        except Exception as error:
+            if self._credential_stop.is_set() or record not in self.channels:
+                return None
+            record.expire_unisdk(game)
+            try:
+                self.save_records()
+            except Exception as save_error:
+                record.report_login_failure(game, 'credentials.save', '过期状态未能保存', save_error)
+            record.report_login_failure(game, 'credentials.issue',
+                '游戏登录凭据签发失败，此游戏记录已标为过期。请在账号管理中重新登录。',
+                error, notify=True)
+            return None
+        if self._credential_stop.is_set() or record not in self.channels:
+            return None
+        try:
+            self.save_records()
+        except Exception as error:
+            record.report_login_failure(game, 'credentials.save',
+                '游戏凭据已获取，但未能保存，请重试。', error, notify=True)
+            return None
+        return packet
+
+    def refresh_short_lived_credentials(self):
+        """Refresh saved Huawei/vivo game packets, not unused games or account A."""
+        for record in tuple(self.channels):
+            if record.record_source != 'manual' or record.channel_name not in ('huawei', 'nearme_vivo'):
+                continue
+            for game in tuple(record.unisdk_cache):
+                if self._credential_stop.is_set():
+                    return
+                was_expired = record.is_login_expired(game)
+                packet = self.prepare_game_credential(record, game, force=True)
+                written = 0
+                if self.db_sync:
+                    try:
+                        if packet is not None:
+                            written = self.db_sync.refresh_record(record, game)
+                        else:
+                            self.db_sync.rename_record(record.uuid, record.name)
+                    except Exception as error:
+                        record.report_login_failure(game, 'credentials.database',
+                            '游戏账号库未能更新，请关闭游戏后重试同步。', error, notify=True)
+                        continue
+                if packet is not None and was_expired:
+                    self._notify_credential_ready(written)
+
+    def start_credential_refresh(self):
+        if self._credential_thread is not None:
+            return
+        def refresh():
+            while not self._credential_stop.wait(240):
+                try:
+                    self.refresh_short_lived_credentials()
+                except Exception as error:
+                    self.logger.debug('后台游戏凭据更新未完成\n{}', exception_summary(error))
+        self._credential_thread = threading.Thread(target=refresh, daemon=True, name='game-credentials')
+        self._credential_thread.start()
+
+    def stop_credential_refresh(self):
+        self._credential_stop.set()
 
     def _manual_channel_name(self, login_channel: str, game_id: str) -> str:
         """当前游戏支持该渠道手动登录时返回显示名，否则返回空串。"""
@@ -868,11 +976,11 @@ class ChannelManager:
                 return data
         return False
 
-    def _sauth_matches(self, data, game):
+    def _sauth_matches(self, data, game, *, current_token=True):
         key = (game, data.get('login_channel'), str(data.get('sdkuid', '')))
         lenovo = key[1] == 'lenovo_open'
         session = data.get('sessionid')
-        if lenovo and (not isinstance(session, str) or not session):
+        if current_token and (not isinstance(session, str) or not session):
             return []
         matches = []
         for record in self.channels:
@@ -882,17 +990,16 @@ class ChannelManager:
             except ValueError as error:
                 record.report_login_failure(game, 'sauth.match', '已跳过身份字段无效的记录', error, detail=str(error))
                 continue
-            if lenovo:
-                import base64
-                from urllib.parse import unquote
+            if current_token:
                 try:
                     if record.record_source == 'scan':
                         extra = (record.user_info.get('pc_ext_info') or record.ext_info).get('extra_unisdk_data')
                     else:
                         extra = record.unisdk_cache[game]['packet']['extra_unisdk_data']
-                    extra = json.loads(extra) if isinstance(extra, str) else extra
-                    auth = json.loads(base64.b64decode(unquote(extra['SAUTH_JSON'])))
+                    auth = packet_auth({'extra_unisdk_data': extra})
                     if session != auth.get('sessionid'):
+                        continue
+                    if key[1] == 'huawei' and str(data.get('timestamp')) != str(auth.get('timestamp')):
                         continue
                 except (KeyError, TypeError, ValueError, UnicodeError, AttributeError) as error:
                     record.report_login_failure(game, 'sauth.match', '已跳过登录凭据无效的记录', error)
@@ -902,12 +1009,31 @@ class ChannelManager:
 
     def record_sauth(self, data, success):
         """Login state belongs to Channel, with or without the optional DB plugin."""
+        with self._credential_lock:
+            return self._record_sauth(data, success)
+
+    def _record_sauth(self, data, success):
         if not isinstance(data, dict) or data.get('login_channel') == 'netease':
             return False
         from channelHandler.channelUtils import getShortGameId
         game = getShortGameId(str(data.get('gameid', '')))
         matches = self._sauth_matches(data, game)
         if not matches:
+            # Lenovo's SDK UID is always "0"; identity alone cannot attribute
+            # an unknown credential to even a single saved Lenovo account.
+            stale_matches = (self._sauth_matches(data, game, current_token=False)
+                             if not success and data.get('login_channel') != 'lenovo_open' else [])
+            if stale_matches:
+                import app_state
+                if self.db_sync and len(stale_matches) == 1:
+                    record = stale_matches[0]
+                    if record.record_source == 'manual' and record.cached_unisdk(game):
+                        try:
+                            self.db_sync.refresh_record(record, game)
+                        except Exception as error:
+                            record.report_login_failure(game, 'sauth.database', '当前凭据未能同步到游戏账号库', error)
+                app_state.toast('游戏请求的凭据与工具保存的凭据不同，未将已保存凭据标为过期。请从游戏原生切换账号重新打开列表；没有入口时重启游戏。', duration=10000)
+                return True
             return False
         if success:
             from account_list_policy import AccountListPolicy
@@ -921,6 +1047,8 @@ class ChannelManager:
                 record.report_login_failure(game, 'sauth.selection',
                     '登录成功，但游戏内切换选择未保存', error)
         else:
+            import app_state
+            app_state.toast(f'{matches[0].name}（{game}）：游戏登录认证失败，正在尝试更新凭据。', duration=7000)
             for record in matches:
                 record.expire_unisdk(game)
         try:
@@ -930,7 +1058,54 @@ class ChannelManager:
                 '本次登录状态未能保存；游戏返回结果不变', error)
         if success and self.db_sync:
             self.db_sync.promote_account(record, game)
+        elif not success:
+            record = next((item for item in matches if item.record_source == 'manual'), matches[0])
+            if self.db_sync:
+                try:
+                    self.db_sync.rename_record(record.uuid, record.name)
+                except Exception as error:
+                    record.report_login_failure(game, 'sauth.database', '过期标记未能同步到游戏列表', error)
+            if record.record_source == 'manual':
+                threading.Thread(target=self._recover_sauth, args=(record, game, data),
+                                 daemon=True, name='sauth-credentials').start()
+            else:
+                app_state.toast('此扫码账号的游戏凭据已过期，请重新扫码登录。', duration=7000)
         return True
+
+    def _recover_sauth(self, record, game, failed_request):
+        """Refresh the whole matching packet, never patch only an outgoing SAUTH."""
+        import app_state
+        if (self._credential_stop.is_set() or record not in self.channels
+                or record not in self._sauth_matches(failed_request, game)):
+            return
+        with self._credential_lock:
+            # A previous response may already have refreshed B while this worker waited.
+            if record not in self._sauth_matches(failed_request, game):
+                return
+            packet = self.prepare_game_credential(record, game, force=True)
+        if self._credential_stop.is_set():
+            return
+        if packet is None:
+            if self.db_sync:
+                app_state.run_on_main_thread(lambda: self.db_sync._relogin_expired(record, game, try_silent=False))
+            elif app_state.ui_mgr:
+                app_state.run_on_main_thread(lambda: app_state.ui_mgr.open_for_game(game, 'accounts'))
+            return
+        try:
+            written = self.db_sync.refresh_record(record, game) if self.db_sync else 0
+        except Exception as error:
+            record.report_login_failure(game, 'sauth.database',
+                '新凭据已保存，但游戏账号库未全部更新，请关闭游戏后从工具重新启动。', error, notify=True)
+            return
+        self._notify_credential_ready(written)
+
+    @staticmethod
+    def _notify_credential_ready(written):
+        import app_state
+        app_state.toast(
+            '游戏账号库已更新。请使用游戏原生切换账号，重新打开列表后登录；没有入口时重启游戏。'
+            if written else '新凭据已保存。请从工具重新登录；使用原生账号列表时，请关闭游戏后从工具重新启动。',
+            duration=10000)
 
     def rename(self, uuid: str, new_name: str):
         if not self.query_channel(uuid):
@@ -1109,8 +1284,18 @@ class ChannelManager:
                 return channel
         return None
 
-    @staticmethod
-    def _credential_failure(record, game_id, stage, error, on_error=None):
+    def _credential_failure(self, record, game_id, stage, error, on_error=None):
+        record.expire_unisdk(game_id)
+        if record in self.channels:
+            try:
+                self.save_records()
+            except Exception as save_error:
+                record.report_login_failure(game_id, 'credentials.save', '过期状态未能保存', save_error)
+            if self.db_sync:
+                try:
+                    self.db_sync.rename_record(record.uuid, record.name)
+                except Exception as error:
+                    record.report_login_failure(game_id, 'credentials.database', '过期标记未能同步到游戏列表', error)
         if isinstance(error, (TimeoutError, requests.Timeout)):
             message = '获取登录数据超时，请检查网络后重试'
         elif isinstance(error, requests.RequestException):
@@ -1123,7 +1308,7 @@ class ChannelManager:
             message = '渠道未完成登录，请重试；仍失败时反馈日志'
         else:
             message = '获取登录数据失败，请重试；仍失败时反馈日志'
-        record.report_login_failure(game_id, stage, message, error, notify=True, on_error=on_error)
+        record.report_login_failure(game_id, stage, message + '；此游戏记录已标为过期', error, notify=True, on_error=on_error)
 
     def simulate_confirm(self, channel: channel, scanner_uuid: str, game_id: str, on_complete=None, on_error=None):
         def _do_confirm(channel_data):
@@ -1153,13 +1338,13 @@ class ChannelManager:
                 on_complete(result)
             return result
 
-        # Live logins must renew credentials; cached packets are for MPay projection.
+        # Live login and native projection share the same B validity policy.
         if on_complete is not None:
-            channel.request_unisdk(game_id, on_complete=_do_confirm, force=True)
+            channel.request_unisdk(game_id, on_complete=_do_confirm)
             return None
 
         try:
-            channel_data = channel.request_unisdk(game_id, force=True)
+            channel_data = channel.request_unisdk(game_id)
         except Exception as error:
             channel_data = error
         return _do_confirm(channel_data)
@@ -1208,10 +1393,10 @@ class ChannelManager:
                             return result
 
                         if on_complete is not None and channel.record_source == "manual":
-                            channel.request_unisdk(game_id, on_complete=_ready, force=True)
+                            channel.request_unisdk(game_id, on_complete=_ready)
                             return None
                         try:
-                            result = channel.request_unisdk(game_id, force=True)
+                            result = channel.request_unisdk(game_id)
                         except Exception as error:
                             result = error
                         return _ready(result)

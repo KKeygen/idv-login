@@ -182,6 +182,8 @@ def handle_exit():
                 safe_exception(logger, "停止平台托管登录失败")
         app_state.fever_bridge = None
 
+    if app_state.channels_helper:
+        app_state.channels_helper.stop_credential_refresh()
     if app_state.channels_helper and app_state.channels_helper.db_sync:
         try:
             app_state.channels_helper.db_sync.shutdown()
@@ -1219,14 +1221,13 @@ def setup_network_proxy(proxy_port):
             log_failure(logger, "游戏内账号列表工件不可用；保留原渠道登录功能，等待匹配的工件", error)
         else:
             app_state.channels_helper.db_sync = db_sync
-            from prefetch_context import install_request_deadline
-            install_request_deadline()
             # DNS overrides must exist before any automatic game launch.
             try:
                 db_sync.refresh_startup()
             except Exception as error:
                 from mpay_db_sync import log_failure
                 log_failure(logger, "游戏内账号列表启动更新未完成；保留退出清理和原登录功能", error)
+    app_state.channels_helper.start_credential_refresh()
     game_helper.start_fever_auto_import()
 
     # Register the URI scheme so QR code redirects open our Qt window

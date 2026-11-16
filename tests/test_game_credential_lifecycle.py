@@ -1,0 +1,328 @@
+"""Offline credential lifecycle tests; no Qt, game process, DB or channel network."""
+import ast
+import base64
+import copy
+import importlib.util
+import json
+import os
+from pathlib import Path
+import random
+import sys
+import threading
+import time
+import types
+import unittest
+from unittest.mock import Mock, patch
+
+import requests
+
+SRC = Path(__file__).resolve().parents[1] / 'src'
+
+
+def packet(channel='huawei', game='h55', token='game-token', uid='account'):
+    auth = dict(gameid=game, login_channel=channel, sdkuid=uid, sessionid=token,
+                timestamp=str(int(time.time() * 1000)))
+    return dict(user_id=uid, token=base64.b64encode(token.encode()).decode(),
+                login_channel=channel, app_channel=channel, pay_channel=channel,
+                udid='fixture-device', sdk_version='fixture-sdk', jf_game_id=game,
+                extra_unisdk_data=json.dumps({
+                    'SAUTH_JSON': base64.b64encode(json.dumps(auth).encode()).decode(),
+                    'SAUTH_STR': 'fixture-complete-signed-packet'}))
+
+
+def source_classes(filename, names, namespace):
+    tree = ast.parse((SRC / filename).read_text(encoding='utf-8'))
+    nodes = [node for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+             and node.name in names]
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), filename, 'exec'), namespace)
+    return [namespace[name] for name in names]
+
+
+class CredentialLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.app = types.ModuleType('app_state')
+        self.app.toast = Mock()
+        self.app.run_on_main_thread = lambda callback: callback()
+        self.app.ui_mgr = Mock()
+        utils = types.ModuleType('channelHandler.channelUtils')
+        utils.getShortGameId = lambda game: game.split('-g-')[-1]
+        utils.cmp_game_id = lambda a, b: utils.getShortGameId(a) == utils.getShortGameId(b)
+        self.modules = patch.dict(sys.modules, {
+            'app_state': self.app, 'channelHandler.channelUtils': utils,
+        })
+        self.modules.start()
+        self.addCleanup(self.modules.stop)
+        for name in ('channel_cache', 'prefetch_context'):
+            spec = importlib.util.spec_from_file_location(name, SRC / f'{name}.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            sys.modules[name] = module
+            setattr(self, name, module)
+        self.logger = Mock()
+        self.namespace = dict(os=os, copy=copy, json=json, random=random, time=time,
+                              requests=requests, threading=threading,
+                              genv=Mock(), setup_logger=lambda: self.logger,
+                              getShortGameId=utils.getShortGameId, cmp_game_id=utils.cmp_game_id,
+                              **{name: getattr(self.channel_cache, name) for name in (
+                                  'packet_auth', 'packet_identity', 'credential_expires_at',
+                                  'exception_summary', 'unisdk_expires_at')})
+        self.Base, self.Manager = source_classes('channelmgr.py', ('channel', 'ChannelManager'), self.namespace)
+        base = self.Base
+
+        class Fixture(base):
+            def __init__(record, channel='huawei'):
+                super().__init__({'login_channel': channel, 'code': 'fixture'})
+                record.game_id = 'h55'
+                record.builds = []
+                record.fail = False
+
+            def get_uniSdk_data(record, game_id='', on_complete=None, *, interactive=True):
+                record.builds.append(game_id)
+                result = False if record.fail else packet(record.channel_name, game_id, f'new-{len(record.builds)}')
+                if on_complete:
+                    on_complete(result)
+                    return None
+                return result
+
+        self.Record = Fixture
+        self.manager = object.__new__(self.Manager)
+        self.manager.channels = []
+        self.manager.logger = self.logger
+        self.manager.db_sync = None
+        self.manager.save_records = Mock()
+        self.manager._credential_stop = threading.Event()
+        self.manager._credential_thread = None
+        self.manager._credential_lock = threading.RLock()
+
+    def record(self, channel='huawei', *, expires=None):
+        record = self.Record(channel)
+        record.cache_unisdk(packet(channel), expires)
+        self.manager.channels.append(record)
+        return record
+
+    def auth(self, record, game='h55'):
+        return self.channel_cache.packet_auth(record.unisdk_cache[game]['packet'])
+
+    def test_known_fresh_b_reused_without_issuing_or_refreshing_a(self):
+        record = self.record(expires=time.time() + 200)
+        first = record.request_unisdk('h55')
+        second = self.manager.prepare_game_credential(record, 'h55')
+        self.assertEqual(first, second)
+        self.assertEqual(record.builds, [])
+
+    def test_unknown_renewable_b_issues_but_direct_token_unknown_reuses(self):
+        for name in ('oppo', 'nearme_vivo', 'xiaomi_app', 'baidu', '4399com'):
+            record = self.record(name)
+            record.request_unisdk('h55', interactive=False)
+            self.assertEqual(record.builds, ['h55'], name)
+        for name in ('bilibili_sdk', 'guopan', 'myapp'):
+            record = self.record(name)
+            record.request_unisdk('h55')
+            self.assertEqual(record.builds, [], name)
+
+    def test_unknown_packet_remains_available_for_complete_db_projection(self):
+        record = self.record('nearme_vivo')
+        self.assertIsNone(record.cached_unisdk('h55', for_login=True))
+        self.assertIsNotNone(record.cached_unisdk('h55'))
+        self.assertIsNone(self.channel_cache.unisdk_expires_at(record.unisdk_cache['h55']))
+
+    def test_near_expiry_and_explicit_force_issue(self):
+        record = self.record(expires=time.time() + 2)
+        record.request_unisdk('h55')
+        record.request_unisdk('h55', force=True)
+        self.assertEqual(record.builds, ['h55', 'h55'])
+
+    def test_failure_only_expires_requested_game_even_without_previous_b(self):
+        record = self.record('oppo', expires=time.time() + 200)
+        record.fail = True
+        self.assertIsNone(self.manager.prepare_game_credential(record, 'g37'))
+        self.assertTrue(record.is_login_expired('g37'))
+        self.assertFalse(record.is_login_expired('h55'))
+        self.assertIn('已标为过期', self.app.toast.call_args.args[0])
+        self.manager.save_records.assert_called()
+
+    def test_explicit_failure_cleared_only_by_new_b_for_same_game(self):
+        record = self.record()
+        record.expire_unisdk('h55')
+        record.expire_unisdk('g37')
+        record.request_unisdk('h55', interactive=False)
+        self.assertEqual(record.expired_games, ['g37'])
+
+    def test_cancel_does_not_expire_game(self):
+        record = self.record()
+        cancel = threading.Event()
+        cancel.set()
+        self.assertIsNone(record.request_unisdk('h55', interactive=False, cancel_event=cancel))
+        self.assertFalse(record.is_login_expired('h55'))
+
+    def test_silent_issue_cannot_switch_sdk_account(self):
+        record = self.record()
+        def issue(*args, **kwargs):
+            record.observe_sdkuid('different-account', 'h55')
+            return packet(uid='different-account')
+        record.get_uniSdk_data = issue
+        self.assertIsNone(self.manager.prepare_game_credential(record, 'h55', force=True))
+        self.assertEqual(self.auth(record)['sdkuid'], 'account')
+        self.assertTrue(record.is_login_expired('h55'))
+
+    def test_sauth_matches_exact_saved_request_token_for_every_channel(self):
+        for name in ('huawei', 'nearme_vivo', 'oppo', 'bilibili_sdk'):
+            record = self.record(name)
+            current = self.auth(record)
+            self.assertEqual(self.manager._sauth_matches(current, 'h55'), [record])
+            self.assertEqual(self.manager._sauth_matches(dict(current, sessionid='old'), 'h55'), [])
+
+    def test_huawei_signed_timestamp_is_part_of_same_credential(self):
+        record = self.record()
+        self.assertEqual(self.manager._sauth_matches(dict(self.auth(record), timestamp='1'), 'h55'), [])
+
+    def test_lenovo_uid_zero_does_not_attribute_unknown_request(self):
+        record = self.record('lenovo_open')
+        record.cache_unisdk(packet('lenovo_open', uid='0'))
+        self.manager.db_sync = Mock()
+        self.assertFalse(self.manager.record_sauth(dict(self.auth(record), sessionid='other-account'), False))
+        self.manager.db_sync.refresh_record.assert_not_called()
+
+    def test_old_sauth_failure_does_not_expire_new_b_and_republishes_full_packet(self):
+        record = self.record()
+        self.manager.db_sync = Mock()
+        self.assertTrue(self.manager.record_sauth(dict(self.auth(record), sessionid='old'), False))
+        self.assertFalse(record.is_login_expired('h55'))
+        self.manager.db_sync.refresh_record.assert_called_once_with(record, 'h55')
+        self.assertIn('凭据不同', self.app.toast.call_args.args[0])
+
+    def test_first_current_sauth_failure_toasts_immediately_before_recovery(self):
+        record = self.record()
+        with patch.object(threading, 'Thread') as worker:
+            self.assertTrue(self.manager.record_sauth(self.auth(record), False))
+        self.assertTrue(record.is_login_expired('h55'))
+        self.assertIn('游戏登录认证失败', self.app.toast.call_args.args[0])
+        worker.return_value.start.assert_called_once()
+
+    def test_periodic_refresh_is_four_minutes_and_only_saved_huawei_vivo_games(self):
+        hua, vivo = self.record(), self.record('nearme_vivo')
+        other = self.record('oppo')
+        self.manager.prepare_game_credential = Mock(return_value=packet())
+        self.manager.refresh_short_lived_credentials()
+        self.assertEqual(self.manager.prepare_game_credential.call_args_list, [
+            unittest.mock.call(hua, 'h55', force=True), unittest.mock.call(vivo, 'h55', force=True)])
+        self.assertEqual(other.builds, [])
+        stop = self.manager._credential_stop = Mock()
+        stop.wait.return_value = True
+        with patch.object(threading, 'Thread') as worker:
+            self.manager.start_credential_refresh()
+            worker.call_args.kwargs['target']()
+        stop.wait.assert_called_once_with(240)
+
+    def test_periodic_refresh_can_recover_previously_failed_game(self):
+        record = self.record()
+        record.expire_unisdk('h55')
+        self.manager.refresh_short_lived_credentials()
+        self.assertEqual(record.builds, ['h55'])
+        self.assertFalse(record.is_login_expired('h55'))
+        self.assertIn('凭据已保存', self.app.toast.call_args.args[0])
+
+    def test_saved_expiry_state_and_service_deadline_survive_restore(self):
+        record = self.record('oppo', expires=time.time() + 200)
+        record.expire_unisdk('g37')
+        restored = self.Record('oppo').restore_common(json.loads(json.dumps(vars(record))))
+        self.assertTrue(restored.is_login_expired('g37'))
+        self.assertFalse(restored.is_login_expired('h55'))
+        self.assertIsNotNone(restored.cached_unisdk('h55', for_login=True))
+
+    def test_lenovo_b_deadline_comes_from_issued_st_not_tgt(self):
+        record = self.Record('lenovo_open')
+        record.lenovoSession = dict(st_issued_at=100, st_ttl=20, tgt_issued_at=100, tgt_ttl=1000)
+        self.assertEqual(self.channel_cache.credential_expires_at(record), 120)
+
+    def test_native_write_projects_whole_packet_and_failure_only_renames(self):
+        namespace = dict(self.namespace, Path=Path, base64=base64)
+        Sync, credentials = source_classes('mpay_db_sync.py', ('MpayDBSync', 'credentials_from_packet'), namespace)
+        policy = types.ModuleType('account_list_policy')
+        policy.AccountListPolicy = lambda manager: types.SimpleNamespace(
+            account_label=lambda record, expired=False: record.name + ('[已过期]' if expired else ''))
+        sync = object.__new__(Sync)
+        sync.manager = self.manager
+        sync.identity = 'fixture-machine'
+        sync.projected = set()
+        sync.operate = Mock(return_value=True)
+        sync._remember_put = lambda path, key, created: sync.projected.add((path, key, created))
+        record = self.record('oppo')
+        path = Path('fixture-mpay.db')
+        with patch.dict(sys.modules, {'account_list_policy': policy}):
+            key = sync._write_record(path, record, 'h55', 'preserve')
+            args = sync.operate.call_args.kwargs
+            self.assertEqual(args['credentials'], credentials(record.unisdk_cache['h55']['packet'], 'h55')[1])
+            self.assertEqual(args['credentials']['pc_ext_info']['src_app_channel'], 'oppo')
+            self.assertEqual(args['credentials']['pc_ext_info']['src_pay_channel'], 'oppo')
+            self.assertEqual(args['create']['login_channel'], 'oppo')
+            record.expire_unisdk('h55')
+            sync.operate.reset_mock()
+            self.assertIsNone(sync._write_record(path, record, 'h55', 'preserve'))
+            self.assertEqual(sync.operate.call_args.args, (path, 'rename_account'))
+            self.assertIn('已过期', sync.operate.call_args.kwargs['name'])
+            self.assertIn((path, key, True), sync.projected)
+            # A new process has no projection tracking but must still mark the
+            # existing native row expired, without inserting stale credentials.
+            sync.projected.clear()
+            sync.operate.reset_mock()
+            sync.operate.side_effect = [
+                {'accounts': [dict(game_id=key[0], login_channel=key[1], sdkuid=key[2])], 'errors': []},
+                False,
+            ]
+            self.assertIsNone(sync._write_record(path, record, 'h55', 'preserve'))
+            self.assertEqual([call.args[1] for call in sync.operate.call_args_list], ['list_accounts', 'rename_account'])
+            self.assertIn((path, key, False), sync.projected)
+
+    def test_web_issue_failure_updates_persisted_state_native_label_and_toast(self):
+        record = self.record()
+        self.manager.db_sync = Mock()
+        self.manager._credential_failure(record, 'h55', 'test', ValueError('fixture'))
+        self.assertTrue(record.is_login_expired('h55'))
+        self.manager.save_records.assert_called_once()
+        self.manager.db_sync.rename_record.assert_called_once_with(record.uuid, record.name)
+        self.assertIn('已标为过期', self.app.toast.call_args.args[0])
+
+    def test_startup_and_launch_use_identical_shared_preparation(self):
+        namespace = dict(self.namespace, Path=Path)
+        Sync, = source_classes('mpay_db_sync.py', ('MpayDBSync',), namespace)
+        sync = object.__new__(Sync)
+        sync.manager = self.manager
+        sync.stopping = False
+        record = self.record(expires=time.time() + 200)
+        sync._prepare_selected({'h55': [record]})
+        sync._prepare_selected({'h55': [record]})
+        self.assertEqual(record.builds, [])
+
+    def test_late_sauth_recovery_cannot_issue_over_newer_saved_token(self):
+        record = self.record()
+        old = self.auth(record)
+        record.cache_unisdk(packet(token='newer'))
+        self.manager._recover_sauth(record, 'h55', old)
+        self.assertEqual(record.builds, [])
+        self.assertEqual(self.auth(record)['sessionid'], 'newer')
+
+    def test_recovery_reports_written_database_and_native_ui_guidance(self):
+        record = self.record()
+        old = self.auth(record)
+        record.expire_unisdk('h55')
+        self.manager.db_sync = Mock()
+        self.manager.db_sync.refresh_record.return_value = 1
+        self.manager._recover_sauth(record, 'h55', old)
+        self.assertFalse(record.is_login_expired('h55'))
+        self.manager.db_sync.refresh_record.assert_called_once_with(record, 'h55')
+        message = self.app.toast.call_args.args[0]
+        self.assertIn('游戏账号库已更新', message)
+        self.assertIn('原生切换账号', message)
+        self.assertIn('没有入口时重启游戏', message)
+
+    def test_silent_context_no_longer_monkeypatches_requests_or_sets_deadlines(self):
+        original_send = requests.Session.send
+        with self.prefetch_context.prefetch_scope():
+            self.assertTrue(self.prefetch_context.in_prefetch())
+        self.assertFalse(self.prefetch_context.in_prefetch())
+        self.assertIs(requests.Session.send, original_send)
+
+
+if __name__ == '__main__':
+    unittest.main()

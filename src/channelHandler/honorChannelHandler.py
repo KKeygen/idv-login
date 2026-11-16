@@ -151,14 +151,14 @@ class honorChannel(channelmgr.channel):
 
     def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False,
                        cancel_event=None, _session_ready=False):
-        # Only the continuation of a successful interactive login may skip CL.
-        # A separate request always validates, regardless of its cached deadline.
+        # A service-dated game packet can be reused. Only a cache miss/expiry
+        # needs configLogin and, if necessary, recovery through the account ST.
         game = getShortGameId(game_id or self.game_id)
 
         def request(record, allow_interactive):
             if not _session_ready:
                 return super(honorChannel, record).request_unisdk(
-                    game_id, interactive=allow_interactive, force=True, cancel_event=cancel_event)
+                    game_id, interactive=allow_interactive, force=force, cancel_event=cancel_event)
             if cancel_event is not None and cancel_event.is_set():
                 return None
             result = record.get_uniSdk_data(game_id, interactive=False, _session_ready=True)
@@ -181,6 +181,7 @@ class honorChannel(channelmgr.channel):
         clone.unionToken = copy.deepcopy(self.unionToken)
         clone.accountSession = copy.deepcopy(self.accountSession)
         clone.unisdk_cache = copy.deepcopy(self.unisdk_cache)
+        clone.expired_games = list(self.expired_games)
         clone.honorLogin = copy.copy(self.honorLogin)
         clone.honorLogin.accountSession = clone.accountSession
 
@@ -206,6 +207,7 @@ class honorChannel(channelmgr.channel):
                 self.name = clone.name
                 self.observe_sdkuid(clone.active_sdkuid, game)
                 self.unisdk_cache[game] = clone.unisdk_cache[game]
+                self.expired_games = clone.expired_games
                 self.expires_at = None
             elif result is False:
                 self.expire_unisdk(game)
@@ -213,6 +215,8 @@ class honorChannel(channelmgr.channel):
                 if interactive and clone.honorLogin.canReauthorize():
                     self.request_user_login(on_complete=logged_in)
                     return
+            elif isinstance(result, Exception):
+                self.expire_unisdk(game)
             on_complete(result)
 
         def worker():
@@ -290,8 +294,8 @@ class honorChannel(channelmgr.channel):
                 "cv": "a1.5.0",
             }
 
-        # Match game initialization: validate the old token with the server even
-        # when its local cache deadline has not passed, then recover through ST.
+        # The shared entry point has already ruled out a reusable game packet.
+        # Validate/refresh B first; only recover through account ST if needed.
         if not _session_ready and not self._refresh_session():
             self.expire_unisdk(game_id)
             if not interactive or not self.honorLogin.canReauthorize():

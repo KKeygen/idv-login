@@ -149,7 +149,7 @@ class bilibiliChannel(channelmgr.channel):
             if not refreshed_data.get("uid"):
                 return False
             refreshed_data["access_key"] = resp.get("access_key") or access_key
-            refreshed_data["expires"] = resp.get("expires") or int(time.time()) + 30 * 86400
+            refreshed_data["expires"] = resp.get("expires")
             data.update(refreshed_data)
             self.observe_sdkuid(data["uid"])
             if resp.get("uname"):
@@ -234,7 +234,7 @@ class bilibiliChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self.is_token_valid() else False)
 
-        if self.is_token_valid():
+        if not self.is_login_expired(game_id) and self.is_token_valid():
             return _deliver(_build())
         if bool(self._get_login_data() and self._get_login_data().get("access_key")) and self.validate_token_online():
             return _deliver(_build() if self.is_token_valid() else False)
