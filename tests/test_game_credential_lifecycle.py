@@ -44,6 +44,7 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.app.toast = Mock()
         self.app.run_on_main_thread = lambda callback: callback()
         self.app.ui_mgr = Mock()
+        self.app.fever_bridge = None
         utils = types.ModuleType('channelHandler.channelUtils')
         utils.getShortGameId = lambda game: game.split('-g-')[-1]
         utils.cmp_game_id = lambda a, b: utils.getShortGameId(a) == utils.getShortGameId(b)
@@ -93,6 +94,12 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.manager._credential_stop = threading.Event()
         self.manager._credential_thread = None
         self.manager._credential_lock = threading.RLock()
+        self.manager.active_games = Mock()
+        self.manager.active_games.running_game_ids.return_value = {'h55'}
+        policy = types.ModuleType('account_list_policy')
+        policy.AccountListPolicy = lambda manager: types.SimpleNamespace(
+            select=lambda games: {game: list(manager.channels) for game in games})
+        sys.modules['account_list_policy'] = policy
 
     def record(self, channel='huawei', *, expires=None):
         record = self.Record(channel)
@@ -221,6 +228,30 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertEqual(record.builds, ['h55'])
         self.assertFalse(record.is_login_expired('h55'))
         self.assertIn('凭据已保存', self.app.toast.call_args.args[0])
+
+    def test_periodic_refresh_skips_closed_games_and_unselected_accounts(self):
+        chosen, unselected = self.record(), self.record('nearme_vivo')
+        chosen.cache_unisdk(packet(game='g37'))
+        self.manager.prepare_game_credential = Mock(return_value=packet())
+        self.manager.active_games.running_game_ids.return_value = set()
+        self.manager.refresh_short_lived_credentials()
+        self.manager.prepare_game_credential.assert_not_called()
+        self.manager.active_games.running_game_ids.return_value = {'h55'}
+        policy = sys.modules['account_list_policy']
+        select = Mock(return_value={'h55': [chosen]})
+        policy.AccountListPolicy = lambda manager: types.SimpleNamespace(select=select)
+        self.manager.refresh_short_lived_credentials()
+        select.assert_called_once_with({'h55'})
+        self.manager.prepare_game_credential.assert_called_once_with(chosen, 'h55', force=True)
+        self.assertEqual(unselected.builds, [])
+
+    def test_periodic_refresh_includes_live_fever_game_but_not_missing_b(self):
+        chosen = self.record()
+        self.manager.active_games.running_game_ids.return_value = set()
+        self.app.fever_bridge = types.SimpleNamespace(running_game_ids=lambda: {'h55', 'g37'})
+        self.manager.prepare_game_credential = Mock(return_value=packet())
+        self.manager.refresh_short_lived_credentials()
+        self.manager.prepare_game_credential.assert_called_once_with(chosen, 'h55', force=True)
 
     def test_saved_expiry_state_and_service_deadline_survive_restore(self):
         record = self.record('oppo', expires=time.time() + 200)

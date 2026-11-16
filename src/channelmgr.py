@@ -452,6 +452,8 @@ class channel:
 class ChannelManager:
     def __init__(self):
         self.logger = setup_logger()
+        from active_games import ActiveGames
+        self.active_games = ActiveGames(self.logger)
         self._credential_stop = threading.Event()
         self._credential_thread = None
         self._credential_lock = threading.RLock()
@@ -631,11 +633,20 @@ class ChannelManager:
         return packet
 
     def refresh_short_lived_credentials(self):
-        """Refresh saved Huawei/vivo game packets, not unused games or account A."""
-        for record in tuple(self.channels):
-            if record.record_source != 'manual' or record.channel_name not in ('huawei', 'nearme_vivo'):
-                continue
-            for game in tuple(record.unisdk_cache):
+        """Refresh opted-in Huawei/vivo packets only for confirmed running games."""
+        import app_state
+        from account_list_policy import AccountListPolicy
+        games = self.active_games.running_game_ids()
+        if app_state.fever_bridge is not None:
+            games.update(app_state.fever_bridge.running_game_ids())
+        if not games:
+            return
+        for game, records in AccountListPolicy(self).select(games).items():
+            for record in records:
+                if (record.record_source != 'manual'
+                        or record.channel_name not in ('huawei', 'nearme_vivo')
+                        or game not in record.unisdk_cache):
+                    continue
                 if self._credential_stop.is_set():
                     return
                 was_expired = record.is_login_expired(game)
