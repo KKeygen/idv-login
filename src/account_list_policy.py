@@ -271,4 +271,4 @@ class AccountListPolicy:
         label = f'{display} {name}'
         if not self._manual(record):
             return label + '（临时）'
-        return label + ('（已过期）' if expired else '')
+        return label + ('（失效）' if expired else '')

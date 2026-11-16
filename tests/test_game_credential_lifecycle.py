@@ -145,7 +145,7 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertIsNone(self.manager.prepare_game_credential(record, 'g37'))
         self.assertTrue(record.is_login_expired('g37'))
         self.assertFalse(record.is_login_expired('h55'))
-        self.assertIn('已标为过期', self.app.toast.call_args.args[0])
+        self.app.toast.assert_not_called()
         self.manager.save_records.assert_called()
         self.assertEqual(self.app.ui_mgr.method_calls, [])
 
@@ -156,6 +156,7 @@ class CredentialLifecycleTests(unittest.TestCase):
         record.request_unisdk.assert_called_once_with('h55', interactive=False, force=False)
         self.assertTrue(record.is_login_expired('h55'))
         self.assertEqual(self.app.ui_mgr.method_calls, [])
+        self.app.toast.assert_not_called()
 
     def test_explicit_failure_cleared_only_by_new_b_for_same_game(self):
         record = self.record()
@@ -236,7 +237,85 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.manager.refresh_short_lived_credentials()
         self.assertEqual(record.builds, ['h55'])
         self.assertFalse(record.is_login_expired('h55'))
-        self.assertIn('凭据已保存', self.app.toast.call_args.args[0])
+        self.app.toast.assert_not_called()
+
+    def test_many_background_failures_only_mark_and_rename_without_toasts_or_sauth(self):
+        records = [self.record(), self.record('nearme_vivo')]
+        for record in records:
+            record.fail = True
+        self.manager.db_sync = Mock()
+        self.manager.record_sauth = Mock()
+        self.manager.refresh_short_lived_credentials()
+        self.manager.refresh_short_lived_credentials()
+        self.assertTrue(all(record.is_login_expired('h55') for record in records))
+        self.assertEqual(self.manager.db_sync.rename_record.call_count, 4)
+        self.manager.record_sauth.assert_not_called()
+        self.app.toast.assert_not_called()
+        self.assertEqual(self.app.ui_mgr.method_calls, [])
+
+    def test_background_database_failure_stays_silent(self):
+        self.record()
+        self.manager.db_sync = Mock()
+        self.manager.db_sync.refresh_record.side_effect = OSError('fixture locked')
+        self.manager.refresh_short_lived_credentials()
+        self.app.toast.assert_not_called()
+
+    def test_selected_invalid_native_account_prompts_on_attempt_without_server_403(self):
+        record = self.record()
+        auth = self.auth(record)
+        record.fail = True
+        self.manager.prepare_game_credential(record, 'h55', force=True)
+        self.app.toast.assert_not_called()
+        Sync, = source_classes('mpay_db_sync.py', ('MpayDBSync',), dict(self.namespace))
+        sync = object.__new__(Sync)
+        sync.manager = self.manager
+        sync.projected = {('fixture.db', ('h55', 'huawei', 'account'), False)}
+        sync._relogin_expired = Mock(side_effect=lambda *_: self.app.toast('selected invalid account'))
+        self.manager.db_sync = sync
+        # Merely determining the action must not display anything yet.
+        self.assertTrue(callable(sync.intercept_auth(auth)))
+        sync._relogin_expired.assert_not_called()
+        self.app.toast.assert_not_called()
+
+        class Response:
+            @staticmethod
+            def make(status, content, headers):
+                return types.SimpleNamespace(status_code=status, content=content, headers=headers)
+
+        self.app.channels_helper = self.manager
+        namespace = dict(self.namespace, app_state=self.app,
+                         http=types.SimpleNamespace(HTTPFlow=object, Response=Response))
+        tree = ast.parse((SRC / 'mitm_addon.py').read_text())
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'IDVLoginAddon')
+        methods = [node for node in cls.body if isinstance(node, ast.FunctionDef)
+                   and node.name in ('request', '_cancel_login', '_check_uni_sauth_response')]
+        for method in methods:
+            method.decorator_list = []
+        exec(compile(ast.Module(body=methods, type_ignores=[]), 'mitm_addon.py', 'exec'), namespace)
+        owner = types.SimpleNamespace(target_domains={'auth.example'}, auth_status_domain='auth.example',
+            _pending_tool_auth=set(), _cancel_login=namespace['_cancel_login'])
+        flow = types.SimpleNamespace(metadata={}, response=None, request=types.SimpleNamespace(
+            pretty_host='auth.example', path='/sdk/uni_sauth', content=json.dumps(auth).encode()))
+        namespace['request'](owner, flow)
+        self.assertEqual(flow.response.status_code, 200)
+        self.assertEqual(json.loads(flow.response.content)['code'], 401)
+        self.assertTrue(flow.metadata['idv_local_auth_cancel'])
+        sync._relogin_expired.assert_called_once_with(record, 'h55')
+        self.app.toast.assert_called_once()
+        self.manager.record_sauth = Mock()
+        namespace['_check_uni_sauth_response'](owner, flow)
+        self.manager.record_sauth.assert_not_called()
+        self.app.toast.assert_called_once()
+
+    def test_native_account_label_marks_invalid_without_changing_saved_name(self):
+        record = self.record()
+        record.name = 'fixture user'
+        Policy, = source_classes('account_list_policy.py', ('AccountListPolicy',),
+                                 dict(self.namespace, re=__import__('re')))
+        policy = object.__new__(Policy)
+        policy.manager = types.SimpleNamespace(_manual_channel_name=lambda *_: 'huawei')
+        self.assertEqual(policy.account_label(record, expired=True), '华为 fixture user（失效）')
+        self.assertEqual(record.name, 'fixture user')
 
     def test_periodic_refresh_skips_closed_games_and_unselected_accounts(self):
         chosen, unselected = self.record(), self.record('nearme_vivo')
@@ -279,7 +358,7 @@ class CredentialLifecycleTests(unittest.TestCase):
         Sync, credentials = source_classes('mpay_db_sync.py', ('MpayDBSync', 'credentials_from_packet'), namespace)
         policy = types.ModuleType('account_list_policy')
         policy.AccountListPolicy = lambda manager: types.SimpleNamespace(
-            account_label=lambda record, expired=False: record.name + ('[已过期]' if expired else ''))
+            account_label=lambda record, expired=False: record.name + ('[失效]' if expired else ''))
         sync = object.__new__(Sync)
         sync.manager = self.manager
         sync.identity = 'fixture-machine'
@@ -299,7 +378,7 @@ class CredentialLifecycleTests(unittest.TestCase):
             sync.operate.reset_mock()
             self.assertIsNone(sync._write_record(path, record, 'h55', 'preserve'))
             self.assertEqual(sync.operate.call_args.args, (path, 'rename_account'))
-            self.assertIn('已过期', sync.operate.call_args.kwargs['name'])
+            self.assertIn('失效', sync.operate.call_args.kwargs['name'])
             self.assertIn((path, key, True), sync.projected)
             # A new process has no projection tracking but must still mark the
             # existing native row expired, without inserting stale credentials.

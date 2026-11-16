@@ -619,7 +619,7 @@ class ChannelManager:
                 record.report_login_failure(game, 'credentials.save', '过期状态未能保存', save_error)
             record.report_login_failure(game, 'credentials.issue',
                 '游戏登录凭据签发失败，此游戏记录已标为过期。请在账号管理中重新登录。',
-                error, notify=True)
+                error)
             return None
         if self._credential_stop.is_set() or record not in self.channels:
             return None
@@ -627,7 +627,7 @@ class ChannelManager:
             self.save_records()
         except Exception as error:
             record.report_login_failure(game, 'credentials.save',
-                '游戏凭据已获取，但未能保存，请重试。', error, notify=True)
+                '游戏凭据已获取，但未能保存，请重试。', error)
             return None
         return packet
 
@@ -649,21 +649,17 @@ class ChannelManager:
                     continue
                 if self._credential_stop.is_set():
                     return
-                was_expired = record.is_login_expired(game)
                 packet = self.prepare_game_credential(record, game, force=True)
-                written = 0
                 if self.db_sync:
                     try:
                         if packet is not None:
-                            written = self.db_sync.refresh_record(record, game)
+                            self.db_sync.refresh_record(record, game)
                         else:
                             self.db_sync.rename_record(record.uuid, record.name)
                     except Exception as error:
                         record.report_login_failure(game, 'credentials.database',
-                            '游戏账号库未能更新，请关闭游戏后重试同步。', error, notify=True)
+                            '游戏账号库未能更新，请关闭游戏后重试同步。', error)
                         continue
-                if packet is not None and was_expired:
-                    self._notify_credential_ready(written)
 
     def start_credential_refresh(self):
         if self._credential_thread is not None:
