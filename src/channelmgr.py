@@ -452,8 +452,7 @@ class channel:
 class ChannelManager:
     def __init__(self):
         self.logger = setup_logger()
-        from active_games import ActiveGames
-        self.active_games = ActiveGames(self.logger)
+        self.game_helper = None
         self._credential_stop = threading.Event()
         self._credential_thread = None
         self._credential_lock = threading.RLock()
@@ -634,11 +633,12 @@ class ChannelManager:
 
     def refresh_short_lived_credentials(self):
         """Refresh opted-in Huawei/vivo packets only for confirmed running games."""
-        import app_state
         from account_list_policy import AccountListPolicy
-        games = self.active_games.running_game_ids()
-        if app_state.fever_bridge is not None:
-            games.update(app_state.fever_bridge.running_game_ids())
+        if self.game_helper is None:
+            return
+        self.game_helper.update_running_state()
+        games = {getShortGameId(game.game_id) for game in tuple(self.game_helper.games.values())
+                 if game.is_running}
         if not games:
             return
         for game, records in AccountListPolicy(self).select(games).items():

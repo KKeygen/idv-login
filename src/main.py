@@ -1098,6 +1098,7 @@ def setup_network_proxy(proxy_port):
     from cloudRes import CloudRes
 
     game_helper = GameManager()
+    app_state.channels_helper.game_helper = game_helper
     ui_logger = logger
 
     # Platform-specific defaults

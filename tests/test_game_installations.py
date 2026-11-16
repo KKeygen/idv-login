@@ -68,6 +68,7 @@ xxhash.xxh64 = lambda: None
 sys.modules["xxhash"] = xxhash
 
 from gamemgr import Game, GameInstallation, GameManager
+from active_games import ActiveGames
 
 
 class GameInstallationModelTests(unittest.TestCase):
@@ -77,7 +78,47 @@ class GameInstallationModelTests(unittest.TestCase):
         manager._save_lock = threading.RLock()
         manager._save_games = lambda: None
         manager.logger = getattr(game, "logger", None)
+        manager._active_games = ActiveGames(logging.getLogger('game-installation-tests'))
         return manager
+
+    def test_running_state_is_shared_by_game_distributions_and_not_persisted(self):
+        game = Game('fixture-g-h55')
+        game.add_installation('D:/Games/netease.exe', 73)
+        game.add_installation('D:/Games/fever.exe', 134)
+        manager = self._manager(game)
+        manager.note_sdk_process('h55', 123)
+        manager.note_sdk_process('fixture-g-h55', 124)
+        self.assertTrue(game.is_running)
+        with mock.patch('active_games.running_process_ids', return_value={124}):
+            rows = manager.list_games()
+        self.assertTrue(rows[0]['is_running'])
+        self.assertEqual(len(rows[0]['installations']), 2)
+        self.assertNotIn('is_running', game.to_dict())
+        self.assertTrue(all('is_running' not in item for item in game.to_installation_state()['installations'].values()))
+        with mock.patch('active_games.running_process_ids', return_value=set()):
+            manager.update_running_state()
+        self.assertFalse(game.is_running)
+
+    def test_running_state_uses_fever_sessions_and_never_installation_paths(self):
+        game = Game('h55')
+        game.add_installation('D:/Games/dwrg.exe', 73)
+        manager = self._manager(game)
+        bridge = types.SimpleNamespace(running_game_ids=lambda: {'h55'})
+        with mock.patch.object(app_state, 'fever_bridge', bridge), \
+                mock.patch('gamemgr.os.path.exists', side_effect=AssertionError('must not match paths')):
+            manager.update_running_state()
+        self.assertTrue(game.is_running)
+        with mock.patch.object(app_state, 'fever_bridge', None):
+            manager.update_running_state()
+        self.assertFalse(game.is_running)
+
+    def test_invalid_or_hosted_sdk_identity_does_not_mark_game_running(self):
+        game = Game('h55')
+        manager = self._manager(game)
+        manager.note_sdk_process('h55', os.getpid())
+        manager.note_sdk_process('h55', '')
+        manager.note_sdk_process('', 123)
+        self.assertFalse(game.is_running)
 
     def test_legacy_record_migrates_to_one_stable_installation(self):
         legacy = {

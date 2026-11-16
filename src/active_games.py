@@ -39,6 +39,7 @@ class ActiveGames:
             return
         with self._lock:
             self._native[pid] = game
+        return True
 
     def running_game_ids(self):
         with self._lock:

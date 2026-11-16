@@ -94,8 +94,8 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.manager._credential_stop = threading.Event()
         self.manager._credential_thread = None
         self.manager._credential_lock = threading.RLock()
-        self.manager.active_games = Mock()
-        self.manager.active_games.running_game_ids.return_value = {'h55'}
+        self.manager.game_helper = types.SimpleNamespace(update_running_state=Mock(),
+            games={'h55': types.SimpleNamespace(game_id='h55', is_running=True)})
         policy = types.ModuleType('account_list_policy')
         policy.AccountListPolicy = lambda manager: types.SimpleNamespace(
             select=lambda games: {game: list(manager.channels) for game in games})
@@ -147,6 +147,15 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertFalse(record.is_login_expired('h55'))
         self.assertIn('已标为过期', self.app.toast.call_args.args[0])
         self.manager.save_records.assert_called()
+        self.assertEqual(self.app.ui_mgr.method_calls, [])
+
+    def test_startup_preparation_never_requests_interactive_relogin(self):
+        record = self.record('oppo')
+        record.request_unisdk = Mock(return_value=False)
+        self.assertIsNone(self.manager.prepare_game_credential(record, 'h55'))
+        record.request_unisdk.assert_called_once_with('h55', interactive=False, force=False)
+        self.assertTrue(record.is_login_expired('h55'))
+        self.assertEqual(self.app.ui_mgr.method_calls, [])
 
     def test_explicit_failure_cleared_only_by_new_b_for_same_game(self):
         record = self.record()
@@ -233,10 +242,10 @@ class CredentialLifecycleTests(unittest.TestCase):
         chosen, unselected = self.record(), self.record('nearme_vivo')
         chosen.cache_unisdk(packet(game='g37'))
         self.manager.prepare_game_credential = Mock(return_value=packet())
-        self.manager.active_games.running_game_ids.return_value = set()
+        self.manager.game_helper.games['h55'].is_running = False
         self.manager.refresh_short_lived_credentials()
         self.manager.prepare_game_credential.assert_not_called()
-        self.manager.active_games.running_game_ids.return_value = {'h55'}
+        self.manager.game_helper.games['h55'].is_running = True
         policy = sys.modules['account_list_policy']
         select = Mock(return_value={'h55': [chosen]})
         policy.AccountListPolicy = lambda manager: types.SimpleNamespace(select=select)
@@ -245,10 +254,9 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.manager.prepare_game_credential.assert_called_once_with(chosen, 'h55', force=True)
         self.assertEqual(unselected.builds, [])
 
-    def test_periodic_refresh_includes_live_fever_game_but_not_missing_b(self):
+    def test_periodic_refresh_reads_game_model_but_skips_missing_b(self):
         chosen = self.record()
-        self.manager.active_games.running_game_ids.return_value = set()
-        self.app.fever_bridge = types.SimpleNamespace(running_game_ids=lambda: {'h55', 'g37'})
+        self.manager.game_helper.games['g37'] = types.SimpleNamespace(game_id='g37', is_running=True)
         self.manager.prepare_game_credential = Mock(return_value=packet())
         self.manager.refresh_short_lived_credentials()
         self.manager.prepare_game_credential.assert_called_once_with(chosen, 'h55', force=True)

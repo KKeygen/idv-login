@@ -183,15 +183,23 @@ class UCTests(unittest.TestCase):
         rec._build_unisdk_result = Mock(return_value={"fixture": "packet"})
         return rec
 
-    def test_missing_timeout_is_unknown_not_twenty_four_hours(self):
+    def test_missing_timeout_preserves_twenty_four_hour_fallback(self):
         rec = self.record()
         self.assertTrue(rec._store_session({"sid": "fixture-new", "accountId": "fixture-user"}))
-        self.assertEqual(rec.sid_expire_time, 0)
+        self.assertEqual(rec.sid_expire_time, NOW + 86400)
 
     def test_actual_timeout_sets_the_deadline(self):
         rec = self.record()
         self.assertTrue(rec._store_session({"data": {"sid": "fixture-new", "accountId": "fixture-user", "timeout": 123}}))
         self.assertEqual(rec.sid_expire_time, NOW + 123)
+
+    def test_outer_timeout_and_zero_keep_existing_semantics(self):
+        for ttl in (0, 456):
+            with self.subTest(ttl=ttl):
+                rec = self.record()
+                self.assertTrue(rec._store_session({"timeout": ttl, "data": {
+                    "sid": "fixture-new", "accountId": "fixture-user"}}))
+                self.assertEqual(rec.sid_expire_time, NOW + ttl)
 
     def test_unknown_b_uses_refresh_but_dated_fresh_b_is_reused(self):
         for expiry in (0, NOW + 100):
@@ -226,9 +234,9 @@ class OtherCredentialTests(unittest.TestCase):
                 rec.vivoLogin.webLogin.assert_not_called()
                 self.assertEqual(rec.activeAccount.openToken, "fixture-new")
 
-    def test_qq_code_flow_uses_real_expiry_or_unknown_on_both_platforms(self):
+    def test_qq_code_flow_preserves_expiry_and_sixty_day_fallback(self):
         for platform in ("windows", "legacy"):
-            for ttl in (None, 12345):
+            for ttl in (None, 0, 12345):
                 with self.subTest(platform=platform, ttl=ttl):
                     data = {"ret": 0, "accessToken": "fixture-at", "openID": "fixture-id"}
                     if ttl is not None:
@@ -239,11 +247,12 @@ class OtherCredentialTests(unittest.TestCase):
                                      should_verify_ssl=lambda: True)
                     rec = cls()
                     rec.qq_appid, rec.logger = "fixture-app", Mock()
-                    self.assertEqual(rec._exchange_code("fixture-code")["atk_expire"], ttl or 0)
+                    self.assertEqual(rec._exchange_code("fixture-code")["atk_expire"],
+                                     5184000 if ttl is None else ttl)
 
-    def test_qq_implicit_flow_uses_callback_expiry_not_default(self):
+    def test_qq_implicit_flow_preserves_callback_expiry_and_two_hour_fallback(self):
         for platform in ("windows", "legacy"):
-            for ttl in (None, 12345):
+            for ttl in (None, 0, -1, 12345):
                 with self.subTest(platform=platform, ttl=ttl):
                     response = types.SimpleNamespace(status_code=200, json=lambda: {"ret": 0})
                     cls, _ = adapter(f"qqLogin/qqChannel_{platform}.py", "QQLogin", ("_verify_qq_login",),
@@ -253,7 +262,10 @@ class OtherCredentialTests(unittest.TestCase):
                     rec = cls()
                     rec.qq_appid, rec.logger, rec._handle_judge_login = "fixture-app", Mock(), Mock()
                     result = rec._verify_qq_login("fixture-at", "fixture-id", expires_in=ttl)
-                    self.assertEqual(result["atk_expire"], ttl or 0)
+                    if ttl is not None and ttl <= 0:
+                        self.assertIs(result, False)
+                    else:
+                        self.assertEqual(result["atk_expire"], 7200 if ttl is None else ttl)
 
     def test_qihoo_unknown_or_rejected_b_reissues_from_cookie(self):
         for expiry, rejected in ((0, False), (NOW + 1000, False), (NOW + 1000, True)):
@@ -270,16 +282,18 @@ class OtherCredentialTests(unittest.TestCase):
                 self.assertIsInstance(rec.get_uniSdk_data(interactive=False), dict)
                 self.assertEqual(rec.request_user_login.call_count, int(expiry == 0 or rejected))
 
-    def test_qq_unknown_lifetime_is_not_an_invented_deadline(self):
+    def test_qq_preserves_existing_positive_expiry_validation(self):
         cls, _ = adapter("qqChannelHandler.py", "qqChannel", ("is_token_valid",))
         rec = cls()
         rec.session = types.SimpleNamespace(atk="fixture-at", openid="fixture-id", atk_expire=0)
         rec.token_issued_at = 1
-        self.assertTrue(rec.is_token_valid())
+        self.assertFalse(rec.is_token_valid())
         rec.session.atk_expire = 50
         self.assertFalse(rec.is_token_valid())
+        rec.session.atk_expire = NOW + 100
+        self.assertTrue(rec.is_token_valid())
 
-    def test_bilibili_auto_login_missing_expiry_does_not_invent_thirty_days(self):
+    def test_bilibili_auto_login_preserves_thirty_day_fallback(self):
         cls, _ = adapter("bilibiliChannelHandler.py", "bilibiliChannel", ("validate_token_online",),
                          call_auto_login=Mock(return_value={"code": 0, "uid": "fixture-id"}))
         rec = cls()
@@ -288,7 +302,20 @@ class OtherCredentialTests(unittest.TestCase):
         rec.biliLogin = types.SimpleNamespace(game_id="fixture-game", app_key="fixture-app")
         rec.logger, rec.observe_sdkuid = Mock(), Mock()
         self.assertTrue(rec.validate_token_online())
-        self.assertIsNone(data["expires"])
+        self.assertEqual(data["expires"], NOW + 30 * 86400)
+
+    def test_bilibili_auto_login_keeps_response_expiry_and_falsy_fallback(self):
+        for expiry in (0, NOW + 12345):
+            with self.subTest(expiry=expiry):
+                cls, _ = adapter("bilibiliChannelHandler.py", "bilibiliChannel", ("validate_token_online",),
+                                 call_auto_login=Mock(return_value={"code": 0, "uid": "fixture-id", "expires": expiry}))
+                rec = cls()
+                data = {"uid": "fixture-id", "access_key": "fixture-key", "expires": 1}
+                rec._get_login_data = lambda: data
+                rec.biliLogin = types.SimpleNamespace(game_id="fixture-game", app_key="fixture-app")
+                rec.logger, rec.observe_sdkuid = Mock(), Mock()
+                self.assertTrue(rec.validate_token_online())
+                self.assertEqual(data["expires"], expiry or NOW + 30 * 86400)
 
     def test_4399_issues_new_pair_and_preserves_refresh_token(self):
         cls, _ = adapter("m4399ChannelHandler.py", "m4399Channel",

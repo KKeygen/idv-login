@@ -117,14 +117,13 @@ class ActiveGamesTests(unittest.TestCase):
         cls = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                    and any(isinstance(method, ast.FunctionDef) and method.name == 'request' for method in node.body))
         method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == 'request')
-        active = Mock()
+        manager = Mock()
         namespace = dict(http=types.SimpleNamespace(HTTPFlow=object),
-            app_state=types.SimpleNamespace(channels_helper=types.SimpleNamespace(active_games=active)),
             ROLE_NATIVE_GAME='native', ROLE_BRIDGED_GAME='bridged', ROLE_HOSTED_FEVER_MPAY='hosted',
             getShortGameId=lambda game: game.split('-g-')[-1], _request_values=lambda request: request.values)
         exec(compile(ast.Module(body=[method], type_ignores=[]), 'mitm_addon.py', 'exec'), namespace)
         owner = types.SimpleNamespace(target_domains={'mpay.example'}, oversea_domain='oversea.example',
-            _remember_hosted_request=Mock())
+            _remember_hosted_request=Mock(), game_helper=manager)
         request = types.SimpleNamespace(pretty_host='mpay.example', path='/mpay/api/qrcode/image',
             values={'game_id': 'fixture-g-h55', 'process_id': '123'})
         for role in ('native', 'hosted', 'bridged', 'real_fever'):
@@ -132,7 +131,29 @@ class ActiveGamesTests(unittest.TestCase):
             owner._re_device_users_post = Mock(match=lambda path: False)
             owner._re_handle_login = Mock(match=lambda path: False)
             namespace['request'](owner, types.SimpleNamespace(request=request))
-        active.note_native_request.assert_called_once_with('h55', '123')
+        manager.note_sdk_process.assert_called_once_with('fixture-g-h55', '123')
+
+    def test_launcher_api_exposes_shared_game_running_attribute(self):
+        tree = ast.parse((SRC / 'local_handler.py').read_text())
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                   and any(isinstance(method, ast.FunctionDef) and method.name == '_launcher_status' for method in node.body))
+        method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == '_launcher_status')
+        game = types.SimpleNamespace(is_running=False, installations={},
+            get_distribution_options=lambda: [], _normalize_distribution_ids=lambda options: [],
+            get_default_distribution=lambda: -1, get_installation=lambda: None)
+        manager = types.SimpleNamespace(update_running_state=lambda: setattr(game, 'is_running', True),
+            get_existing_game=lambda gid: game, get_game_or_temp=lambda gid: game, list_fever_games=lambda: [])
+        namespace = dict(getShortGameId=lambda value: value,
+            CloudRes=lambda: types.SimpleNamespace(dynamic_game_catalog=types.SimpleNamespace(get_game=lambda gid: {})),
+            safe_exception=lambda *args: None)
+        exec(compile(ast.Module(body=[method], type_ignores=[]), 'local_handler.py', 'exec'), namespace)
+        owner = types.SimpleNamespace(game_helper=manager, logger=Mock(),
+            _pick_launcher_fields=lambda fields: {}, _json_response=lambda status, body: body)
+        with patch.dict(sys.modules, {'nativebridge': types.SimpleNamespace(NativeTaskRegistry=object),
+                                      'gamemgr': types.SimpleNamespace(GameInstallation=object)}):
+            result = namespace['_launcher_status'](owner, {'game_id': 'h55'}, None, 'GET')
+        self.assertTrue(result['success'])
+        self.assertTrue(result['game']['is_running'])
 
 
 if __name__ == '__main__':

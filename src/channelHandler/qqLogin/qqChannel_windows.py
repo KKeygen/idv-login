@@ -124,10 +124,10 @@ class QQLogin:
             rjson["openid"] = openid
         if "atk_expire" not in rjson:
             try:
-                ttl = int(expires_in) if expires_in is not None else 0
+                ttl = int(expires_in) if expires_in is not None else 7200
             except (TypeError, ValueError):
                 return False
-            if ttl < 0:
+            if ttl <= 0:
                 return False
             rjson["atk_expire"] = ttl
         if "pay_token" not in rjson:
@@ -163,7 +163,7 @@ class QQLogin:
             safe_exception(self.logger, "解析 judgeLoginData 失败")
 
     def _exchange_code(self, code, pf=None, pfkey=None):
-        """通过 YSDK /cmd/QQCodeLogin 换取 token，期限以服务响应为准。"""
+        """通过 YSDK /cmd/QQCodeLogin 换取 token，缺期限时沿用 60 天默认值。"""
         import hmac, hashlib, base64, json as _json
         timestamp = str(int(time.time()))
         body = _json.dumps({"appID": self.qq_appid, "loginCode": code})
@@ -200,7 +200,7 @@ class QQLogin:
             "atk": data["accessToken"],
             "openid": data["openID"],
             "pay_token": data.get("payToken"),
-            "atk_expire": int(data.get("expiresIn") or 0),
+            "atk_expire": int(data.get("expiresIn", 5184000)),
             "rtk": data.get("refreshToken"),
             "pf": pf or "",
             "pfKey": pfkey or "",

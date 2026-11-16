@@ -149,7 +149,7 @@ class bilibiliChannel(channelmgr.channel):
             if not refreshed_data.get("uid"):
                 return False
             refreshed_data["access_key"] = resp.get("access_key") or access_key
-            refreshed_data["expires"] = resp.get("expires")
+            refreshed_data["expires"] = resp.get("expires") or int(time.time()) + 30 * 86400
             data.update(refreshed_data)
             self.observe_sdkuid(data["uid"])
             if resp.get("uname"):

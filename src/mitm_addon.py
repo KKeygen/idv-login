@@ -201,11 +201,8 @@ class IDVLoginAddon:
 
         request_role = self._classify_mpay_request(flow)
         if request_role == ROLE_NATIVE_GAME:
-            active = getattr(app_state.channels_helper, 'active_games', None)
-            if active is not None:
-                values = _request_values(flow.request)
-                active.note_native_request(getShortGameId(values.get('game_id', '')),
-                    values.get('process_id'))
+            values = _request_values(flow.request)
+            self.game_helper.note_sdk_process(values.get('game_id', ''), values.get('process_id'))
         if request_role == ROLE_BRIDGED_GAME:
             return
         if request_role == ROLE_HOSTED_FEVER_MPAY:

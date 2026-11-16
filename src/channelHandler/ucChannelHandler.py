@@ -139,15 +139,15 @@ class ucChannel(channelmgr.channel):
         data = session_data.get("data", session_data)
         if not isinstance(data, dict) or not data.get("sid") or not (data.get("accountId") or data.get("ucid")):
             return False
-        timeout = int(data.get("timeout", session_data.get("timeout")) or 0)
+        timeout = int(data.get("timeout", session_data.get("timeout", 86400)))
         self.ucSession = session_data
         self.observe_sdkuid(data.get("accountId") or data.get("ucid"))
         # 提取 refreshToken
         rt = data.get("refreshToken") or session_data.get("refreshToken", "")
         if rt:
             self.refreshToken = rt
-        # Only a service-supplied positive duration establishes B's deadline.
-        self.sid_expire_time = int(time.time()) + timeout if timeout > 0 else 0
+        # 计算 sid 过期时间（timeout 是持续秒数，默认 86400 = 24h）
+        self.sid_expire_time = int(time.time()) + int(timeout)
         data = self._get_session_data()
         if data:
             # SMS 登录响应中 mobile 字段为脱敏手机号，优先用作显示名
