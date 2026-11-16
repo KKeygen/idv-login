@@ -506,6 +506,25 @@ class Game:
                 return matching
         return next(iter(self.installations.values()), None)
 
+    def get_installation_display_name(self, installation_id: str = "") -> str:
+        """Use the selected distribution's name without delaying launch for a fetch."""
+        installation = self.get_installation(installation_id)
+        if installation is None or installation.distribution_id == -1:
+            return self.name or self.game_id
+        dist_id = installation.distribution_id
+        cache = genv.get("launcher_data_cache", {})
+        launcher_data = {}
+        if isinstance(cache, dict):
+            launcher_data = cache.get(self._distribution_cache_key(dist_id), {})
+            if not launcher_data and self._distribution_source(dist_id) == "cn":
+                launcher_data = cache.get(str(dist_id), {})
+        if isinstance(launcher_data, dict):
+            name = launcher_data.get("display_name") or launcher_data.get("app_name")
+            if name:
+                return name
+        # The shared game name may belong to another distribution imported last.
+        return f"{self.game_id}（分发 {dist_id}）"
+
     def _merge_legacy_projection(
         self,
         path: str,
@@ -1133,24 +1152,10 @@ class Game:
         try:
             import win32com.client
             
-            # 获取游戏名称
-            name_from_launcher = ""
-            if genv.get("launcher_data_cache", {}) and isinstance(genv.get("launcher_data_cache", {}), dict):
-                launcher_cache = genv.get("launcher_data_cache", {})
-                launcher_data = launcher_cache.get(
-                    self._distribution_cache_key(self.default_distribution), {}
-                )
-                if not launcher_data and self._distribution_source(self.default_distribution) == "cn":
-                    launcher_data = launcher_cache.get(str(self.default_distribution), {})
-                if isinstance(launcher_data, dict):
-                    display_name = launcher_data.get("display_name", "")
-                    if display_name:
-                        name_from_launcher = display_name
-            name = name_from_launcher if name_from_launcher else (self.name if self.name else self.game_id)
-            name = f"{name}(IDV-LOGIN)"
+            installation = self.get_installation(installation_id)
+            name = f"{self.get_installation_display_name(installation_id)}(IDV-LOGIN)"
             
             shell = win32com.client.Dispatch("WScript.Shell")
-            installation = self.get_installation(installation_id)
             if installation:
                 uri_arg = (
                     f'idvlogin://start?game_id={self.game_id}'

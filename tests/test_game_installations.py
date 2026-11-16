@@ -1,3 +1,4 @@
+import ast
 import os
 import sys
 import tempfile
@@ -80,6 +81,106 @@ class GameInstallationModelTests(unittest.TestCase):
         manager.logger = getattr(game, "logger", None)
         manager._active_games = ActiveGames(logging.getLogger('game-installation-tests'))
         return manager
+
+    def _shortcut_game(self):
+        # Importing the trial distribution last can set this shared game name.
+        game = Game("h55", name="第五人格共研服")
+        game.add_installation("D:/Normal/dwrg.exe", 73, installation_id="normal")
+        game.add_installation("D:/Trial/dwrg.exe", 134, installation_id="trial")
+        return game
+
+    def test_installation_names_ignore_shared_game_name(self):
+        game = self._shortcut_game()
+        cache = {"cn:73": {"display_name": "第五人格"},
+                 "cn:134": {"display_name": "第五人格共研服"}}
+        with mock.patch.dict(_genv_store, {"launcher_data_cache": cache}, clear=True), \
+                mock.patch.object(Game, "_distribution_source", return_value="cn"), \
+                mock.patch.object(game, "get_launcher_data_for_distribution") as fetch:
+            self.assertEqual(game.get_installation_display_name("normal"), "第五人格")
+            self.assertEqual(game.get_installation_display_name("trial"), "第五人格共研服")
+            fetch.assert_not_called()
+
+    def test_installation_names_support_legacy_and_app_name_cache(self):
+        game = self._shortcut_game()
+        with mock.patch.dict(_genv_store, {"launcher_data_cache": {
+                "73": {"app_name": "第五人格"}}}, clear=True), \
+                mock.patch.object(Game, "_distribution_source", return_value="cn"):
+            self.assertEqual(game.get_installation_display_name("normal"), "第五人格")
+
+    def test_installation_name_fallback_does_not_borrow_another_distribution(self):
+        game = self._shortcut_game()
+        for cache in ({}, None, {"cn:73": "bad"}, {"cn:134": {"display_name": "共研服"}}):
+            with self.subTest(cache=cache), \
+                    mock.patch.dict(_genv_store, {"launcher_data_cache": cache}, clear=True), \
+                    mock.patch.object(Game, "_distribution_source", return_value="cn"):
+                self.assertEqual(game.get_installation_display_name("normal"), "h55（分发 73）")
+        with mock.patch.dict(_genv_store, {"launcher_data_cache": {
+                "73": {"display_name": "国内分发"}}}, clear=True), \
+                mock.patch.object(Game, "_distribution_source", return_value="oversea"):
+            self.assertEqual(game.get_installation_display_name("normal"), "h55（分发 73）")
+
+    def test_unclassified_installation_keeps_game_name(self):
+        game = Game("h55", name="第五人格")
+        installation = game.add_installation("D:/Manual/dwrg.exe")
+        self.assertEqual(game.get_installation_display_name(installation.installation_id), "第五人格")
+
+    def test_shortcut_uses_selected_distribution_name_without_changing_target(self):
+        game = self._shortcut_game()
+        cache = {"cn:73": {"display_name": "第五人格"},
+                 "cn:134": {"display_name": "第五人格共研服"}}
+        client = types.ModuleType("win32com.client")
+        com = types.ModuleType("win32com")
+        com.client = client
+        for iid, expected in (("normal", "第五人格"), ("trial", "第五人格共研服")):
+            link = mock.Mock()
+            client.Dispatch = mock.Mock(return_value=types.SimpleNamespace(CreateShortCut=lambda path: link))
+            with self.subTest(installation=iid), \
+                    mock.patch.dict(_genv_store, {"launcher_data_cache": cache}, clear=True), \
+                    mock.patch.dict(sys.modules, {"win32com": com, "win32com.client": client}), \
+                    mock.patch("gamemgr.sys", types.SimpleNamespace(platform="win32")), \
+                    mock.patch("gamemgr.os.path.exists", return_value=True), \
+                    mock.patch("ctypes.create_unicode_buffer", return_value=types.SimpleNamespace(value="C:/Desktop")), \
+                    mock.patch("ctypes.windll", create=True), \
+                    mock.patch.object(Game, "_distribution_source", return_value="cn"), \
+                    mock.patch.object(game, "_find_existing_tool_launch_shortcut", return_value="") as existing, \
+                    mock.patch.object(game, "_build_unique_shortcut_path", return_value="C:/Desktop/test.lnk") as name:
+                icon = game.get_installation(iid).path
+                self.assertTrue(game.create_tool_launch_shortcut(icon, iid))
+                self.assertEqual(name.call_args.args[1], expected + "(IDV-LOGIN)")
+                self.assertEqual(link.Description, "通过登录助手启动 " + expected + "(IDV-LOGIN)")
+                self.assertEqual(link.Arguments, f'--uri "idvlogin://start?game_id=h55&installation_id={iid}"')
+                self.assertEqual(link.Targetpath, existing.call_args.args[1])
+                self.assertEqual(link.IconLocation, icon + ",0")
+                link.save.assert_called_once()
+
+    def test_cold_and_warm_launch_logs_use_the_selected_installation(self):
+        tree = ast.parse((REPO_ROOT / "src/main.py").read_text(encoding="utf-8"))
+        setup = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "setup_network_proxy")
+        cold = next(n for n in setup.body if isinstance(n, ast.If)
+                    and ast.unparse(n.test) == "proxy_mode == 'compat'"
+                    and any(isinstance(x, ast.If) and "uri_action" in ast.unparse(x.test) for x in n.body))
+        warm = next(n for n in setup.body if isinstance(n, ast.FunctionDef) and n.name == "_on_uri_signal")
+        game = self._shortcut_game()
+        cache = {"cn:73": {"display_name": "第五人格"},
+                 "cn:134": {"display_name": "第五人格共研服"}}
+        with mock.patch.dict(_genv_store, {"launcher_data_cache": cache}, clear=True), \
+                mock.patch.object(Game, "_distribution_source", return_value="cn"), \
+                mock.patch.object(game, "start") as start:
+            for iid, expected in (("normal", "第五人格"), ("trial", "第五人格共研服")):
+                for mode in ("compat", "process", "global", "signal"):
+                    with self.subTest(installation=iid, mode=mode):
+                        logger = mock.Mock()
+                        scope = {"proxy_mode": mode, "uri_action": "start", "uri_game_id": "h55",
+                                 "uri_installation_id": iid, "auto_games": [], "logger": logger,
+                                 "game_helper": types.SimpleNamespace(get_game=lambda gid: game),
+                                 "user_notice": lambda *a, **k: None, "genv": envmgr.genv}
+                        node = warm if mode == "signal" else cold
+                        exec(compile(ast.Module(body=[node], type_ignores=[]), "launch-test", "exec"), scope)
+                        if mode == "signal":
+                            scope["_on_uri_signal"]("start", "h55", iid)
+                        prefix = "通过信号启动游戏: " if mode == "signal" else "通过快捷方式启动游戏: "
+                        logger.info.assert_any_call(prefix + expected)
+                        start.assert_called_with(iid)
 
     def test_running_state_is_shared_by_game_distributions_and_not_persisted(self):
         game = Game('fixture-g-h55')
