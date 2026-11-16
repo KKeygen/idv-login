@@ -395,9 +395,7 @@ class IDVLoginAddon:
         if success:
             if self.game_helper.get_auto_close_setting(key[0]):
                 self._trigger_auto_close()
-        elif matched:
-            self.logger.debug('game={} channel={} stage=sauth.result 登录未成功，已处理对应凭据状态与提示', key[0], key[1])
-        else:
+        elif not matched:
             if manager:
                 manager.confirm_sauth_relogin(data, details)
             else:

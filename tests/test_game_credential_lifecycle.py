@@ -211,7 +211,7 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertTrue(self.manager.record_sauth(dict(self.auth(record), sessionid='old'), False))
         self.assertFalse(record.is_login_expired('h55'))
         self.manager.db_sync.refresh_record.assert_not_called()
-        self.assertIn('凭据不同', self.sauth_feedback.confirm_relogin.call_args.kwargs['note'])
+        self.assertIn('账号已更新', self.sauth_feedback.confirm_relogin.call_args.kwargs['note'])
         self.sauth_feedback.confirm_relogin.call_args.args[2]()
         self.manager.db_sync.refresh_record.assert_called_once_with(record, 'h55')
         self.app.toast.assert_not_called()
@@ -272,6 +272,19 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.manager.refresh_short_lived_credentials()
         self.app.toast.assert_not_called()
 
+    def test_issuance_and_save_exceptions_do_not_stop_other_background_accounts(self):
+        failed, healthy = self.record(), self.record('nearme_vivo')
+        failed.get_uniSdk_data = Mock(side_effect=ValueError('fixture issuance failure'))
+        self.manager.save_records.side_effect = [OSError('fixture save failure'), None]
+        self.manager.db_sync = Mock()
+        self.manager.refresh_short_lived_credentials()
+        self.assertTrue(failed.is_login_expired('h55'))
+        self.assertEqual(healthy.builds, ['h55'])
+        self.manager.db_sync.rename_record.assert_called_once_with(failed.uuid, failed.name)
+        self.manager.db_sync.refresh_record.assert_called_once_with(healthy, 'h55')
+        self.app.toast.assert_not_called()
+        self.sauth_feedback.confirm_relogin.assert_not_called()
+
     def test_selected_invalid_native_account_prompts_on_attempt_without_server_403(self):
         record = self.record()
         auth = self.auth(record)
@@ -314,7 +327,7 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertTrue(flow.metadata['idv_local_auth_cancel'])
         self.manager.confirm_sauth_relogin.assert_called_once()
         self.assertEqual(self.manager.confirm_sauth_relogin.call_args.args[0], auth)
-        self.assertIn('本地拦截', self.manager.confirm_sauth_relogin.call_args.args[1])
+        self.assertIn('登录已过期', self.manager.confirm_sauth_relogin.call_args.args[1])
         self.assertIn('code: 401', self.manager.confirm_sauth_relogin.call_args.args[1])
         self.app.toast.assert_not_called()
         self.manager.record_sauth = Mock()
@@ -330,7 +343,7 @@ class CredentialLifecycleTests(unittest.TestCase):
                                  dict(self.namespace, re=__import__('re')))
         policy = object.__new__(Policy)
         policy.manager = types.SimpleNamespace(_manual_channel_name=lambda *_: 'huawei')
-        self.assertEqual(policy.account_label(record, expired=True), '华为 fixture user（失效）')
+        self.assertEqual(policy.account_label(record, expired=True), '华为 fixture user（已过期）')
         self.assertEqual(record.name, 'fixture user')
 
     def test_periodic_refresh_skips_closed_games_and_unselected_accounts(self):
@@ -487,7 +500,7 @@ class CredentialLifecycleTests(unittest.TestCase):
             self.sauth_feedback.confirm_relogin.call_args.args[2]()
             worker.assert_not_called()
         self.assertEqual(self.app.ui_mgr.method_calls, [])
-        self.assertIn('游戏原生登录窗口', self.sauth_feedback.show_message.call_args.args[1])
+        self.assertIn('游戏登录窗口重新扫码', self.sauth_feedback.show_message.call_args.args[1])
         self.sauth_feedback.relogin_succeeded.assert_not_called()
         self.assertFalse(self.manager.record_sauth(dict(auth, sdkuid='different'), True))
         self.sauth_feedback.relogin_succeeded.assert_not_called()

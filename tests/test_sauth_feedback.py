@@ -46,10 +46,11 @@ class DetailsTests(unittest.TestCase):
         self.assertIn('code: 403', text)
         self.assertNotIn('not-an-error-field', text)
 
-    def test_local_failure_is_labelled_not_mistaken_for_remote_403(self):
+    def test_local_failure_keeps_codes_without_implementation_details(self):
         text = feedback.failure_details(200, {'code': 401, 'subcode': 1}, local=True)
-        self.assertIn('本地拦截', text)
-        self.assertIn('未发送到认证服务器', text)
+        self.assertIn('登录已过期', text)
+        self.assertNotIn('拦截', text)
+        self.assertNotIn('认证服务器', text)
         self.assertNotIn('403', text)
 
     def test_proxy_passes_error_details_and_keeps_existing_logging(self):

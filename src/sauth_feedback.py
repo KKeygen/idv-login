@@ -9,7 +9,7 @@ _dialogs = {}
 def failure_details(http_status, payload, *, local=False):
     """Display server error fields, with optional Base64 UTF-8 decoding."""
     payload = payload if isinstance(payload, dict) else {}
-    lines = ['本地拦截（未发送到认证服务器）' if local else '游戏登录认证失败']
+    lines = ['登录已过期' if local else '游戏登录失败']
     for label, value in (('HTTP', http_status), ('code', payload.get('code')),
                          ('subcode', payload.get('subcode'))):
         if type(value) in (int, str):
