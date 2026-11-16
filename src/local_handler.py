@@ -935,6 +935,7 @@ class LocalRequestHandler:
         try:
             from nativebridge import NativeTaskRegistry
 
+            self.game_helper.update_running_state()
             gid = args["game_id"]
             short_gid = getShortGameId(gid)
             catalog_item = CloudRes().dynamic_game_catalog.get_game(short_gid) or {}
@@ -1043,6 +1044,7 @@ class LocalRequestHandler:
                 "catalog_app_id": catalog_item.get("catalog_app_id"),
                 "launcher": self._pick_launcher_fields(catalog_item.get("launcher")),
                 "game": {
+                    "is_running": bool(game and game.is_running),
                     "default_distribution": game.get_default_distribution() if game else -1,
                     "installation": game.get_installation().get_non_sensitive_data()
                     if game and game.get_installation() else None,

@@ -431,6 +431,7 @@ class Game:
         account_switching=None,
     ) -> None:
         self.game_id = game_id
+        self.is_running = False  # Runtime-only, shared by every distribution of this game.
         self.account_switching = dict(account_switching) if isinstance(account_switching, dict) else {}
         self.name = name if name else game_id
         self.should_auto_start = should_auto_start
@@ -504,6 +505,25 @@ class Game:
             if matching is not None:
                 return matching
         return next(iter(self.installations.values()), None)
+
+    def get_installation_display_name(self, installation_id: str = "") -> str:
+        """Use the selected distribution's name without delaying launch for a fetch."""
+        installation = self.get_installation(installation_id)
+        if installation is None or installation.distribution_id == -1:
+            return self.name or self.game_id
+        dist_id = installation.distribution_id
+        cache = genv.get("launcher_data_cache", {})
+        launcher_data = {}
+        if isinstance(cache, dict):
+            launcher_data = cache.get(self._distribution_cache_key(dist_id), {})
+            if not launcher_data and self._distribution_source(dist_id) == "cn":
+                launcher_data = cache.get(str(dist_id), {})
+        if isinstance(launcher_data, dict):
+            name = launcher_data.get("display_name") or launcher_data.get("app_name")
+            if name:
+                return name
+        # The shared game name may belong to another distribution imported last.
+        return f"{self.game_id}（分发 {dist_id}）"
 
     def _merge_legacy_projection(
         self,
@@ -818,6 +838,7 @@ class Game:
     def get_non_sensitive_data(self) -> dict:
         return {
             "game_id": self.game_id,
+            "is_running": self.is_running,
             "name": self.name,
             "last_used_time": self.last_used_time,
             "should_auto_start": self.should_auto_start,
@@ -1131,24 +1152,10 @@ class Game:
         try:
             import win32com.client
             
-            # 获取游戏名称
-            name_from_launcher = ""
-            if genv.get("launcher_data_cache", {}) and isinstance(genv.get("launcher_data_cache", {}), dict):
-                launcher_cache = genv.get("launcher_data_cache", {})
-                launcher_data = launcher_cache.get(
-                    self._distribution_cache_key(self.default_distribution), {}
-                )
-                if not launcher_data and self._distribution_source(self.default_distribution) == "cn":
-                    launcher_data = launcher_cache.get(str(self.default_distribution), {})
-                if isinstance(launcher_data, dict):
-                    display_name = launcher_data.get("display_name", "")
-                    if display_name:
-                        name_from_launcher = display_name
-            name = name_from_launcher if name_from_launcher else (self.name if self.name else self.game_id)
-            name = f"{name}(IDV-LOGIN)"
+            installation = self.get_installation(installation_id)
+            name = f"{self.get_installation_display_name(installation_id)}(IDV-LOGIN)"
             
             shell = win32com.client.Dispatch("WScript.Shell")
-            installation = self.get_installation(installation_id)
             if installation:
                 uri_arg = (
                     f'idvlogin://start?game_id={self.game_id}'
@@ -1759,6 +1766,8 @@ class GameManager:
     
     def __init__(self):
         self.logger = setup_logger()
+        from active_games import ActiveGames
+        self._active_games = ActiveGames(self.logger)
         self.games: Dict[str, Game] = {}
         self._save_lock = threading.RLock()
         self._fever_import_thread = None
@@ -1904,8 +1913,25 @@ class GameManager:
             return game
         return Game(game_id=game_id)
 
+    def note_sdk_process(self, game_id, process_id):
+        """Bind SDK-reported identity to the title, not a particular installation."""
+        short = getShortGameId(game_id)
+        if self._active_games.note_native_request(short, process_id):
+            game = self.get_existing_game(short)
+            if game is not None:
+                game.is_running = True
+
+    def update_running_state(self):
+        running = self._active_games.running_game_ids()
+        if app_state.fever_bridge is not None:
+            running.update(app_state.fever_bridge.running_game_ids())
+        with self._save_lock:
+            for game in self.games.values():
+                game.is_running = getShortGameId(game.game_id) in running
+
     def list_games(self) -> List[dict]:
         """列出所有已保存的游戏信息"""
+        self.update_running_state()
         return sorted(
             [game.get_non_sensitive_data() for game in self.games.values()],
             key=lambda x: x["last_used_time"],

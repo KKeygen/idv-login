@@ -182,6 +182,8 @@ def handle_exit():
                 safe_exception(logger, "停止平台托管登录失败")
         app_state.fever_bridge = None
 
+    if app_state.channels_helper:
+        app_state.channels_helper.stop_credential_refresh()
     if app_state.channels_helper and app_state.channels_helper.db_sync:
         try:
             app_state.channels_helper.db_sync.shutdown()
@@ -1096,6 +1098,7 @@ def setup_network_proxy(proxy_port):
     from cloudRes import CloudRes
 
     game_helper = GameManager()
+    app_state.channels_helper.game_helper = game_helper
     ui_logger = logger
 
     # Platform-specific defaults
@@ -1219,14 +1222,13 @@ def setup_network_proxy(proxy_port):
             log_failure(logger, "游戏内账号列表工件不可用；保留原渠道登录功能，等待匹配的工件", error)
         else:
             app_state.channels_helper.db_sync = db_sync
-            from prefetch_context import install_request_deadline
-            install_request_deadline()
             # DNS overrides must exist before any automatic game launch.
             try:
                 db_sync.refresh_startup()
             except Exception as error:
                 from mpay_db_sync import log_failure
                 log_failure(logger, "游戏内账号列表启动更新未完成；保留退出清理和原登录功能", error)
+    app_state.channels_helper.start_credential_refresh()
     game_helper.start_fever_auto_import()
 
     # Register the URI scheme so QR code redirects open our Qt window
@@ -1253,7 +1255,7 @@ def setup_network_proxy(proxy_port):
         elif action == "start" and game_id:
             game = game_helper.get_game(game_id)
             if game:
-                logger.info(f"通过信号启动游戏: {game.name or game_id}")
+                logger.info(f"通过信号启动游戏: {game.get_installation_display_name(installation_id)}")
                 game.start(installation_id)
             else:
                 logger.warning(f"信号指定的游戏未找到: {game_id}")
@@ -1281,7 +1283,7 @@ def setup_network_proxy(proxy_port):
         if uri_action == "start" and uri_game_id:
             game = game_helper.get_game(uri_game_id)
             if game:
-                logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
+                logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
                 game.start(uri_installation_id)
             else:
                 logger.warning(f"未找到游戏: {uri_game_id}")
@@ -1299,7 +1301,7 @@ def setup_network_proxy(proxy_port):
         # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
         game = game_helper.get_game(uri_game_id)
         if game:
-            logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
+            logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
             game.start(uri_installation_id)
         else:
             logger.warning(f"未找到游戏: {uri_game_id}")

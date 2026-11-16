@@ -234,7 +234,7 @@ class bilibiliChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self.is_token_valid() else False)
 
-        if self.is_token_valid():
+        if not self.is_login_expired(game_id) and self.is_token_valid():
             return _deliver(_build())
         if bool(self._get_login_data() and self._get_login_data().get("access_key")) and self.validate_token_online():
             return _deliver(_build() if self.is_token_valid() else False)

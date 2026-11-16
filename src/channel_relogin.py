@@ -21,6 +21,11 @@ def cancel_web_login(task_id):
 
 def start_honor_relogin(record, game):
     """已有荣耀账号沿重登页就地重建账号态，不新增导入记录。"""
+    start_channel_relogin(record, game)
+
+
+def start_channel_relogin(record, game):
+    """Open the existing targeted login page, including without the DB plugin."""
     manager = app_state.channels_helper
     sync = getattr(manager, 'db_sync', None)
     tasks = sync._relogin_tasks if sync is not None else getattr(manager, '_honor_relogin_tasks', {})
@@ -82,7 +87,6 @@ class ExpiredChannelLogin:
             self.try_silent = False
             self._restore_honor_session()
             return
-        app_state.toast('账号登录已过期，请完成渠道重新登录；完成后需重启游戏。', duration=7000)
         try:
             if app_state.ui_mgr is None:
                 raise RuntimeError('账号管理页面不可用')
@@ -214,6 +218,15 @@ class ExpiredChannelLogin:
             return
         self.packet_received = True
         if not isinstance(packet, dict):
+            if packet is not None:
+                self.record.expire_unisdk(self.game)
+                try:
+                    self.manager.save_records()
+                    if self.sync is not None:
+                        self.sync.rename_record(self.record.uuid, self.record.name)
+                except Exception as error:
+                    self.record.report_login_failure(self.game, 'relogin.expired',
+                        '过期标记未能完整保存', error)
             self._finish(packet if packet is None or isinstance(packet, Exception) else False)
             return
         if not self._available():
@@ -237,7 +250,7 @@ class ExpiredChannelLogin:
         self.success = result is True
         self.cancelled = result is None
         if result is True:
-            self.message = '渠道重新登录已完成，登录凭据已保存。请重启游戏后再登录。'
+            self.message = '重新登录成功，请你重新打开游戏'
         elif result is None:
             self.message = '已取消渠道重新登录，账号尚未恢复。可再次点击游戏登录重试。'
         else:
@@ -245,8 +258,11 @@ class ExpiredChannelLogin:
         self.on_finished()
         if not notify:
             return
-        if result is True or result is None:
-            app_state.toast(self.message, duration=10000 if result is True else 6000)
+        if result is True:
+            from sauth_feedback import relogin_succeeded
+            relogin_succeeded()
+        elif result is None:
+            app_state.toast(self.message, duration=6000)
         else:
             self.record.report_login_failure(self.game, 'sauth.relogin', self.message,
                 result if isinstance(result, Exception) else None, notify=True)

@@ -10,8 +10,8 @@ from urllib.parse import unquote
 from channelHandler.channelUtils import getShortGameId
 
 
-def packet_identity(packet):
-    """Read actual SAUTH identity; error text names fields, never their values."""
+def packet_auth(packet):
+    """Decode a saved packet's actual SAUTH body, without logging credentials."""
     if not isinstance(packet, dict):
         raise ValueError('field=packet: expected object')
     extra = packet.get('extra_unisdk_data')
@@ -31,6 +31,12 @@ def packet_identity(packet):
         raise ValueError('field=SAUTH_JSON: invalid base64/JSON') from error
     if not isinstance(auth, dict):
         raise ValueError('field=SAUTH_JSON: expected object')
+    return auth
+
+
+def packet_identity(packet):
+    """Read actual SAUTH identity; error text names fields, never their values."""
+    auth = packet_auth(packet)
     for field in ('gameid', 'login_channel'):
         value = auth.get(field)
         if not isinstance(value, str) or not value or '\0' in value:
@@ -76,8 +82,7 @@ def unisdk_expires_at(entry):
     deadlines = [entry.get('expires_at')]
     packet = entry['packet']
     if packet['login_channel'] == 'huawei':
-        extra = json.loads(packet['extra_unisdk_data'])
-        auth = json.loads(base64.b64decode(unquote(extra['SAUTH_JSON'])))
+        auth = packet_auth(packet)
         deadlines.append(int(auth['timestamp']) / 1000 + 300)
     return min((value for value in deadlines if value is not None), default=None)
 
@@ -110,6 +115,10 @@ def credential_expires_at(record):
         value = attrs.get('sid_expire_time')
     elif channel in ('qihoo', '360_assistant'):
         value = attrs.get('token_expire_time')
+    elif channel == 'lenovo_open':
+        session = attrs.get('lenovoSession') or {}
+        if session.get('st_ttl') and session.get('st_issued_at'):
+            value = int(session['st_issued_at']) + int(session['st_ttl'])
     try:
         return int(value) if value is not None and int(value) > 0 else None
     except (TypeError, ValueError, OverflowError):
