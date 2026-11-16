@@ -205,7 +205,7 @@ class IDVLoginAddon:
             if active is not None:
                 values = _request_values(flow.request)
                 active.note_native_request(getShortGameId(values.get('game_id', '')),
-                    values.get('process_id'), getattr(flow.request, 'timestamp_start', None))
+                    values.get('process_id'))
         if request_role == ROLE_BRIDGED_GAME:
             return
         if request_role == ROLE_HOSTED_FEVER_MPAY:

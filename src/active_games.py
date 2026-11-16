@@ -1,36 +1,27 @@
 """Games observed through MPay, without opening game processes or reading paths."""
+import ctypes
 import os
 import sys
 import threading
-import time
-from datetime import datetime, timedelta, timezone
 
 
-def _creation_time(value):
-    """WMI's DMTF timestamp includes microseconds and its UTC offset in minutes."""
-    value = str(value)
-    if len(value) != 25 or value[21] not in '+-' or '*' in value:
-        raise ValueError('Unknown process creation time')
-    offset = int(value[22:]) * (1 if value[21] == '+' else -1)
-    return datetime.strptime(value[:21], '%Y%m%d%H%M%S.%f').replace(
-        tzinfo=timezone(timedelta(minutes=offset))).timestamp()
-
-
-def process_creation_times(pids):
-    """Query only PID and creation time through WMI, not process handles/names/paths."""
-    if sys.platform != 'win32' or not pids:
-        return {}
-    import comtypes
-    from comtypes.client import CreateObject
-    comtypes.CoInitialize()
-    try:
-        locator = CreateObject('WbemScripting.SWbemLocator', dynamic=True)
-        service = locator.ConnectServer('.', r'root\cimv2')
-        where = ' OR '.join(f'ProcessId={int(pid)}' for pid in sorted(pids))
-        rows = service.ExecQuery('SELECT ProcessId, CreationDate FROM Win32_Process WHERE ' + where)
-        return {int(row.ProcessId): _creation_time(row.CreationDate) for row in rows}
-    finally:
-        comtypes.CoUninitialize()
+def running_process_ids():
+    """EnumProcesses returns IDs only; it does not open any process handle."""
+    if sys.platform != 'win32':
+        return set()
+    enum = ctypes.WinDLL('psapi', use_last_error=True).EnumProcesses
+    dword = ctypes.c_uint32
+    enum.argtypes = [ctypes.POINTER(dword), dword, ctypes.POINTER(dword)]
+    enum.restype = ctypes.c_int
+    size = 1024
+    while True:
+        buffer = (dword * size)()
+        needed = dword()
+        if not enum(buffer, ctypes.sizeof(buffer), ctypes.byref(needed)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if needed.value < ctypes.sizeof(buffer):
+            return set(buffer[:needed.value // ctypes.sizeof(dword)])
+        size *= 2
 
 
 class ActiveGames:
@@ -39,7 +30,7 @@ class ActiveGames:
         self._lock = threading.Lock()
         self._native = {}
 
-    def note_native_request(self, game, process_id, observed_at=None):
+    def note_native_request(self, game, process_id):
         try:
             pid = int(process_id)
         except (TypeError, ValueError):
@@ -47,7 +38,7 @@ class ActiveGames:
         if not game or pid <= 0 or pid == os.getpid():
             return
         with self._lock:
-            self._native[(game, pid)] = time.time() if observed_at is None else float(observed_at)
+            self._native[pid] = game
 
     def running_game_ids(self):
         with self._lock:
@@ -55,18 +46,15 @@ class ActiveGames:
         if not observed:
             return set()
         try:
-            created = process_creation_times({pid for _, pid in observed})
+            alive = running_process_ids()
         except Exception as error:
             self.logger.debug('无法确认原生游戏是否仍在运行，本轮不刷新其凭据: {}', type(error).__name__)
             return set()
         running = set()
         with self._lock:
-            for key, seen_at in observed.items():
-                game, pid = key
-                # Reject PID reuse after the request was observed. No WMI work
-                # is needed on the proxy's request thread.
-                if pid in created and created[pid] <= seen_at:
+            for pid, game in observed.items():
+                if pid in alive:
                     running.add(game)
-                elif self._native.get(key) == seen_at:
-                    self._native.pop(key, None)
+                elif self._native.get(pid) == game:
+                    self._native.pop(pid, None)
         return running
