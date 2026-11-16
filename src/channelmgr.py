@@ -456,6 +456,7 @@ class ChannelManager:
         self._credential_stop = threading.Event()
         self._credential_thread = None
         self._credential_lock = threading.RLock()
+        self._scan_relogins = set()
         try:
             genv.discard_cached('native_channel_accounts', 'mpay_db_helpers',
                                 'mpay_db_bindings', 'mpay_db_writes')
@@ -760,7 +761,16 @@ class ChannelManager:
                 '扫码账号已保存，但游戏内切换选择未保存，请重新勾选' if saved else
                 '扫码流程继续，但工具未能保存此账号，请检查账号配置后重新扫码', error, notify=True)
             return False
-        app_state.toast(toast_text, duration=5000)
+        pending = getattr(self, '_scan_relogins', set())
+        if identity in pending:
+            try:
+                if self.db_sync:
+                    self.db_sync.refresh_record(tmp_channel, tmp_channel.game_id)
+            except Exception as error:
+                tmp_channel.report_login_failure(tmp_channel.game_id, 'scan.database',
+                    '重新扫码已保存，但游戏账号库未能更新，请关闭游戏后从工具重新启动。', error, notify=True)
+        else:
+            app_state.toast(toast_text, duration=5000)
         return True
 
     def manual_import(self, channle_name: str, game_id: str, on_complete=None, login_method: str = "", on_error=None):
@@ -1014,12 +1024,12 @@ class ChannelManager:
             matches.append(record)
         return [] if lenovo and len(matches) != 1 else matches
 
-    def record_sauth(self, data, success):
+    def record_sauth(self, data, success, details=''):
         """Login state belongs to Channel, with or without the optional DB plugin."""
         with self._credential_lock:
-            return self._record_sauth(data, success)
+            return self._record_sauth(data, success, details)
 
-    def _record_sauth(self, data, success):
+    def _record_sauth(self, data, success, details=''):
         if not isinstance(data, dict) or data.get('login_channel') == 'netease':
             return False
         from channelHandler.channelUtils import getShortGameId
@@ -1031,15 +1041,7 @@ class ChannelManager:
             stale_matches = (self._sauth_matches(data, game, current_token=False)
                              if not success and data.get('login_channel') != 'lenovo_open' else [])
             if stale_matches:
-                import app_state
-                if self.db_sync and len(stale_matches) == 1:
-                    record = stale_matches[0]
-                    if record.record_source == 'manual' and record.cached_unisdk(game):
-                        try:
-                            self.db_sync.refresh_record(record, game)
-                        except Exception as error:
-                            record.report_login_failure(game, 'sauth.database', '当前凭据未能同步到游戏账号库', error)
-                app_state.toast('游戏请求的凭据与工具保存的凭据不同，未将已保存凭据标为过期。请从游戏原生切换账号重新打开列表；没有入口时重启游戏。', duration=10000)
+                self.confirm_sauth_relogin(data, details)
                 return True
             return False
         if success:
@@ -1054,8 +1056,6 @@ class ChannelManager:
                 record.report_login_failure(game, 'sauth.selection',
                     '登录成功，但游戏内切换选择未保存', error)
         else:
-            import app_state
-            app_state.toast(f'{matches[0].name}（{game}）：游戏登录认证失败，正在尝试更新凭据。', duration=7000)
             for record in matches:
                 record.expire_unisdk(game)
         try:
@@ -1072,12 +1072,64 @@ class ChannelManager:
                     self.db_sync.rename_record(record.uuid, record.name)
                 except Exception as error:
                     record.report_login_failure(game, 'sauth.database', '过期标记未能同步到游戏列表', error)
-            if record.record_source == 'manual':
-                threading.Thread(target=self._recover_sauth, args=(record, game, data),
-                                 daemon=True, name='sauth-credentials').start()
-            else:
-                app_state.toast('此扫码账号的游戏凭据已过期，请重新扫码登录。', duration=7000)
+            self.confirm_sauth_relogin(data, details)
+        if success:
+            pending = getattr(self, '_scan_relogins', set())
+            recovered = next((r for r in matches if r.record_source == 'scan'
+                              and r.sdk_identity(game) in pending), None)
+            if recovered is not None:
+                identity = recovered.sdk_identity(game)
+                pending.discard(identity)
+                self._notify_credential_ready()
         return True
+
+    def confirm_sauth_relogin(self, data, details=''):
+        """A real login attempt may ask; no recovery work starts before Yes."""
+        from sauth_feedback import confirm_relogin, show_message
+        import app_state
+        game = getShortGameId(str(data.get('gameid', '')))
+        matches = self._sauth_matches(data, game)
+        record = next((r for r in matches if r.record_source == 'manual'), matches[0] if matches else None)
+        # A stale request must never expire or re-login a newer credential.
+        stale = (self._sauth_matches(data, game, current_token=False)
+                 if not matches and data.get('login_channel') != 'lenovo_open' else [])
+        note = ''
+        if record is not None and record.record_source == 'scan':
+            note = '此记录来自扫码，没有可续签的长期凭据。确认后请在游戏原生登录窗口重新扫码同一账号。'
+        elif stale:
+            note = '本次请求与已保存凭据不同，未将新凭据标为失效。确认后将同步已保存凭据。'
+        elif record is None:
+            note = '未匹配到工具保存的账号，确认后打开账号管理；原生扫码账号请重新扫码。'
+
+        def confirmed():
+            if self._credential_stop.is_set():
+                return
+            if record is not None:
+                # The user may leave the prompt open while a background refresh
+                # or another login replaces B. Never act on that old request.
+                if record not in self.channels or record not in self._sauth_matches(data, game):
+                    show_message('login-changed', '账号凭据已更新，请重新打开游戏后登录。')
+                    return
+                if record.record_source == 'manual':
+                    threading.Thread(target=self._recover_sauth, args=(record, game, data),
+                                     daemon=True, name='sauth-credentials').start()
+                else:
+                    if not hasattr(self, '_scan_relogins'):
+                        self._scan_relogins = set()
+                    self._scan_relogins.add(record.sdk_identity(game))
+                    show_message('scan-relogin', '请在游戏原生登录窗口重新扫码同一账号。\n工具不会把扫码记录转换为手动渠道账号。')
+            elif len(stale) == 1 and stale[0] in self.channels and self.db_sync and stale[0].cached_unisdk(game):
+                try:
+                    self.db_sync.refresh_record(stale[0], game)
+                except Exception as error:
+                    stale[0].report_login_failure(game, 'sauth.database', '当前凭据未能同步到游戏账号库', error, notify=True)
+                else:
+                    show_message('login-changed', '已保存的账号凭据已同步，请重新打开游戏后登录。')
+            elif app_state.ui_mgr:
+                app_state.ui_mgr.open_for_game(game, 'accounts')
+
+        key = (game, str(data.get('login_channel', '')), record.uuid if record else str(data.get('sdkuid', '')))
+        confirm_relogin(key, details or '游戏登录凭据已失效。', confirmed, note=note)
 
     def _recover_sauth(self, record, game, failed_request):
         """Refresh the whole matching packet, never patch only an outgoing SAUTH."""
@@ -1095,24 +1147,23 @@ class ChannelManager:
         if packet is None:
             if self.db_sync:
                 app_state.run_on_main_thread(lambda: self.db_sync._relogin_expired(record, game, try_silent=False))
-            elif app_state.ui_mgr:
-                app_state.run_on_main_thread(lambda: app_state.ui_mgr.open_for_game(game, 'accounts'))
+            else:
+                from channel_relogin import start_channel_relogin
+                app_state.run_on_main_thread(lambda: start_channel_relogin(record, game))
             return
         try:
-            written = self.db_sync.refresh_record(record, game) if self.db_sync else 0
+            if self.db_sync:
+                self.db_sync.refresh_record(record, game)
         except Exception as error:
             record.report_login_failure(game, 'sauth.database',
                 '新凭据已保存，但游戏账号库未全部更新，请关闭游戏后从工具重新启动。', error, notify=True)
             return
-        self._notify_credential_ready(written)
+        self._notify_credential_ready()
 
     @staticmethod
-    def _notify_credential_ready(written):
-        import app_state
-        app_state.toast(
-            '游戏账号库已更新。请使用游戏原生切换账号，重新打开列表后登录；没有入口时重启游戏。'
-            if written else '新凭据已保存。请从工具重新登录；使用原生账号列表时，请关闭游戏后从工具重新启动。',
-            duration=10000)
+    def _notify_credential_ready():
+        from sauth_feedback import relogin_succeeded
+        relogin_succeeded()
 
     def rename(self, uuid: str, new_name: str):
         if not self.query_channel(uuid):

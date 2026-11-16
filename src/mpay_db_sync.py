@@ -613,7 +613,10 @@ class MpayDBSync:
             return lambda: webbrowser.open(url or 'https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e')
         if role is not None:
             return lambda: app_state.ui_mgr.open_for_game(game, 'accounts') if app_state.ui_mgr else None
-        return lambda: self._relogin_expired(expired_record, game)
+        from sauth_feedback import failure_details
+        details = failure_details(200, {'code': 401, 'subcode': 1,
+            'msg': '所选账号已标为失效，尚未重新登录。'}, local=True)
+        return lambda: self.manager.confirm_sauth_relogin(data, details)
 
     def _relogin_expired(self, record, game, *, try_silent=True):
         if record.uuid in self._relogins or not self.is_expired(record.uuid, game):

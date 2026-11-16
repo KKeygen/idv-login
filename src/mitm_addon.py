@@ -384,8 +384,10 @@ class IDVLoginAddon:
                                   flow.response.get_text(strict=False))
             except Exception:
                 pass
+        from sauth_feedback import failure_details
+        details = failure_details(http_status, payload) if not success else ''
         try:
-            matched = bool(manager and manager.record_sauth(data, success))
+            matched = bool(manager and manager.record_sauth(data, success, details))
         except Exception as error:
             from mpay_db_sync import log_failure
             log_failure(self.logger, f'[channel] game={key[0]} channel={key[1]} stage=sauth.record 登录状态记录失败', error)
@@ -396,7 +398,11 @@ class IDVLoginAddon:
         elif matched:
             self.logger.debug('game={} channel={} stage=sauth.result 登录未成功，已处理对应凭据状态与提示', key[0], key[1])
         else:
-            app_state.toast('游戏登录认证失败，未匹配到工具保存的当前凭据。请在渠道服管理中重新登录，或使用游戏原生登录。', duration=8000)
+            if manager:
+                manager.confirm_sauth_relogin(data, details)
+            else:
+                from sauth_feedback import show_message
+                show_message('sauth-failed', details + '\n请使用游戏原生登录。')
 
     def error(self, flow: http.HTTPFlow):
         if (flow.request.pretty_host.lower() == getattr(self, "auth_status_domain", "")
@@ -942,7 +948,12 @@ class IDVLoginAddon:
                 import app_state
                 if hasattr(app_state, "app") and app_state.app is not None:
                     from PyQt6.QtCore import QMetaObject, Qt
-                    QMetaObject.invokeMethod(app_state.app, "quit", Qt.ConnectionType.QueuedConnection)
+                    def quit_when_ready():
+                        from sauth_feedback import after_relogin_notice
+                        quit_app = lambda: QMetaObject.invokeMethod(app_state.app, "quit", Qt.ConnectionType.QueuedConnection)
+                        if not after_relogin_notice(quit_app):
+                            quit_app()
+                    app_state.run_on_main_thread(quit_when_ready)
                     return
             except Exception as e:
                 safe_exception(self.logger, "通知主循环退出失败")

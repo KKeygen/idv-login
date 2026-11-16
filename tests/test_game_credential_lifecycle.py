@@ -53,12 +53,15 @@ class CredentialLifecycleTests(unittest.TestCase):
         })
         self.modules.start()
         self.addCleanup(self.modules.stop)
-        for name in ('channel_cache', 'prefetch_context'):
+        for name in ('channel_cache', 'prefetch_context', 'sauth_feedback'):
             spec = importlib.util.spec_from_file_location(name, SRC / f'{name}.py')
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             sys.modules[name] = module
             setattr(self, name, module)
+        self.sauth_feedback.confirm_relogin = Mock()
+        self.sauth_feedback.show_message = Mock()
+        self.sauth_feedback.relogin_succeeded = Mock()
         self.logger = Mock()
         self.namespace = dict(os=os, copy=copy, json=json, random=random, time=time,
                               requests=requests, threading=threading,
@@ -98,7 +101,9 @@ class CredentialLifecycleTests(unittest.TestCase):
             games={'h55': types.SimpleNamespace(game_id='h55', is_running=True)})
         policy = types.ModuleType('account_list_policy')
         policy.AccountListPolicy = lambda manager: types.SimpleNamespace(
-            select=lambda games: {game: list(manager.channels) for game in games})
+            select=lambda games: {game: list(manager.channels) for game in games},
+            canonical_uuid=lambda *_: None, include_logged_in=Mock())
+        policy.native_scan_channels = lambda *_: set()
         sys.modules['account_list_policy'] = policy
 
     def record(self, channel='huawei', *, expires=None):
@@ -200,20 +205,27 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertFalse(self.manager.record_sauth(dict(self.auth(record), sessionid='other-account'), False))
         self.manager.db_sync.refresh_record.assert_not_called()
 
-    def test_old_sauth_failure_does_not_expire_new_b_and_republishes_full_packet(self):
+    def test_old_sauth_failure_does_not_expire_new_b_or_write_until_confirmation(self):
         record = self.record()
         self.manager.db_sync = Mock()
         self.assertTrue(self.manager.record_sauth(dict(self.auth(record), sessionid='old'), False))
         self.assertFalse(record.is_login_expired('h55'))
+        self.manager.db_sync.refresh_record.assert_not_called()
+        self.assertIn('凭据不同', self.sauth_feedback.confirm_relogin.call_args.kwargs['note'])
+        self.sauth_feedback.confirm_relogin.call_args.args[2]()
         self.manager.db_sync.refresh_record.assert_called_once_with(record, 'h55')
-        self.assertIn('凭据不同', self.app.toast.call_args.args[0])
+        self.app.toast.assert_not_called()
 
-    def test_first_current_sauth_failure_toasts_immediately_before_recovery(self):
+    def test_first_current_sauth_failure_confirms_before_any_recovery(self):
         record = self.record()
         with patch.object(threading, 'Thread') as worker:
-            self.assertTrue(self.manager.record_sauth(self.auth(record), False))
+            self.assertTrue(self.manager.record_sauth(self.auth(record), False, 'code: 403\nfixture error'))
+            worker.assert_not_called()
+            self.assertEqual(record.builds, [])
+            self.sauth_feedback.confirm_relogin.call_args.args[2]()
         self.assertTrue(record.is_login_expired('h55'))
-        self.assertIn('游戏登录认证失败', self.app.toast.call_args.args[0])
+        self.assertIn('403', self.sauth_feedback.confirm_relogin.call_args.args[1])
+        self.app.toast.assert_not_called()
         worker.return_value.start.assert_called_once()
 
     def test_periodic_refresh_is_four_minutes_and_only_saved_huawei_vivo_games(self):
@@ -270,11 +282,11 @@ class CredentialLifecycleTests(unittest.TestCase):
         sync = object.__new__(Sync)
         sync.manager = self.manager
         sync.projected = {('fixture.db', ('h55', 'huawei', 'account'), False)}
-        sync._relogin_expired = Mock(side_effect=lambda *_: self.app.toast('selected invalid account'))
+        self.manager.confirm_sauth_relogin = Mock()
         self.manager.db_sync = sync
         # Merely determining the action must not display anything yet.
         self.assertTrue(callable(sync.intercept_auth(auth)))
-        sync._relogin_expired.assert_not_called()
+        self.manager.confirm_sauth_relogin.assert_not_called()
         self.app.toast.assert_not_called()
 
         class Response:
@@ -300,12 +312,16 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.assertEqual(flow.response.status_code, 200)
         self.assertEqual(json.loads(flow.response.content)['code'], 401)
         self.assertTrue(flow.metadata['idv_local_auth_cancel'])
-        sync._relogin_expired.assert_called_once_with(record, 'h55')
-        self.app.toast.assert_called_once()
+        self.manager.confirm_sauth_relogin.assert_called_once()
+        self.assertEqual(self.manager.confirm_sauth_relogin.call_args.args[0], auth)
+        self.assertIn('本地拦截', self.manager.confirm_sauth_relogin.call_args.args[1])
+        self.assertIn('code: 401', self.manager.confirm_sauth_relogin.call_args.args[1])
+        self.app.toast.assert_not_called()
         self.manager.record_sauth = Mock()
         namespace['_check_uni_sauth_response'](owner, flow)
         self.manager.record_sauth.assert_not_called()
-        self.app.toast.assert_called_once()
+        self.manager.confirm_sauth_relogin.assert_called_once()
+        self.app.toast.assert_not_called()
 
     def test_native_account_label_marks_invalid_without_changing_saved_name(self):
         record = self.record()
@@ -429,10 +445,98 @@ class CredentialLifecycleTests(unittest.TestCase):
         self.manager._recover_sauth(record, 'h55', old)
         self.assertFalse(record.is_login_expired('h55'))
         self.manager.db_sync.refresh_record.assert_called_once_with(record, 'h55')
-        message = self.app.toast.call_args.args[0]
-        self.assertIn('游戏账号库已更新', message)
-        self.assertIn('原生切换账号', message)
-        self.assertIn('没有入口时重启游戏', message)
+        self.sauth_feedback.relogin_succeeded.assert_called_once()
+        self.app.toast.assert_not_called()
+
+    def test_confirming_old_prompt_cannot_relogin_updated_or_deleted_record(self):
+        for delete in (False, True):
+            record = self.record()
+            self.manager.confirm_sauth_relogin(self.auth(record), 'code: 403')
+            confirm = self.sauth_feedback.confirm_relogin.call_args.args[2]
+            if delete:
+                self.manager.channels.remove(record)
+            else:
+                record.cache_unisdk(packet(token='newer'))
+            with patch.object(threading, 'Thread') as worker:
+                confirm()
+                worker.assert_not_called()
+            self.assertEqual(record.builds, [])
+
+    def test_unknown_request_opens_management_only_after_confirmation_without_guessing(self):
+        record = self.record('lenovo_open')
+        record.cache_unisdk(packet('lenovo_open', uid='0'))
+        self.manager.confirm_sauth_relogin(dict(self.auth(record), sessionid='unrelated'))
+        self.assertEqual(self.app.ui_mgr.method_calls, [])
+        self.sauth_feedback.confirm_relogin.call_args.args[2]()
+        self.app.ui_mgr.open_for_game.assert_called_once_with('h55', 'accounts')
+        self.assertFalse(record.is_login_expired('h55'))
+        self.assertEqual(record.builds, [])
+
+    def test_scan_source_guides_native_scan_and_waits_for_matching_success(self):
+        saved = packet('oppo')
+        record = self.Base({'login_channel': 'oppo', 'code': 'scan-fixture'},
+            user_info={'id': 'mpay-fixture', 'token': 'fixture', 'login_channel': 'oppo',
+                       'pc_ext_info': {'extra_unisdk_data': saved['extra_unisdk_data']}},
+            ext_info={'from_game_id': 'h55'})
+        self.manager.channels.append(record)
+        auth = self.channel_cache.packet_auth(saved)
+        self.assertTrue(self.manager.record_sauth(auth, False))
+        self.assertNotIn(record.sdk_identity('h55'), getattr(self.manager, '_scan_relogins', set()))
+        self.assertIn('扫码', self.sauth_feedback.confirm_relogin.call_args.kwargs['note'])
+        with patch.object(threading, 'Thread') as worker:
+            self.sauth_feedback.confirm_relogin.call_args.args[2]()
+            worker.assert_not_called()
+        self.assertEqual(self.app.ui_mgr.method_calls, [])
+        self.assertIn('游戏原生登录窗口', self.sauth_feedback.show_message.call_args.args[1])
+        self.sauth_feedback.relogin_succeeded.assert_not_called()
+        self.assertFalse(self.manager.record_sauth(dict(auth, sdkuid='different'), True))
+        self.sauth_feedback.relogin_succeeded.assert_not_called()
+        self.assertTrue(self.manager.record_sauth(auth, True))
+        self.sauth_feedback.relogin_succeeded.assert_called_once()
+        self.assertEqual(self.manager._scan_relogins, set())
+
+    def test_scan_exchange_updates_same_record_but_success_waits_for_sauth(self):
+        old = packet('oppo')
+        record = self.Base({'login_channel': 'oppo', 'code': 'scan-fixture'},
+            user_info={'id': 'mpay-fixture', 'token': 'fixture', 'login_channel': 'oppo',
+                       'pc_ext_info': {'extra_unisdk_data': old['extra_unisdk_data']}},
+            ext_info={'from_game_id': 'h55'}, name='saved name')
+        self.manager.channels.append(record)
+        self.manager._scan_relogins = {record.sdk_identity('h55')}
+        self.manager._manual_channel_name = Mock(return_value='')
+        self.manager.db_sync = Mock()
+        new = packet('oppo', token='rescan-token')
+        exchange = {'user': {'id': 'new-mpay-id', 'login_channel': 'oppo', 'token': new['token'],
+                           'pc_ext_info': {'extra_unisdk_data': new['extra_unisdk_data']}}}
+        self.assertTrue(self.manager.import_from_scan({'login_channel': 'oppo', 'code': 'new-scan'}, exchange, 'h55'))
+        replacement = self.manager.channels[0]
+        self.assertIsNot(replacement, record)
+        self.assertEqual((replacement.uuid, replacement.name), (record.uuid, record.name))
+        self.manager.db_sync.refresh_record.assert_called_once_with(replacement, 'h55')
+        self.sauth_feedback.relogin_succeeded.assert_not_called()
+        self.manager.record_sauth(self.channel_cache.packet_auth(old), True)
+        self.sauth_feedback.relogin_succeeded.assert_not_called()
+        self.manager.record_sauth(self.channel_cache.packet_auth(new), True)
+        self.sauth_feedback.relogin_succeeded.assert_called_once()
+
+    def test_recovery_database_failure_does_not_claim_success(self):
+        record = self.record()
+        old = self.auth(record)
+        record.expire_unisdk('h55')
+        self.manager.db_sync = Mock()
+        self.manager.db_sync.refresh_record.side_effect = OSError('fixture')
+        self.manager._recover_sauth(record, 'h55', old)
+        self.sauth_feedback.relogin_succeeded.assert_not_called()
+
+    def test_confirmed_manual_failure_targets_web_relogin_not_generic_accounts(self):
+        record = self.record()
+        record.fail = True
+        record.expire_unisdk('h55')
+        self.manager.db_sync = Mock()
+        self.manager._recover_sauth(record, 'h55', self.auth(record))
+        self.manager.db_sync._relogin_expired.assert_called_once_with(record, 'h55', try_silent=False)
+        self.app.ui_mgr.open_for_game.assert_not_called()
+        self.sauth_feedback.relogin_succeeded.assert_not_called()
 
     def test_silent_context_no_longer_monkeypatches_requests_or_sets_deadlines(self):
         original_send = requests.Session.send

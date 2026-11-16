@@ -376,7 +376,8 @@ class RegressionTests(unittest.TestCase):
         cls=load_file(SRC/'channel_relogin.py',ns,classes=('ExpiredChannelLogin',))['ExpiredChannelLogin']
         attempt=cls(sync,r,'h55',lambda:None,try_silent=True)
         cache_module=types.ModuleType('channel_cache');cache_module.credential_expires_at=lambda rec:rec.honorLogin.expiredTime
-        with patch.dict(sys.modules,{'channel_cache':cache_module}):
+        feedback=types.SimpleNamespace(relogin_succeeded=lambda:toasts.append('relogin-success'))
+        with patch.dict(sys.modules,{'channel_cache':cache_module,'sauth_feedback':feedback}):
             attempt.start();deadline=time.monotonic()+2
             while not pending and time.monotonic()<deadline:time.sleep(.005)
             self.assertTrue(pending)
