@@ -22,6 +22,19 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 
 class DetailsTests(unittest.TestCase):
+    def test_status_only_error_keeps_server_code_separate_from_http(self):
+        for status in (401, '401'):
+            with self.subTest(status=status):
+                text = feedback.failure_details(200, {'status': status})
+                self.assertIn('HTTP: 200', text)
+                self.assertIn('status: 401', text)
+                self.assertEqual(text.count('401'), 1)
+                self.assertNotIn('code:', text)
+
+    def test_textual_status_keeps_plain_and_base64_message_compatibility(self):
+        for status in ('token 已过期', base64.b64encode('token 已过期'.encode()).decode()):
+            self.assertIn('token 已过期', feedback.failure_details(200, {'status': status}))
+
     def test_plain_and_base64_utf8_messages_and_separate_codes(self):
         for msg in ('渠道登录过期', base64.b64encode('渠道登录过期'.encode()).decode()):
             text = feedback.failure_details(200, {'code': 403, 'subcode': 10, 'msg': msg})
@@ -78,6 +91,14 @@ class DetailsTests(unittest.TestCase):
         self.assertNotIn('fixture-secret', str(owner.logger.mock_calls))
         self.assertNotIn('expired', str(owner.logger.mock_calls))
 
+        response.content = json.dumps({'status': 401, 'msg': 'token 已过期'}).encode()
+        namespace['_check_uni_sauth_response'](owner, flow)
+        data, success, details = manager.record_sauth.call_args.args
+        self.assertFalse(success)
+        self.assertIn('status: 401', details)
+        self.assertIn('token 已过期', details)
+        self.assertNotIn('fixture-secret', details)
+
 
 class QtDialogTests(unittest.TestCase):
     @classmethod
@@ -120,6 +141,15 @@ class QtDialogTests(unittest.TestCase):
         feedback.show_message('close', 'fixture', confirmed)
         QTest.qWait(5)
         feedback._dialogs['close'].close()
+        confirmed.assert_not_called()
+
+    def test_status_only_error_is_visible_in_confirmation_dialog(self):
+        confirmed = Mock()
+        feedback.confirm_relogin('status-only', feedback.failure_details(200, {'status': 401}), confirmed)
+        QTest.qWait(5)
+        dialog = feedback._dialogs[('confirm', 'status-only')]
+        self.assertIn('status: 401', dialog.text())
+        self.assertIn('登录过期，是否重新登录？', dialog.text())
         confirmed.assert_not_called()
 
     def test_only_yes_confirms_once_and_duplicate_prompt_is_suppressed(self):

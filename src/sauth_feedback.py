@@ -14,7 +14,13 @@ def failure_details(http_status, payload, *, local=False):
                          ('subcode', payload.get('subcode'))):
         if type(value) in (int, str):
             lines.append(f'{label}: {value}')
+    status = payload.get('status')
+    status_is_code = type(status) is int or isinstance(status, str) and status.lstrip('-').isdigit()
+    if status_is_code:
+        lines.append(f'status: {status}')
     for field in ('msg', 'message', 'reason', 'status'):
+        if field == 'status' and status_is_code:
+            continue
         value = payload.get(field)
         if not isinstance(value, str) or not value.strip():
             continue
