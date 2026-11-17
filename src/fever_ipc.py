@@ -199,7 +199,8 @@ class FeverIpcHost:
         try:
             if opcode == 13 and len(payload) >= 260:
                 self.logger.debug(f"收到 Fever ticket 请求: {packet_summary}")
-                payload_instance = struct.unpack("<i", payload[:4])[0] - 101
+                request_code = struct.unpack("<i", payload[:4])[0]
+                payload_instance = request_code - 101 if request_code >= 100 else 0
                 identifier = payload[4:260]
                 sender = self._resolve_client_sender(sender_hwnd)
                 if sender is None:
