@@ -113,4 +113,4 @@ BTC 闪电网络:
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=KKeygen/idv-login&type=Date)](https://www.star-history.com/#KKeygen/idv-login&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=KKeygen/idv-login&type=Date)](https://star-history.dera.page/#KKeygen/idv-login&Date)
