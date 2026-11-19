@@ -298,7 +298,9 @@ class CloudSyncManager:
             return []
         with open(channels_path, "r", encoding="utf-8") as file:
             data = json.load(file)
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            raise ValueError("本地渠道账号文件的顶层不是 JSON 数组；没有覆盖原文件")
+        return data
 
     @staticmethod
     def _same_game(game_a: str, game_b: str) -> bool:
@@ -446,7 +448,7 @@ class CloudSyncManager:
         if not channels_path:
             raise ValueError("渠道账号文件路径不存在")
         from secure_write import write_json_restricted
-        write_json_restricted(channels_path, channels)
+        write_json_restricted(channels_path, channels, atomic_required=True)
 
     def _write_edge_files(self, edge_files: Dict[str, str]):
         work_dir = genv.get("FP_WORKDIR", "")

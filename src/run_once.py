@@ -167,54 +167,57 @@ def migrate_channel_records():
             setup_logger().error('file={} record_index={} stage=records.migrate.item 迁移失败；原条目保留，继续其余账号\n{}',
                                  os.path.basename(source_path), index, exception_summary(error))
             migrated.append(item)
-    write_json_restricted(target, migrated)
+    try:
+        write_json_restricted(target, migrated, atomic_required=True)
+    except OSError as error:
+        if not os.path.exists(target):
+            # Loading must not turn a failed legacy migration into an empty target.
+            genv.set("CHANNEL_RECORDS_LOAD_FAILED", True)
+        setup_logger().error("stage=records.migrate.write 保存迁移结果失败；保留原账号文件 [{}]", type(error).__name__)
+        return
 
     # auto-* 保存的是 UUID。昵称、远端渠道名以及旧 channels.json 均不修改。
     config_path = os.path.join(genv.get("FP_WORKDIR"), "config.json")
-    if os.path.exists(config_path):
+    try:
         with open(config_path, "r", encoding="utf-8") as file:
             config = json.load(file)
-        for key, value in config.items():
-            if key.startswith("auto-") and isinstance(value, str) and value in renamed:
-                genv.set(key, renamed[value], True)
-    genv.set("channel_records_v2_migrated", True, True)
+        if not isinstance(config, dict):
+            raise ValueError("配置文件顶层必须是 JSON 对象")
+    except FileNotFoundError:
+        config = {}
+    except (OSError, ValueError) as error:
+        # The accounts have already been migrated. Keep the original config and
+        # retry its UUID remap once the user restores it; it must not stop startup.
+        setup_logger().error("file=config.json stage=records.migrate.preferences 读取失败；保留原配置，跳过自动登录偏好迁移 [{}]", type(error).__name__)
+        return
+    updates = {
+        key: renamed[value] for key, value in config.items()
+        if key.startswith("auto-") and isinstance(value, str) and value in renamed
+    }
+    updates["channel_records_v2_migrated"] = True
+    try:
+        genv.update_cached(updates)
+    except OSError as error:
+        setup_logger().error("stage=records.migrate.preferences 保存失败；保留原配置，下次可重试 [{}]", type(error).__name__)
 
 
 def run_once():
     """一次性任务，通过 genv 键控制只执行一次"""
     logger = setup_logger()
 
-    # config.json 写入健康检查
+    # A failed probe does not distinguish a corrupt file from permission, disk,
+    # or replace errors. Never delete settings just because the probe failed.
     if not genv.get("config_fixed_0403", False):
-        import hotfixmgr, os
+        import hotfixmgr
         if not hotfixmgr.probe_cache_write_once():
-            logger.warning("config.json 写入探测失败，尝试修复...")
-            try:
-                cache_path = "config.json"
-                if os.path.exists(cache_path):
-                    os.remove(cache_path)
-                    logger.info("已删除损坏的 config.json")
-            except Exception as e:
-                logger.error(f"删除 config.json 失败: {e}")
+            logger.warning("config.json 写入不可用；保留原配置，不自动删除或重置")
+            _show_msgbox(
+                "设置暂时无法保存",
+                "原配置和账号记录均已保留。请检查配置文件或目录权限。\n"
+                "如配置损坏，请退出工具后保留该文件，再用正常备份恢复。",
+                is_error=True,
+            )
 
-            # 尝试重新写入
-            if hotfixmgr.probe_cache_write_once():
-                genv.set("config_fixed_0403", True, True)
-                _show_msgbox(
-                    "配置文件已重置",
-                    "检测到配置文件损坏，已自动重置。\n"
-                    "您的账号记录不受影响，但部分设置（如自动登录延迟）可能需要重新配置。",
-                )
-                logger.info("config.json 修复成功")
-            else:
-                _show_msgbox(
-                    "配置文件修复失败",
-                    "无法写入配置文件，这通常是权限问题导致的。\n"
-                    "请尝试以管理员身份运行，或联系开发者获取支持。",
-                    is_error=True,
-                )
-                logger.error("config.json 修复失败，写入仍然不可用")
-    
     # 代理模式引导（多游戏有账号时）
     try:
         _probe_proxy_mode(logger)

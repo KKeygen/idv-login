@@ -559,7 +559,7 @@ class ChannelManager:
                                       os.path.basename(path), index, exception_summary(error))
         else:
             from secure_write import write_json_restricted
-            write_json_restricted(path, [])
+            write_json_restricted(path, [], atomic_required=True)
 
     def save_records(self):
         if genv.get('CHANNEL_RECORDS_LOAD_FAILED', False):
@@ -579,7 +579,7 @@ class ChannelManager:
             for key in to_be_deleted:
                 del channel_data[key]
         from secure_write import write_json_restricted
-        write_json_restricted(genv.get("FP_CHANNEL_RECORD"), data)
+        write_json_restricted(genv.get("FP_CHANNEL_RECORD"), data, atomic_required=True)
         self.logger.debug("渠道服登录信息已更新")
         callback = genv.get("CHANNELS_UPDATED_CALLBACK", None)
         if callable(callback):
