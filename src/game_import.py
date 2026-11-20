@@ -14,6 +14,141 @@ def _path_key(path):
     return os.path.normcase(os.path.normpath(str(path or "")))
 
 
+def prepare_import_installation(
+    game, installation, previous=None, *, requested_distribution_id=-1,
+    cancel_check=None,
+):
+    """Resolve one explicit import using the exact startup and Fever state."""
+    from fever_install_state import canonical_content_id, confirmed_install_root, read_install_states
+
+    previous = previous or {}
+    recorded_distribution = installation.distribution_id
+    bound_distribution = (
+        requested_distribution_id if requested_distribution_id >= 0 else recorded_distribution
+    )
+    # Importing registry/marker metadata is not itself proof of the current
+    # version. Preserve a previous record only for this exact installation.
+    if (_path_key(previous.get("path")) == _path_key(installation.path)
+            and previous.get("distribution_id") == recorded_distribution):
+        installation.installed_version = str(previous.get("installed_version") or "")
+    else:
+        installation.installed_version = ""
+
+    if requested_distribution_id >= 0 and recorded_distribution not in (-1, requested_distribution_id):
+        return {"state_status": "distribution_mismatch", "distribution_verified": False}
+    options = list(dict.fromkeys(game.get_distributions()))
+    if bound_distribution >= 0:
+        options = [bound_distribution] if bound_distribution in options else []
+    if not options or len(options) > 16:
+        return {"state_status": "unresolved_distribution", "distribution_verified": False}
+
+    matches = []
+    for distribution_id in options:
+        if cancel_check:
+            cancel_check()
+        launcher = game.get_launcher_data_for_distribution(distribution_id) or {}
+        startup_path = launcher.get("startup_path")
+        root = confirmed_install_root(installation.path, startup_path)
+        if not root:
+            continue
+        manifest = game.get_file_distribution_info(distribution_id, refresh=True) or {}
+        recorded_content = (
+            canonical_content_id(installation.content_id)
+            if recorded_distribution == distribution_id else ""
+        )
+        content_id = recorded_content or canonical_content_id(manifest.get("app_content_id"))
+        if not content_id:
+            continue
+        matches.append({
+            "id": distribution_id, "content": content_id, "root": root,
+            "startup": startup_path, "args": str(launcher.get("startup_params") or ""),
+            "target": str(manifest.get("version_code") or ""),
+        })
+
+    by_root = {}
+    for candidate in matches:
+        by_root.setdefault(candidate["root"], set()).add(candidate["content"])
+    states = {
+        root: read_install_states(root, ids, cancel_check=cancel_check)
+        for root, ids in by_root.items()
+    }
+    for candidate in matches:
+        candidate["state"], candidate["version"] = states[candidate["root"]][candidate["content"]]
+    if bound_distribution < 0:
+        # A filename or a one-item catalog alone is insufficient to assign an
+        # arbitrary local path. Require a unique observed app-content match.
+        matches = [
+            candidate for candidate in matches
+            if candidate["state"] in ("installed", "staged", "no_version")
+        ]
+    if len(matches) != 1:
+        return {"state_status": "unresolved_distribution", "distribution_verified": False}
+
+    match = matches[0]
+    game._claim_distribution(installation, match["id"])
+    installation.content_id = int(match["content"])
+    installation.startup_path = match["startup"]
+    if not installation.startup_args:
+        installation.startup_args = match["args"]
+    if match["version"]:
+        installation.installed_version = match["version"]
+        if installation.source == "download_pending":
+            installation.source = "download"
+    return {
+        "state_status": match["state"],
+        "distribution_verified": True,
+        "detected_installed_version": match["version"],
+        "target_version": match["target"],
+    }
+
+
+def queue_import_download(manager, game_id, installation_id, path, details):
+    """Start one update or fallback repair only after the import is committed."""
+    from nativebridge import start_launcher_update
+
+    if sys.platform != "win32":
+        return {"download_status": "skipped", "download_error": "当前平台不支持更新或修复"}
+    if not details.get("distribution_verified"):
+        return {"download_status": "skipped", "download_error": "已导入，但无法确认游戏分发或安装目录"}
+    installed_version = details.get("detected_installed_version")
+    repair = not installed_version
+    operation = "repair" if repair else "update"
+    try:
+        with manager._save_lock:
+            game = manager.get_existing_game(game_id)
+            installation = game.get_installation(installation_id) if game and installation_id else None
+            if (not installation or _path_key(installation.path) != _path_key(path)
+                    or not os.path.isfile(installation.path)
+                    or (installed_version and installation.installed_version != installed_version)):
+                return {"download_status": "skipped", "download_error": "已导入，但安装记录已经变更"}
+            distribution_id = installation.distribution_id
+            pending = NativeTaskRegistry.find_pending_download(game.game_id, distribution_id)
+            if pending and (
+                pending.get("operation") != operation
+                or pending.get("installation_id") != installation_id
+                or _path_key(pending.get("path")) != _path_key(path)
+            ):
+                return {"download_status": "skipped", "download_error": "该分发已有下载任务"}
+            if not pending and installed_version and installed_version == details.get("target_version"):
+                return {"download_operation": "update", "download_status": "up_to_date"}
+            task_id, created = start_launcher_update(
+                manager, game, installation, distribution_id, 4, repair=repair,
+                imported=True, unknown_origin=repair,
+            )
+        status = "queued" if created else "already_pending"
+        return {
+            "download_operation": operation, "download_task_id": task_id, "download_status": status,
+            f"{operation}_task_id": task_id, f"{operation}_status": status,
+        }
+    except Exception:
+        safe_exception(manager.logger, "游戏已导入，但启动自动更新或修复失败")
+        message = "游戏已导入，但未能启动自动更新或修复"
+        return {
+            "download_operation": operation, "download_status": "failed", "download_error": message,
+            f"{operation}_status": "failed", f"{operation}_error": message,
+        }
+
+
 def start_import(manager, *, source, game_id="", path="", distribution_id=-1):
     if source not in ("manual", "fever", "startup"):
         raise ValueError("不支持的导入来源")
@@ -46,12 +181,6 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
         if (NativeTaskRegistry.get(task_id) or {}).get("cancel_requested"):
             raise InterruptedError("导入已取消")
 
-    def progress(completed, total):
-        values = {"phase": "checking", "completed_files": completed, "total_files": total}
-        if source != "startup" and total:
-            values["progress_percent"] = min(99, int(completed * 100 / total))
-        NativeTaskRegistry.update(task_id, **values)
-
     acquired = False
     try:
         while not acquired:
@@ -59,7 +188,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
             acquired = _IMPORT_LOCK.acquire(timeout=0.1)
         check_cancel()
         records = []
-        if source == "fever":
+        if source in ("fever", "manual"):
             with _FEVER_GAMES_CACHE_LOCK:
                 genv.set(_FEVER_GAMES_CACHE_KEY, None, cached=False)
                 records = manager.list_fever_games()
@@ -78,10 +207,12 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
         staged._save_games = lambda: None
         staged.list_fever_games = lambda: [dict(record) for record in records]
         NativeTaskRegistry.update(task_id, phase="checking")
+        import_details = {}
         if source == "manual":
             if not staged.set_game_path(
                 game_id, path, preserve_missing=True,
-                progress_callback=progress, cancel_check=check_cancel,
+                cancel_check=check_cancel, import_details=import_details,
+                distribution_id=distribution_id,
             ):
                 raise ValueError("导入游戏路径失败")
         elif source == "fever":
@@ -98,17 +229,19 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
             game_id = staged.import_fever_game(
                 game_id, distribution_id, path, create_shortcut=False,
                 notify=False, refresh_registry=False,
+                import_details=import_details, cancel_check=check_cancel,
             )
             if not game_id:
                 raise ValueError("未找到可导入的 Fever 游戏记录")
         else:
             staged.import_missing_fever_games(write_markers=False, cancel_check=check_cancel)
             staged.initialize_downloadable_installation_versions(
-                write_markers=False, progress_callback=progress, cancel_check=check_cancel,
+                write_markers=False, cancel_check=check_cancel,
             )
         check_cancel()
         changes = {}
         results = []
+        selected_result = None
         for gid, game in staged.games.items():
             old_state = baseline.get(gid, ({}, {}))[1].get("installations", {})
             changed = [item for item in game.installations.values()
@@ -127,7 +260,17 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
                         "version": item.installed_version,
                         "installed_version": item.installed_version,
                     })
+                    if selected:
+                        selected_result = results[-1]
         with manager._save_lock:
+            if source != "startup" and selected_result is None:
+                raise ValueError("未找到本次导入的安装记录")
+            if selected_result:
+                pending = NativeTaskRegistry.find_pending_download(
+                    selected_result["game_id"], selected_result["distribution_id"],
+                )
+                if pending:
+                    raise ValueError("该分发正在下载或修复，请等到任务结束后再导入")
             for gid in changes:
                 live = manager.get_existing_game(gid)
                 current = live.to_installation_state().get("installations", {}) if live else {}
@@ -219,8 +362,13 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
                     com.CoUninitialize()
         values = {"results": results, "phase": "finished", "progress_percent": 100,
                   "cancelable": False}
-        if source != "startup" and results:
-            values.update(results[-1])
+        if selected_result:
+            selected_result.update(import_details)
+            selected_result.update(queue_import_download(
+                manager, selected_result["game_id"], selected_result["installation_id"],
+                selected_result["path"], import_details,
+            ))
+            values.update(selected_result)
             values.pop("success", None)
         if source == "startup" and not results:
             values["acknowledged"] = True

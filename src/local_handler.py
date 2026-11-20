@@ -189,20 +189,13 @@ class LocalRequestHandler:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _download_control_file(task_id: str) -> str:
-        return os.path.join(
-            genv.get("FP_WORKDIR", os.getcwd()),
-            f"download_control_{task_id}.json",
-        )
-
-    @staticmethod
     def _public_download_task(task: dict | None) -> dict | None:
         if not task:
             return None
         keys = (
             "task_id", "kind", "status", "success", "phase",
             "progress_percent", "rate", "total_bytes", "state", "stages",
-            "created_at", "updated_at", "requested_action", "error",
+            "created_at", "updated_at", "requested_action", "error", "operation",
         )
         return {key: task[key] for key in keys if key in task}
 
@@ -975,7 +968,7 @@ class LocalRequestHandler:
             ]
             distributions = []
             for dist_id, launcher_data, file_info in distribution_details:
-                active_task = NativeTaskRegistry.find_pending_download(gid, dist_id)
+                active_task = NativeTaskRegistry.find_pending_download(game_for_remote.game_id, dist_id)
                 target_ver = file_info.get("version_code", "") if file_info else ""
                 # fever_display（type=3 模拟器游戏）不视为可下载
                 can_download = (
@@ -1073,19 +1066,27 @@ class LocalRequestHandler:
                     "success": False, "error": "请选择 .exe 或 .lnk 游戏启动程序"
                 })
 
+            distribution_id = int(payload.get("distribution_id", -1))
             if payload.get("async_import") in (True, "true", "1"):
                 if method != "POST":
                     return self._json_response(405, {"success": False, "error": "导入请求必须使用 POST"})
                 from game_import import start_import
                 try:
-                    task = start_import(self.game_helper, source="manual", game_id=gid, path=executable_path)
+                    task = start_import(
+                        self.game_helper, source="manual", game_id=gid, path=executable_path,
+                        distribution_id=distribution_id,
+                    )
                 except ValueError as exc:
                     return self._json_response(400, {"success": False, "error": str(exc)})
                 return self._json_response(202, {
                     "success": True, "status": "pending", "task_id": task["task_id"],
                 })
 
-            if not self.game_helper.set_game_path(gid, executable_path):
+            import_details = {}
+            if not self.game_helper.set_game_path(
+                gid, executable_path, import_details=import_details,
+                distribution_id=distribution_id,
+            ):
                 return self._json_response(500, {
                     "success": False, "error": "保存游戏路径失败"
                 })
@@ -1114,11 +1115,19 @@ class LocalRequestHandler:
                         launcher_data.get("startup_params") or ""
                     )
                 self.game_helper._save_games()
+            from game_import import queue_import_download
+            download = queue_import_download(
+                self.game_helper, gid, installation.installation_id if installation else "",
+                executable_path, import_details,
+            ) if method == "POST" else {}
             return self._json_response(200, {
                 "success": True,
                 "game_id": gid,
                 "installation_id": installation.installation_id if installation else "",
                 "path": executable_path,
+                "distribution_id": installation.distribution_id if installation else -1,
+                "installed_version": installation.installed_version if installation else "",
+                **import_details, **download,
             })
         except Exception as e:
             safe_exception(self.logger, "定位游戏失败")
@@ -1147,14 +1156,16 @@ class LocalRequestHandler:
                 return self._json_response(404, {"success": False, "error": "未找到文件分发信息"})
             startup_args = launcher_data.get("startup_params", "") or ""
             content_id = file_info.get("app_content_id")
+            if not file_info.get("version_code") or not content_id:
+                return self._json_response(400, {"success": False, "error": "文件分发缺少目标版本或内容 ID"})
 
             # New browser/WebEngine UI: directory selection is a separate HTTP
-            # native task, so hashing and download preparation can run off the
+            # native task, so download preparation can run off the
             # Qt event loop.  Omitting target_dir keeps the released HTML flow.
             payload = body or args or {}
             requested_target_dir = str(payload.get("target_dir") or "").strip()
             if requested_target_dir:
-                from nativebridge import NativeTaskRegistry, inspect_path
+                from nativebridge import NativeTaskRegistry, finish_download_process, inspect_path
 
                 path_status = inspect_path(requested_target_dir)
                 if (
@@ -1169,25 +1180,16 @@ class LocalRequestHandler:
                         "path_status": path_status,
                     })
                 target_dir = path_status["normalized_path"]
-                task_id = NativeTaskRegistry.create("launcher-install")
-                progress_file = os.path.join(
-                    genv.get("FP_WORKDIR", os.getcwd()),
-                    f"download_status_{task_id}.json",
-                )
-                control_file = self._download_control_file(task_id)
-                NativeTaskRegistry.update(
-                    task_id,
-                    status_file=progress_file,
-                    control_file=control_file,
-                )
-                NativeTaskRegistry.update(
-                    task_id,
-                    game_id=gid,
-                    distribution_id=dist_id,
-                    target_version=file_info.get("version_code", ""),
-                    content_id=content_id,
-                )
                 max_conc = int(payload.get("concurrent", "4"))
+                task_id, created = NativeTaskRegistry.create_download(
+                    "launcher-install", game.game_id, dist_id, operation="install",
+                    target_version=file_info.get("version_code", ""), content_id=content_id,
+                )
+                if not created:
+                    return self._json_response(409, {
+                        "success": False, "error": "该分发已有下载任务", "task_id": task_id,
+                    })
+                task = NativeTaskRegistry.get(task_id)
                 game_helper = self.game_helper
                 logger = self.logger
 
@@ -1229,38 +1231,18 @@ class LocalRequestHandler:
                             created_installation=created_installation,
                             path=game_path,
                         )
-                        updated = game.try_update(
-                            dist_id,
-                            max_conc,
-                            installation.installation_id,
-                            progress_file=progress_file,
-                            control_file=control_file,
-                            is_update=False,
+                        result = game.try_update(
+                            dist_id, max_conc, installation.installation_id,
+                            progress_file=task["status_file"],
+                            control_file=task["control_file"], is_update=False,
                         )
-                        if not updated:
+                        if result is None or result.process is None:
                             raise RuntimeError("启动游戏下载失败")
-                        if not game.last_update_async:
-                            installation.source = "download"
-                            sgid = getShortGameId(gid)
-                            if CloudRes().is_convert_to_normal(sgid):
-                                game.create_tool_launch_shortcut(
-                                    installation.path,
-                                    installation.installation_id,
-                                )
-                        game_helper._save_games()
-                        task_values = {
-                            "success": True,
-                            "phase": "download_started" if game.last_update_async else "finished",
-                            "progress_percent": 100 if not game.last_update_async else 0,
-                            "path": game_path,
-                            "installation_id": installation.installation_id,
-                            "version": installation.installed_version,
-                            "download_async": bool(game.last_update_async),
-                        }
-                        if game.last_update_async:
-                            NativeTaskRegistry.update(task_id, **task_values)
-                        else:
-                            NativeTaskRegistry.finish(task_id, **task_values)
+                        NativeTaskRegistry.update(
+                            task_id, success=True, phase="download_started",
+                            download_async=True, version=installation.installed_version,
+                        )
+                        finish_download_process(game_helper, task_id, result.process)
                     except Exception as exc:
                         if installation is not None and created_installation:
                             game_helper.remove_game_installation(gid, installation.installation_id)
@@ -1336,19 +1318,13 @@ class LocalRequestHandler:
                         )
                         if installation is None:
                             raise RuntimeError("创建游戏安装记录失败")
-                        updated = game.try_update(
+                        result = game.try_update(
                             dist_id, max_conc, installation.installation_id,
                             is_update=False,
                         )
+                        updated = result is not None and result.process is not None
                         if not updated and installation.installation_id not in existing_installation_ids:
                             game_helper.remove_game_installation(gid, installation.installation_id)
-                        if updated and not game.last_update_async:
-                            installation.source = "download"
-                            sgid = getShortGameId(gid)
-                            if CloudRes().is_convert_to_normal(sgid):
-                                game.create_tool_launch_shortcut(
-                                    installation.path, installation.installation_id
-                                )
                         game_helper._save_games()
                         LocalRequestHandler._pending_imports[task_id] = {
                             "status": "done", "success": updated,
@@ -1402,18 +1378,12 @@ class LocalRequestHandler:
             if installation is None:
                 return self._json_response(500, {"success": False, "error": "创建游戏安装记录失败"})
             max_conc = int(args.get("concurrent", "4"))
-            updated = game.try_update(
+            result = game.try_update(
                 dist_id, max_conc, installation.installation_id, is_update=False
             )
+            updated = result is not None and result.process is not None
             if not updated and installation.installation_id not in existing_installation_ids:
                 self.game_helper.remove_game_installation(gid, installation.installation_id)
-            if updated and not game.last_update_async:
-                installation.source = "download"
-                sgid = getShortGameId(gid)
-                if CloudRes().is_convert_to_normal(sgid):
-                    game.create_tool_launch_shortcut(
-                        installation.path, installation.installation_id
-                    )
             self.game_helper._save_games()
             return self._json_response(200, {
                 "success": updated,
@@ -1427,82 +1397,25 @@ class LocalRequestHandler:
 
     def _launcher_update(self, args, body, method):
         try:
-            gid = args["game_id"]
-            dist_id = int(args["distribution_id"])
-            installation_id = args.get("installation_id", "")
+            from nativebridge import start_launcher_update
+
+            payload = {**args, **(body or {})}
+            gid = payload["game_id"]
+            dist_id = int(payload["distribution_id"])
             game = self.game_helper.get_existing_game(gid)
-            installation = self._resolve_installation(game, installation_id, dist_id)
-            if not installation or not os.path.isdir(game.get_root_path(installation.installation_id)):
-                return self._json_response(404, {"success": False, "error": "未找到游戏安装目录"})
-            from nativebridge import NativeTaskRegistry
-
-            task_id = NativeTaskRegistry.create("launcher-update")
-            progress_file = os.path.join(
-                genv.get("FP_WORKDIR", os.getcwd()),
-                f"download_status_{task_id}.json",
+            installation = self._resolve_installation(
+                game, payload.get("installation_id", ""), dist_id,
             )
-            control_file = self._download_control_file(task_id)
-            NativeTaskRegistry.update(
-                task_id,
-                status_file=progress_file,
-                control_file=control_file,
-                phase="checking",
-                progress_percent=0,
-                game_id=gid,
-                distribution_id=dist_id,
-                installation_id=installation.installation_id,
+            if (not installation or installation.distribution_id != dist_id
+                    or not os.path.isdir(game.get_root_path(installation.installation_id))):
+                return self._json_response(404, {"success": False, "error": "未找到所选分发的安装目录"})
+            repair = payload.get("repair") in (True, "1", "true")
+            task_id, _ = start_launcher_update(
+                self.game_helper, game, installation, dist_id,
+                int(payload.get("concurrent", "4")), repair=repair,
             )
-            max_conc = int(args.get("concurrent", "4"))
-
-            def update_in_background():
-                try:
-                    updated = game.try_update(
-                        dist_id,
-                        max_conc,
-                        installation.installation_id,
-                        progress_file=progress_file,
-                        control_file=control_file,
-                    )
-                    if not updated:
-                        raise RuntimeError("启动游戏更新失败")
-                    if not game.last_update_async:
-                        sgid = getShortGameId(gid)
-                        if CloudRes().is_convert_to_normal(sgid):
-                            game.create_tool_launch_shortcut(
-                                installation.path, installation.installation_id
-                            )
-                    self.game_helper._save_games()
-                    values = {
-                        "success": True,
-                        "phase": "download_started" if game.last_update_async else "finished",
-                        "progress_percent": 0 if game.last_update_async else 100,
-                        "installation_id": installation.installation_id,
-                        "version": installation.installed_version,
-                        "download_async": bool(game.last_update_async),
-                        "post_update_actions": game.last_post_update_actions,
-                    }
-                    if game.last_update_async:
-                        NativeTaskRegistry.update(task_id, **values)
-                    else:
-                        NativeTaskRegistry.finish(task_id, **values)
-                except Exception as exc:
-                    safe_exception(self.logger, "后台更新游戏失败")
-                    NativeTaskRegistry.finish(
-                        task_id,
-                        success=False,
-                        phase="failed",
-                        error=str(exc),
-                    )
-
-            threading.Thread(
-                target=update_in_background,
-                name=f"launcher-update-{task_id[:8]}",
-                daemon=True,
-            ).start()
             return self._json_response(202, {
-                "success": True,
-                "status": "pending",
-                "task_id": task_id,
+                "success": True, "status": "pending", "task_id": task_id,
                 "installation_id": installation.installation_id,
             })
         except Exception as e:
@@ -1605,29 +1518,26 @@ class LocalRequestHandler:
                 return self._json_response(202, {
                     "success": True, "status": "pending", "task_id": task["task_id"],
                 })
-            distribution_id = int(args.get("distribution_id", -1))
+            distribution_id = int(payload.get("distribution_id", -1))
+            import_details = {}
             imported = self.game_helper.import_fever_game(
-                args["game_id"], distribution_id, args.get("path", "")
+                payload["game_id"], distribution_id, payload.get("path", ""),
+                return_installation=True, import_details=import_details,
             )
             if not imported:
                 return self._json_response(404, {"success": False, "error": "未找到可导入的Fever游戏记录"})
-            game = self.game_helper.get_existing_game(imported)
-            installation = None
-            if game and distribution_id != -1:
-                installation = game.get_installation_for_distribution(distribution_id)
-            if game and installation is None and args.get("path"):
-                imported_path = os.path.normcase(os.path.normpath(args["path"]))
-                installation = next((
-                    item for item in game.installations.values()
-                    if os.path.normcase(os.path.normpath(item.path or ""))
-                    == imported_path
-                ), None)
-            if game and installation is None:
-                installation = game.get_installation()
+            game_id, installation = imported
+            from game_import import queue_import_download
+            download = queue_import_download(
+                self.game_helper, game_id, installation.installation_id, installation.path,
+                import_details,
+            ) if method == "POST" else {}
             return self._json_response(200, {
-                "success": True,
-                "game_id": imported,
-                "installation_id": installation.installation_id if installation else "",
+                "success": True, "game_id": game_id,
+                "installation_id": installation.installation_id,
+                "distribution_id": installation.distribution_id,
+                "installed_version": installation.installed_version,
+                **import_details, **download,
             })
         except Exception as e:
             safe_exception(self.logger, "导入Fever游戏失败")
@@ -1657,7 +1567,12 @@ class LocalRequestHandler:
         try:
             gid = args["game_id"]
             installation_id = args["installation_id"]
-            if not self.game_helper.remove_game_installation(gid, installation_id):
+            from nativebridge import NativeTaskRegistry
+            with self.game_helper._save_lock:
+                if NativeTaskRegistry.has_pending_installation(installation_id):
+                    return self._json_response(409, {"success": False, "error": "该安装正在下载或修复"})
+                removed = self.game_helper.remove_game_installation(gid, installation_id)
+            if not removed:
                 return self._json_response(404, {
                     "success": False, "error": "安装记录不存在"
                 })
@@ -1940,7 +1855,7 @@ class LocalRequestHandler:
         return self._json_response(200, inspect_path(str(payload.get("path") or "")))
 
     def _native_task_status(self, args, body, method):
-        from nativebridge import NativeTaskRegistry
+        from nativebridge import NativeTaskRegistry, reconcile_download
         task_id = str(args.get("task_id") or (body or {}).get("task_id") or "")
         task = NativeTaskRegistry.get(task_id)
         if task is None:
@@ -1948,37 +1863,7 @@ class LocalRequestHandler:
                 "success": False,
                 "error": "Unknown task_id",
             })
-        if (task.get("kind") in ("launcher-install", "launcher-update")
-                and task.get("status") == "done" and not task.get("reconciled")):
-            with self.game_helper._save_lock:
-                game = self.game_helper.get_existing_game(str(task.get("game_id") or ""))
-                installation = (
-                    game.get_installation(str(task.get("installation_id") or ""))
-                    if game else None
-                )
-                if task.get("success") and installation:
-                    installation.distribution_id = int(
-                        task.get("distribution_id", installation.distribution_id)
-                    )
-                    installation.installed_version = str(
-                        task.get("target_version") or installation.installed_version
-                    )
-                    if task.get("content_id") is not None:
-                        installation.content_id = task.get("content_id")
-                    if task.get("kind") == "launcher-install":
-                        installation.source = "download"
-                    installation.updated_at = int(time.time())
-                    self.game_helper._save_games()
-                elif (
-                    task.get("kind") == "launcher-install"
-                    and task.get("created_installation")
-                    and installation
-                ):
-                    game.remove_installation(installation.installation_id)
-                    self.game_helper._save_games()
-                NativeTaskRegistry.update(task_id, reconciled=True)
-                task["reconciled"] = True
-        return self._json_response(200, task)
+        return self._json_response(200, reconcile_download(self.game_helper, task))
 
     def _native_download_control(self, args, body, method):
         if method != "POST":
