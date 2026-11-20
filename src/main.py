@@ -774,6 +774,10 @@ def handle_download_task(task_file_path):
     oversea = bool(task_data.get("oversea", False))
     original_version = task_data.get("original_version", "")
     repair_list_path = task_data.get("repair_list_path", "")
+    mode = task_data.get("download_mode") or (
+        "repair" if repair_list_path else "update" if task_data.get("is_update") else "install"
+    )
+    scene = {"install": 1, "update": 2, "repair": 3}.get(mode)
     progress_file = task_data.get("progress_file", "")
     control_file = task_data.get("control_file", "")
     start_args = task_data.get("start_args", "")
@@ -783,7 +787,11 @@ def handle_download_task(task_file_path):
     ui_server_thread = None
     stop_event = None
     download_process = None
-    use_download_ipc = bool(content_id) and distribution_id != -1 and download_root
+    use_download_ipc = (
+        bool(content_id and version_code and download_root and scene)
+        and distribution_id >= 0
+        and (mode != "repair" or bool(repair_list_path))
+    )
     core_error = {"value": ""}
     _write_download_status(progress_file, {
         "status": "pending",
@@ -805,6 +813,9 @@ def handle_download_task(task_file_path):
                 def publish_progress(event):
                     if event.get("success") is False:
                         core_error["value"] = str(event.get("error") or "下载失败")
+                        # A core error isn't terminal until its supervisor exits.
+                        event = {key: value for key, value in event.items() if key != "success"}
+                        event["status"] = "pending"
                     _write_download_status(progress_file, event)
 
                 ui_server_thread = threading.Thread(
@@ -824,31 +835,26 @@ def handle_download_task(task_file_path):
                 import time
                 time.sleep(5)
                 encoded_path = _encode_download_path(download_root)
-                encoded_repair_list_path = _encode_repair_list_path(repair_list_path)
-                #./downloadIPC  --gameid:73 --contentid:434 --subport:1737 --pubport:1740 --path:RTpcRmV2ZXJBcHBzXGR3cmcy --env:live --oversea:0 --targetVersion:v3_3028_7e8d8ea06733136dd915a6e865440158 --originVersion:v3_2547 --scene:2 --rateLimit:0  --channel:platform --locale:zh_Hans  --isSSD:1 --isRepairMode:0
                 download_cmd = [
                     os.path.join(os.getcwd(), "downloadIPC.exe"),
                     f"--gameid:{distribution_id}",
                     f"--env:live",
                     f"--oversea:{1 if oversea else 0}",
-                    f"--scene:3",
+                    f"--scene:{scene}",
                     f"--rateLimit:0",
                     f"--channel:platform",
                     f"--locale:zh_Hans",
                     f"--isSSD:1",
-                    f"--isRepairMode:1",
+                    f"--isRepairMode:{int(mode == 'repair')}",
                     f"--contentid:{content_id}",
                     f"--subport:{heartbeat_port}",
                     f"--pubport:{progress_port}",
                     f"--path:{encoded_path}",
-                    f"--repairListPath:{encoded_repair_list_path}",
                 ]
-                if version_code:
-                    download_cmd.append(f"--targetVersion:{version_code}")
-                if original_version:
-                    download_cmd.append(f"--originVersion:{original_version}")
-                else:
-                    download_cmd.append(f"--originVersion:")
+                if mode == "repair":
+                    download_cmd.append(f"--repairListPath:{_encode_repair_list_path(repair_list_path)}")
+                download_cmd.append(f"--targetVersion:{version_code}")
+                download_cmd.append(f"--originVersion:{'' if mode == 'install' else original_version}")
                 core_log_path = _download_core_log_path(game_id, installation_id)
                 _write_download_status(progress_file, {
                     "core_log_path": core_log_path,
