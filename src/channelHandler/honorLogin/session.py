@@ -2,14 +2,38 @@
 from urllib.parse import parse_qs, urlsplit
 
 
+def _warn(message, *args):
+    """热修复诊断：即使 logger 不可用也不能影响登录流程。"""
+    try:
+        from logutil import setup_logger
+        setup_logger().warning(message, *args)
+    except Exception:
+        pass
+
+
 def valid_redirect(url, expected_state, redirect_uri):
     parsed, expected = urlsplit(url), urlsplit(redirect_uri)
     params = parse_qs(parsed.query, keep_blank_values=True)
     codes = params.get("code", [])
-    return (bool(expected_state) and parsed.scheme == expected.scheme
-            and parsed.netloc == expected.netloc and parsed.path == expected.path
-            and len(codes) == 1 and bool(codes[0]) and "error" not in params
-            and params.get("state") == [expected_state])
+    # 荣耀实际回跳可能带尾斜杠（honorid://redirect_url/?...），
+    # 与 redirect_uri 的 path('') 严格比较会永远失败。
+    path_ok = parsed.path.rstrip("/") == expected.path.rstrip("/")
+    states = params.get("state")
+    state_match = bool(expected_state) and states == [expected_state]
+    # 服务端不回传 state 时按兼容模式放行；回传但不匹配仍然拒绝。
+    state_ok = state_match or states is None
+    ok = (bool(expected_state) and parsed.scheme == expected.scheme
+          and parsed.netloc == expected.netloc and path_ok
+          and len(codes) == 1 and bool(codes[0]) and "error" not in params
+          and state_ok)
+    if ok and states is None:
+        _warn("荣耀 OAuth 回调未携带 state，已按兼容模式继续")
+    elif not ok:
+        _warn("荣耀 OAuth 回调校验未通过: scheme={} netloc={} path={!r} code_count={} "
+              "state_present={} state_match={} error={}",
+              parsed.scheme, parsed.netloc, parsed.path, len(codes),
+              states is not None, state_match, params.get("error"))
+    return ok
 
 
 class HonorSessionError(ValueError):
