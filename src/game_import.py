@@ -149,7 +149,7 @@ def queue_import_download(manager, game_id, installation_id, path, details):
         }
 
 
-def start_import(manager, *, source, game_id="", path="", distribution_id=-1):
+def start_import(manager, *, source, game_id="", path="", distribution_id=-1, update_after_import=False):
     if source not in ("manual", "fever", "startup"):
         raise ValueError("不支持的导入来源")
     if source != "startup" and not game_id:
@@ -167,13 +167,13 @@ def start_import(manager, *, source, game_id="", path="", distribution_id=-1):
     if created:
         threading.Thread(
             target=_run_import,
-            args=(manager, task_id, source, resolved_id, path, int(distribution_id)),
+            args=(manager, task_id, source, resolved_id, path, int(distribution_id), update_after_import),
             name=f"game-import-{task_id[:8]}", daemon=True,
         ).start()
     return NativeTaskRegistry.get(task_id)
 
 
-def _run_import(manager, task_id, source, game_id, path, distribution_id):
+def _run_import(manager, task_id, source, game_id, path, distribution_id, update_after_import):
     from gamemgr import Game, GameInstallation, GameManager, _FEVER_GAMES_CACHE_KEY, _FEVER_GAMES_CACHE_LOCK
     from envmgr import genv
 
@@ -364,10 +364,11 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
                   "cancelable": False}
         if selected_result:
             selected_result.update(import_details)
-            selected_result.update(queue_import_download(
-                manager, selected_result["game_id"], selected_result["installation_id"],
-                selected_result["path"], import_details,
-            ))
+            if update_after_import:
+                selected_result.update(queue_import_download(
+                    manager, selected_result["game_id"], selected_result["installation_id"],
+                    selected_result["path"], import_details,
+                ))
             values.update(selected_result)
             values.pop("success", None)
         if source == "startup" and not results:

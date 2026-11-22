@@ -1051,6 +1051,7 @@ class LocalRequestHandler:
     def _launcher_locate(self, args, body, method):
         try:
             payload = body or args or {}
+            update_after_import = method == "POST" and payload.get("update_after_import") in (True, "1", "true")
             gid = str(payload.get("game_id") or "")
             executable_path = os.path.normpath(str(payload.get("path") or "").strip())
             if not gid or not executable_path:
@@ -1075,6 +1076,7 @@ class LocalRequestHandler:
                     task = start_import(
                         self.game_helper, source="manual", game_id=gid, path=executable_path,
                         distribution_id=distribution_id,
+                        update_after_import=update_after_import,
                     )
                 except ValueError as exc:
                     return self._json_response(400, {"success": False, "error": str(exc)})
@@ -1115,11 +1117,13 @@ class LocalRequestHandler:
                         launcher_data.get("startup_params") or ""
                     )
                 self.game_helper._save_games()
-            from game_import import queue_import_download
-            download = queue_import_download(
-                self.game_helper, gid, installation.installation_id if installation else "",
-                executable_path, import_details,
-            ) if method == "POST" else {}
+            download = {}
+            if update_after_import:
+                from game_import import queue_import_download
+                download = queue_import_download(
+                    self.game_helper, gid, installation.installation_id if installation else "",
+                    executable_path, import_details,
+                )
             return self._json_response(200, {
                 "success": True,
                 "game_id": gid,
@@ -1397,7 +1401,7 @@ class LocalRequestHandler:
 
     def _launcher_update(self, args, body, method):
         try:
-            from nativebridge import start_launcher_update
+            from nativebridge import NativeTaskRegistry, start_launcher_update
 
             payload = {**args, **(body or {})}
             gid = payload["game_id"]
@@ -1409,14 +1413,17 @@ class LocalRequestHandler:
             if (not installation or installation.distribution_id != dist_id
                     or not os.path.isdir(game.get_root_path(installation.installation_id))):
                 return self._json_response(404, {"success": False, "error": "未找到所选分发的安装目录"})
-            repair = payload.get("repair") in (True, "1", "true")
+            # Without an explicit mode, keep the previous UI's full file check.
+            repair = payload.get("repair") not in (False, "0", "false")
             task_id, _ = start_launcher_update(
                 self.game_helper, game, installation, dist_id,
                 int(payload.get("concurrent", "4")), repair=repair,
             )
+            task = NativeTaskRegistry.get(task_id) or {}
             return self._json_response(202, {
                 "success": True, "status": "pending", "task_id": task_id,
                 "installation_id": installation.installation_id,
+                "operation": task.get("operation"),
             })
         except Exception as e:
             safe_exception(self.logger, "更新启动器失败")
@@ -1503,6 +1510,7 @@ class LocalRequestHandler:
     def _launcher_import_fever(self, args, body, method):
         try:
             payload = body or args or {}
+            update_after_import = method == "POST" and payload.get("update_after_import") in (True, "1", "true")
             if payload.get("async_import") in (True, "true", "1"):
                 if method != "POST":
                     return self._json_response(405, {"success": False, "error": "导入请求必须使用 POST"})
@@ -1512,6 +1520,7 @@ class LocalRequestHandler:
                         self.game_helper, source="fever", game_id=str(payload.get("game_id") or ""),
                         path=str(payload.get("path") or ""),
                         distribution_id=int(payload.get("distribution_id", -1)),
+                        update_after_import=update_after_import,
                     )
                 except (ValueError, TypeError) as exc:
                     return self._json_response(400, {"success": False, "error": str(exc)})
@@ -1527,11 +1536,13 @@ class LocalRequestHandler:
             if not imported:
                 return self._json_response(404, {"success": False, "error": "未找到可导入的Fever游戏记录"})
             game_id, installation = imported
-            from game_import import queue_import_download
-            download = queue_import_download(
-                self.game_helper, game_id, installation.installation_id, installation.path,
-                import_details,
-            ) if method == "POST" else {}
+            download = {}
+            if update_after_import:
+                from game_import import queue_import_download
+                download = queue_import_download(
+                    self.game_helper, game_id, installation.installation_id, installation.path,
+                    import_details,
+                )
             return self._json_response(200, {
                 "success": True, "game_id": game_id,
                 "installation_id": installation.installation_id,
