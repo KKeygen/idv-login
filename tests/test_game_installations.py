@@ -1,4 +1,5 @@
 import ast
+import json
 import os
 import sys
 import tempfile
@@ -384,49 +385,47 @@ class GameInstallationModelTests(unittest.TestCase):
         self.assertEqual(len(game.installations), 1)
         self.assertEqual(known.distribution_id, 73)
 
-    def test_unknown_distribution_uses_fewest_hash_mismatches(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            executable = os.path.join(temp_dir, "game.exe")
-            common = os.path.join(temp_dir, "common.bin")
-            Path(executable).touch()
-            Path(common).touch()
-            game = Game("h55")
-            installation = game.add_installation(executable, -1)
-            options = [73, 134]
-            file_infos = {
-                73: {"files": [{"path": "common.bin", "xxh": "wrong", "op": 1}]},
-                134: {"files": [{"path": "common.bin", "xxh": "local", "op": 1}]},
-            }
+    def _fever_state_fixture(self, root, installed):
+        from game_import import prepare_import_installation
 
-            with mock.patch("gamemgr.calculate_xxh64", return_value="local") as hasher:
-                detected = game.identify_installation_distribution(
-                    installation.installation_id, options, file_infos
-                )
+        executable = root / "client" / "game.exe"
+        executable.parent.mkdir()
+        executable.touch()
+        state = root / ".dlstorage" / "downloading" / "fixture_app.state"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({"installed_contents": installed}))
+        game = Game("h55")
+        installation = game.add_installation(str(executable), -1)
+        game.get_distributions = lambda: [73, 134]
+        game.get_launcher_data_for_distribution = lambda _: {"startup_path": "client/game.exe"}
+        game.get_file_distribution_info = lambda dist_id, *, refresh: {
+            "app_content_id": {73: 434, 134: 819}[dist_id], "version_code": "v3_target",
+        }
+        with mock.patch("gamemgr.calculate_xxh64", side_effect=AssertionError("import must not hash")):
+            details = prepare_import_installation(game, installation)
+        return installation, details
 
-            self.assertEqual(detected, 134)
-            self.assertEqual(installation.distribution_id, 134)
-            hasher.assert_called_once_with(common)
+    def test_unknown_distribution_uses_unique_observed_content_not_file_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            installation, details = self._fever_state_fixture(
+                Path(tmp), {"819": {"Version": "v3_local"}},
+            )
 
-    def test_unknown_distribution_tie_uses_first_cloud_distribution(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            executable = os.path.join(temp_dir, "game.exe")
-            common = os.path.join(temp_dir, "common.bin")
-            Path(executable).touch()
-            Path(common).touch()
-            game = Game("h55")
-            installation = game.add_installation(executable, -1)
-            file_infos = {
-                73: {"files": [{"path": "common.bin", "xxh": "same", "op": 1}]},
-                134: {"files": [{"path": "common.bin", "xxh": "same", "op": 1}]},
-            }
+        self.assertTrue(details["distribution_verified"])
+        self.assertEqual(installation.distribution_id, 134)
+        self.assertEqual(installation.content_id, 819)
+        self.assertEqual(installation.installed_version, "v3_local")
+        self.assertEqual(details["target_version"], "v3_target")
 
-            with mock.patch("gamemgr.calculate_xxh64", return_value="same"):
-                detected = game.identify_installation_distribution(
-                    installation.installation_id, [73, 134], file_infos
-                )
+    def test_ambiguous_distribution_is_not_assigned_by_cloud_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            installation, details = self._fever_state_fixture(
+                Path(tmp), {"434": {"Version": "v3_a"}, "819": {"Version": "v3_b"}},
+            )
 
-            self.assertEqual(detected, 73)
-            self.assertEqual(installation.distribution_id, 73)
+        self.assertFalse(details["distribution_verified"])
+        self.assertEqual(installation.distribution_id, -1)
+        self.assertFalse(installation.installed_version)
 
     def test_update_stats_include_manifest_items_without_url(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -449,6 +448,23 @@ class GameInstallationModelTests(unittest.TestCase):
             self.assertEqual(stats["file_count"], 2)
             self.assertEqual(stats["download_bytes"], 30)
             self.assertTrue(stats["needs_update"])
+
+    def test_quick_update_check_refreshes_version_without_hashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "game.exe"
+            exe.touch()
+            game = Game("h55")
+            install = game.add_installation(str(exe), 134, "v3_old")
+            with mock.patch.object(game, "get_file_distribution_info",
+                                   return_value={"version_code": "v3_target"}) as manifest, \
+                    mock.patch.object(game, "version_check", side_effect=AssertionError("version check must not hash")):
+                stats = game.get_update_stats(134, install.installation_id, estimate_repair=False)
+
+        manifest.assert_called_once_with(134, refresh=True)
+        self.assertTrue(stats["needs_update"])
+        self.assertIsNone(stats["file_count"])
+        self.assertIsNone(stats["download_bytes"])
+        self.assertEqual(stats["installed_version"], "v3_old")
 
     def test_successful_start_returns_true(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -546,30 +562,129 @@ class GameInstallationModelTests(unittest.TestCase):
             self.assertEqual(restored.content_id, 434)
 
     def test_fever_import_adds_installation_instead_of_overwriting(self):
-        game = Game("h55")
-        existing = game.add_installation("D:/Standalone/dwrg.exe", 73, source="download")
-        manager = self._manager(game)
-        manager.list_fever_games = lambda: [{
-            "game_id": "aec-example-g-h55",
-            "display_name": "第五人格",
-            "path": "D:/Fever/dwrg.exe",
-            "distribution_id": 134,
-        }]
-        old_toast = app_state.toast
-        app_state.toast = lambda *args, **kwargs: None
-        try:
-            imported = manager.import_fever_game(
-                "h55", distribution_id=134, path="D:/Fever/dwrg.exe"
-            )
-        finally:
-            app_state.toast = old_toast
+        with tempfile.TemporaryDirectory() as tmp:
+            standalone = Path(tmp) / "standalone" / "game.exe"
+            fever_exe = Path(tmp) / "fever" / "game.exe"
+            for exe in (standalone, fever_exe):
+                exe.parent.mkdir()
+                exe.touch()
+            game = Game("h55")
+            existing = game.add_installation(str(standalone), 73, source="download")
+            manager = self._manager(game)
+            manager.list_fever_games = lambda: [{
+                "game_id": "aec-example-g-h55", "display_name": "第五人格",
+                "path": str(fever_exe), "distribution_id": 134, "version_code": "v3_registry",
+            }]
 
-        self.assertEqual(imported, "h55")
-        self.assertEqual(len(game.installations), 2)
-        fever = game.get_installation_for_distribution(134)
-        self.assertEqual(fever.distribution_id, 134)
-        self.assertEqual(fever.source, "fever")
-        self.assertEqual(existing.path, "D:/Standalone/dwrg.exe")
+            imported = manager.import_fever_game(
+                "h55", distribution_id=134, path=str(fever_exe), create_shortcut=False,
+            )
+            self.assertEqual(imported, "h55")
+            self.assertEqual(len(game.installations), 2)
+            fever = game.get_installation_for_distribution(134)
+            self.assertEqual(fever.source, "fever")
+            self.assertEqual(fever.installed_version, "v3_registry")
+            self.assertEqual(existing.path, str(standalone))
+
+    def test_registry_install_without_version_can_be_explicitly_repaired(self):
+        import base64
+        from game_import import queue_import_download
+
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "game.exe"
+            exe.touch()
+            registry = types.ModuleType("winreg")
+            registry.HKEY_CURRENT_USER = 0
+            registry.OpenKey = mock.MagicMock()
+            registry.EnumKey = mock.Mock(side_effect=["134", OSError()])
+            values = {
+                "GameInfo": base64.b64encode(b'{"game_id":"h55"}').decode(),
+                "LastInstallPath": tmp, "RunningProcessName": "game.exe",
+                "StartupPath": "game.exe", "AppContentId": 819,
+            }
+
+            def query(_key, name):
+                if name not in values:
+                    raise FileNotFoundError(name)
+                return values[name], None
+
+            registry.QueryValueEx = query
+            game = Game("h55")
+            game.get_distributions = lambda: [134]
+            game.get_launcher_data_for_distribution = lambda _: {"startup_path": "game.exe"}
+            game.get_file_distribution_info = lambda _, *, refresh: {"version_code": "v3_target"}
+            manager = self._manager(game)
+            with mock.patch.dict(sys.modules, {"winreg": registry}):
+                rows = manager._read_fever_games_registry()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["version_code"], "")
+            manager.list_fever_games = lambda: rows
+            self.assertEqual(manager.import_missing_fever_games(), [])
+            self.assertFalse(game.installations)
+
+            details = {}
+            _, install = manager.import_fever_game(
+                "h55", distribution_id=134, path=str(exe), create_shortcut=False,
+                return_installation=True, import_details=details,
+            )
+            self.assertTrue(details["distribution_verified"])
+            self.assertEqual(details["detected_installed_version"], "")
+            with mock.patch("game_import.sys", types.SimpleNamespace(platform="win32")), \
+                    mock.patch("nativebridge.start_launcher_update", return_value=("fixture-task", True)) as start:
+                result = queue_import_download(manager, "h55", install.installation_id, str(exe), details)
+
+        self.assertEqual(result["download_operation"], "repair")
+        self.assertEqual(result["download_status"], "queued")
+        self.assertTrue(start.call_args.kwargs["repair"])
+        self.assertTrue(start.call_args.kwargs["unknown_origin"])
+
+    def _launcher_method(self, name):
+        path = REPO_ROOT / "src/local_handler.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        handler = next(node for node in tree.body
+                       if isinstance(node, ast.ClassDef) and node.name == "LocalRequestHandler")
+        method = next(node for node in handler.body
+                      if isinstance(node, ast.FunctionDef) and node.name == name)
+        scope = {"os": os, "safe_exception": logutil.safe_exception}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), scope)
+        return scope[name]
+
+    def test_legacy_fever_get_and_post_do_not_queue_updates(self):
+        load = self._launcher_method("_launcher_import_fever")
+        install = types.SimpleNamespace(installation_id="i", distribution_id=134, path="fixture", installed_version="")
+        helper = types.SimpleNamespace(import_fever_game=mock.Mock(return_value=("h55", install)))
+        handler = types.SimpleNamespace(game_helper=helper, logger=None, _json_response=lambda status, data: (status, data))
+        args = {"game_id": "h55", "distribution_id": 134, "path": "fixture"}
+        with mock.patch("game_import.queue_import_download", return_value={"download_status": "queued"}) as queue:
+            for verb, body in (("GET", {}), ("POST", args)):
+                status, values = load(handler, args, body, verb)
+                self.assertEqual(status, 200)
+                self.assertIsNone(helper.import_fever_game.call_args.kwargs["import_details"])
+                self.assertNotIn("download_status", values)
+            queue.assert_not_called()
+            status, values = load(handler, args, {**args, "update_after_import": True}, "POST")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(values["download_status"], "queued")
+        self.assertIsInstance(helper.import_fever_game.call_args.kwargs["import_details"], dict)
+        queue.assert_called_once()
+
+    def test_legacy_update_defaults_to_repair_and_explicit_zero_does_not(self):
+        load = self._launcher_method("_launcher_update")
+        with tempfile.TemporaryDirectory() as tmp:
+            install = types.SimpleNamespace(installation_id="i", distribution_id=134)
+            game = types.SimpleNamespace(get_root_path=lambda _: tmp)
+            helper = types.SimpleNamespace(get_existing_game=lambda _: game)
+            handler = types.SimpleNamespace(
+                game_helper=helper, logger=None, _resolve_installation=lambda *_: install,
+                _json_response=lambda status, data: (status, data),
+            )
+            args = {"game_id": "h55", "distribution_id": "134"}
+            with mock.patch("nativebridge.start_launcher_update", return_value=("fixture-task", True)) as start:
+                for query, expect in ((args, True), ({**args, "repair": "0"}, False)):
+                    status, _ = load(handler, query, {}, "GET")
+                    self.assertEqual(status, 202)
+                    self.assertIs(start.call_args.kwargs["repair"], expect)
 
     def test_legacy_default_installation_id_is_discarded(self):
         game = Game("h55")

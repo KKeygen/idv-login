@@ -1575,29 +1575,43 @@ class Game:
         return 0
 
     def get_update_stats(
-        self, distribution_id: int, installation_id: str = ""
+        self, distribution_id: int, installation_id: str = "", *, estimate_repair: bool = True,
     ) -> Optional[dict]:
+        """Keep the legacy repair estimate separate from a version-only check."""
         installation = self.get_installation(installation_id)
         dist_id = self._coerce_distribution_id(distribution_id)
-        if not installation or dist_id < 0 or installation.distribution_id != dist_id:
+        if not installation or dist_id < 0:
+            return None
+        allowed = (-1, dist_id) if estimate_repair else (dist_id,)
+        if installation.distribution_id not in allowed:
             return None
         download_root = self.get_root_path(installation.installation_id)
         if not download_root or not os.path.isdir(download_root):
             return None
-        distribution = self.get_file_distribution_info(dist_id, refresh=True) or {}
-        target_version = str(distribution.get("version_code") or "")
-        if not target_version:
-            return None
-        installed_version = installation.installed_version
-        needs_update = (
-            not os.path.isfile(installation.path) or installed_version != target_version
+        distribution = (
+            self.get_file_distribution_info(dist_id) if estimate_repair
+            else self.get_file_distribution_info(dist_id, refresh=True)
         )
+        if not distribution:
+            return None
+        target_version = str(distribution.get("version_code") or "")
+        installed_version = installation.installed_version
+        if estimate_repair:
+            _, mismatches = self.version_check(distribution.get("files") or [], download_root)
+            download_bytes = sum(self._extract_file_size(item) for item in mismatches)
+            file_count = len(mismatches)
+            needs_update = bool(mismatches or (target_version and installed_version != target_version))
+        else:
+            if not target_version:
+                return None
+            needs_update = not os.path.isfile(installation.path) or installed_version != target_version
+            # A version comparison does not reveal the native core's delta plan.
+            download_bytes = file_count = None if needs_update else 0
         usage = shutil.disk_usage(download_root)
         return {
             "needs_update": needs_update,
-            # No delta plan is available from this read-only version check.
-            "download_bytes": None if needs_update else 0,
-            "file_count": None if needs_update else 0,
+            "download_bytes": download_bytes,
+            "file_count": file_count,
             "disk_free_bytes": usage.free,
             "disk_total_bytes": usage.total,
             "target_version": target_version,
@@ -2218,7 +2232,6 @@ class GameManager:
                                 install_path,
                                 running_process_name,
                                 startup_path,
-                                version_code,
                             ]):
                                 index += 1
                                 continue
@@ -2250,7 +2263,7 @@ class GameManager:
                                 "display_name": display_name,
                                 "path": executable_path,
                                 "distribution_id": int(subkey_name),
-                                "version_code": str(version_code),
+                                "version_code": str(version_code or ""),
                                 "content_id": content_id,
                                 "startup_path": startup_path,
                                 "startup_args": str(
@@ -2267,7 +2280,7 @@ class GameManager:
     def initialize_downloadable_installation_versions(
         self, *, write_markers=True, cancel_check=None
     ) -> int:
-        records = self.list_fever_games()
+        records = [record for record in self.list_fever_games() if record.get("version_code")]
         changed_count = 0
         for game in self.games.values():
             for installation in list(game.installations.values()):
@@ -2297,7 +2310,8 @@ class GameManager:
                 cancel_check()
             target_game_id = str(record.get("game_id") or "")
             target_path = str(record.get("path") or "")
-            if not target_game_id or not target_path or not os.path.isfile(target_path):
+            if (not target_game_id or not target_path or not os.path.isfile(target_path)
+                    or not record.get("version_code")):
                 continue
             final_game_id = self.find_matching_game_id(target_game_id) or target_game_id
             game = self.get_existing_game(final_game_id)

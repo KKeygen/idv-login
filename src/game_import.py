@@ -211,7 +211,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, update
         if source == "manual":
             if not staged.set_game_path(
                 game_id, path, preserve_missing=True,
-                cancel_check=check_cancel, import_details=import_details,
+                cancel_check=check_cancel, import_details=import_details if update_after_import else None,
                 distribution_id=distribution_id,
             ):
                 raise ValueError("导入游戏路径失败")
@@ -229,7 +229,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, update
             game_id = staged.import_fever_game(
                 game_id, distribution_id, path, create_shortcut=False,
                 notify=False, refresh_registry=False,
-                import_details=import_details, cancel_check=check_cancel,
+                import_details=import_details if update_after_import else None, cancel_check=check_cancel,
             )
             if not game_id:
                 raise ValueError("未找到可导入的 Fever 游戏记录")

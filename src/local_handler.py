@@ -1086,7 +1086,7 @@ class LocalRequestHandler:
 
             import_details = {}
             if not self.game_helper.set_game_path(
-                gid, executable_path, import_details=import_details,
+                gid, executable_path, import_details=import_details if update_after_import else None,
                 distribution_id=distribution_id,
             ):
                 return self._json_response(500, {
@@ -1438,6 +1438,7 @@ class LocalRequestHandler:
             installation = self._resolve_installation(game, installation_id, dist_id)
             if not installation or not os.path.isdir(game.get_root_path(installation.installation_id)):
                 return self._json_response(404, {"success": False, "error": "未找到游戏安装目录"})
+            estimate_repair = args.get("repair") not in (False, "0", "false")
             if str(args.get("async", "")) == "1":
                 from nativebridge import NativeTaskRegistry
 
@@ -1446,7 +1447,7 @@ class LocalRequestHandler:
                 def calculate_update_info():
                     try:
                         stats = game.get_update_stats(
-                            dist_id, installation.installation_id
+                            dist_id, installation.installation_id, estimate_repair=estimate_repair,
                         )
                         if not stats:
                             raise RuntimeError("未找到更新信息")
@@ -1474,7 +1475,9 @@ class LocalRequestHandler:
                     "status": "pending",
                     "task_id": task_id,
                 })
-            stats = game.get_update_stats(dist_id, installation.installation_id)
+            stats = game.get_update_stats(
+                dist_id, installation.installation_id, estimate_repair=estimate_repair,
+            )
             if not stats:
                 return self._json_response(404, {"success": False, "error": "未找到更新信息"})
             return self._json_response(200, {
@@ -1531,7 +1534,7 @@ class LocalRequestHandler:
             import_details = {}
             imported = self.game_helper.import_fever_game(
                 payload["game_id"], distribution_id, payload.get("path", ""),
-                return_installation=True, import_details=import_details,
+                return_installation=True, import_details=import_details if update_after_import else None,
             )
             if not imported:
                 return self._json_response(404, {"success": False, "error": "未找到可导入的Fever游戏记录"})
