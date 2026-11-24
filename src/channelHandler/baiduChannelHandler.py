@@ -40,7 +40,6 @@ class baiduChannel(channelmgr.channel):
                               else secrets.token_hex(16))
         self._active_browser = None
         self._login_pending = False
-        self._baidu_packet_ready = False
 
     @classmethod
     def from_dict(cls, data):
@@ -58,18 +57,6 @@ class baiduChannel(channelmgr.channel):
     def is_token_valid(self):
         return all(isinstance(self.baiduSession.get(key), str) and self.baiduSession[key]
                    for key in ("uid", "access_token", "account_id", "auto_login_sign"))
-
-    def cached_unisdk(self, game_id):
-        return super().cached_unisdk(game_id) if self._baidu_packet_ready else None
-
-    def cache_unisdk(self, packet, expires_at=None):
-        result = super().cache_unisdk(packet, expires_at)
-        self._baidu_packet_ready = True
-        return result
-
-    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False, cancel_event=None):
-        self._baidu_packet_ready = False
-        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True, cancel_event=cancel_event)
 
     def _call_protocol(self, method, value):
         client = BaiduProtocol({**self.channelConfig, "device_id": self.baiduDeviceId})

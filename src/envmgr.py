@@ -32,7 +32,7 @@ class genv:
                         data = {}
                     data[key] = value
                     from secure_write import write_json_restricted
-                    write_json_restricted(_cachePath, data, atomic_required=require_saved)
+                    write_json_restricted(_cachePath, data, atomic_required=True)
                 except Exception as error:
                     if require_saved:
                         raise OSError('Persistent configuration write failed') from error
@@ -84,7 +84,7 @@ class genv:
             for key in keys:
                 data.pop(key, None)
             from secure_write import write_json_restricted
-            write_json_restricted(_cachePath, data)
+            write_json_restricted(_cachePath, data, atomic_required=True)
 
     @staticmethod
     def reset_cache():

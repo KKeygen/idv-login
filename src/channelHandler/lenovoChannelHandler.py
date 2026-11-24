@@ -34,7 +34,6 @@ class lenovoChannel(channelmgr.channel):
         self.crossGames = False
         self.lenovoSession = dict(lenovoSession or {})
         self.lenovo_device_id = lenovo_device_id or uuidlib.uuid4().hex
-        self._lenovo_packet_ready = False
         self.active_sdkuid = "0" if self.lenovoSession.get("st") else ""
         self._login_dialog = None
 
@@ -45,13 +44,11 @@ class lenovoChannel(channelmgr.channel):
         restored = cls(**{k: data[k] for k in keys if k in data})
         restored.restore_common(data)
         restored.crossGames = False
-        restored._lenovo_packet_ready = False
         return restored
 
     def restore_common(self, data):
         super().restore_common(data)
         self.crossGames = False
-        self._lenovo_packet_ready = False
         return self
 
     def _client(self):
@@ -69,24 +66,14 @@ class lenovoChannel(channelmgr.channel):
                                "st_ttl", "st_issued_at") if k in result}
         self.unisdk_cache.clear()
         self.observe_sdkuid("0")
-        self._lenovo_packet_ready = False
 
     def is_token_valid(self):
         return bool(self.lenovoSession.get("tgt") and self.lenovoSession.get("account_id"))
 
-    def cached_unisdk(self, game_id):
-        if not self._lenovo_packet_ready or not st_is_valid(self.lenovoSession):
+    def cached_unisdk(self, game_id, *, for_login=False):
+        if not st_is_valid(self.lenovoSession):
             return None
-        return super().cached_unisdk(game_id)
-
-    def cache_unisdk(self, packet, expires_at=None):
-        result = super().cache_unisdk(packet, expires_at)
-        self._lenovo_packet_ready = True
-        return result
-
-    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False, cancel_event=None):
-        self._lenovo_packet_ready = False
-        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True, cancel_event=cancel_event)
+        return super().cached_unisdk(game_id, for_login=for_login)
 
     def request_user_login(self, on_complete=None, *, interactive=True, force=False):
         self._check_game(self.game_id)

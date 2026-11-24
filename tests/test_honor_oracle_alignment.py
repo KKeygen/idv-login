@@ -95,7 +95,7 @@ class Harness:
 def make_adapter(h):
     utils = {'getShortGameId': lambda game: game, 'cmp_game_id': lambda a,b: a==b}
     cache = load_file(SRC / 'channel_cache.py', dict(base64=base64, json=json, copy=copy, time=time, **utils),
-                      functions=('packet_identity', 'unisdk_expires_at', 'credential_expires_at'))
+                      functions=('packet_auth', 'packet_identity', 'unisdk_expires_at', 'credential_expires_at'))
     cache['unquote'] = lambda x:x
     base_ns = dict(cache, copy=copy, time=time, genv=types.SimpleNamespace(set=lambda *a:None), setup_logger=lambda:h.logs)
     base = load_file(SRC / 'channelmgr.py', base_ns, classes=('channel',))['channel']
@@ -202,14 +202,14 @@ class ProtocolTests(unittest.TestCase):
 
 
 class EntryTests(unittest.TestCase):
-    def test_fresh_shared_cache_cannot_skip_server_validation(self):
+    def test_fresh_shared_cache_reuses_service_dated_game_packet(self):
         h=Harness();r=make_adapter(h)
         original=r.request_unisdk(interactive=False)
         self.assertIsInstance(original,dict)
         h.events.clear();h.replies=[session('fixture-new')]
         packet=r.request_unisdk(interactive=False)
-        self.assertEqual([e[0] for e in h.events],['configLogin','build_sauth'])
-        self.assertEqual(base64.b64decode(packet['token']),b'fixture-new')
+        self.assertEqual(h.events,[])
+        self.assertEqual(packet,original)
     def test_unexpired_but_server_rejected_uses_st_before_sauth(self):
         h=Harness(replies=[{'loginData':{'errorCode':7002}}, {'errorCode':0}, session('fixture-new')]);r=make_adapter(h)
         result=r.request_unisdk(interactive=False)
@@ -239,26 +239,19 @@ class EntryTests(unittest.TestCase):
 
 
 class PrefetchTests(unittest.TestCase):
-    def test_fresh_honor_cache_is_validated_at_startup_and_game_launch(self):
+    def test_fresh_honor_cache_is_reused_at_startup_and_game_launch(self):
         tree=ast.parse((SRC/'mpay_db_sync.py').read_text())
         cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='MpayDBSync')
         method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_prepare_selected')
-        ns=dict(Future=Future,time=time,threading=threading,getShortGameId=lambda x:x)
+        ns={}
         exec(compile(ast.Module(body=[method],type_ignores=[]),'mpay_db_sync.py','exec'),ns)
-        context=types.ModuleType('prefetch_context');context.prefetch_scope=lambda *a:nullcontext()
-        for force_startup in (False,True):
+        for _stage in ('startup','game_launch'):
             h=Harness();r=make_adapter(h);r.request_unisdk(interactive=False);h.events.clear()
-            def clone(record):
-                obj=copy.copy(record);obj.honorLogin=copy.copy(record.honorLogin)
-                obj.unisdk_cache=copy.deepcopy(record.unisdk_cache);return obj
-            sync=types.SimpleNamespace(_packet=lambda rec,game:rec.cached_unisdk(game),
-                _renewal_state=lambda rec,game:(id(rec.unisdk_cache.get(game)),rec.unisdk_cache.get(game,{}).get('expires_at')),
-                _clone=clone,lock=threading.Lock(),stopping=False,
-                manager=types.SimpleNamespace(query_channel=lambda uuid:r,save_records=lambda:None),
-                _record_error=lambda *a,**kw:self.fail('prefetch error'))
-            with patch.dict(sys.modules,{'prefetch_context':context}):
-                ns['_prepare_selected'](sync,{'h55':[r]},force_game_token=force_startup)
-            self.assertEqual([e[0] for e in h.events],['configLogin','build_sauth'])
+            sync=types.SimpleNamespace(stopping=False,
+                manager=types.SimpleNamespace(prepare_game_credential=
+                    lambda rec,game:rec.request_unisdk(game,interactive=False)))
+            ns['_prepare_selected'](sync,{'h55':[r]})
+            self.assertEqual(h.events,[])
             self.assertIsInstance(r.cached_unisdk('h55'),dict)
 
 
@@ -267,7 +260,7 @@ class RegressionTests(unittest.TestCase):
         h=Harness();r=make_adapter(h);r.request_unisdk(interactive=False)
         self.assertIsInstance(r.cached_unisdk('h55'),dict)
         h.replies=[{'loginData':{'errorCode':7008}}]
-        self.assertFalse(r.request_unisdk(interactive=False))
+        self.assertFalse(r.request_unisdk(interactive=False,force=True))
         self.assertIsNone(r.cached_unisdk('h55'));self.assertTrue(r.is_login_expired('h55'))
     def test_bad_saved_game_token_can_restore_from_st(self):
         for platform in ('windows','legacy'):
@@ -343,7 +336,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(len(seen),1);self.assertIsInstance(seen[0],dict)
         self.assertEqual([e[0] for e in h.events],['configLogin','login','build_sauth'])
         self.assertEqual(base64.b64decode(seen[0]['token']),b'fixture-new')
-        self.assertFalse(r.request_unisdk(interactive=False))
+        self.assertFalse(r.request_unisdk(interactive=False,force=True))
         self.assertEqual(h.events[-1][0],'configLogin')
     def test_created_continues_fresh_login_without_revalidation(self):
         h=Harness(replies=[session('fixture-new')]);r=make_adapter(h)
@@ -383,7 +376,8 @@ class RegressionTests(unittest.TestCase):
         cls=load_file(SRC/'channel_relogin.py',ns,classes=('ExpiredChannelLogin',))['ExpiredChannelLogin']
         attempt=cls(sync,r,'h55',lambda:None,try_silent=True)
         cache_module=types.ModuleType('channel_cache');cache_module.credential_expires_at=lambda rec:rec.honorLogin.expiredTime
-        with patch.dict(sys.modules,{'channel_cache':cache_module}):
+        feedback=types.SimpleNamespace(relogin_succeeded=lambda:toasts.append('relogin-success'))
+        with patch.dict(sys.modules,{'channel_cache':cache_module,'sauth_feedback':feedback}):
             attempt.start();deadline=time.monotonic()+2
             while not pending and time.monotonic()<deadline:time.sleep(.005)
             self.assertTrue(pending)

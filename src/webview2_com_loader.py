@@ -9,9 +9,36 @@ import winreg
 from comtypes import COMObject, COMError
 import webview2_com_interfaces as I
 
+# A hotfix can replace this loader while the packaged interface module is old.
+# Define the new interfaces locally in that case so the update is self-contained.
+if not hasattr(I, 'ICoreWebView2CustomSchemeRegistration'):
+    class _CustomSchemeRegistration(I.IUnknown):
+        _iid_ = I.GUID('{d60ac92c-37a6-4b26-a39e-95cfe59047bb}')
+        _methods_ = [
+            I.COMMETHOD([], I.HRESULT, 'get_SchemeName', (['out'], C.POINTER(C.c_void_p), 'schemeName')),
+            I.COMMETHOD([], I.HRESULT, 'get_TreatAsSecure', (['out'], C.POINTER(C.c_int32), 'treatAsSecure')),
+            I.COMMETHOD([], I.HRESULT, 'put_TreatAsSecure', (['in'], C.c_int32, 'value')),
+            I.COMMETHOD([], I.HRESULT, 'GetAllowedOrigins', (['out'], C.POINTER(C.c_uint32), 'allowedOriginsCount'), (['out'], C.POINTER(C.POINTER(C.c_void_p)), 'allowedOrigins')),
+            I.COMMETHOD([], I.HRESULT, 'SetAllowedOrigins', (['in'], C.c_uint32, 'allowedOriginsCount'), (['in'], C.POINTER(C.c_wchar_p), 'allowedOrigins')),
+            I.COMMETHOD([], I.HRESULT, 'get_HasAuthorityComponent', (['out'], C.POINTER(C.c_int32), 'hasAuthorityComponent')),
+            I.COMMETHOD([], I.HRESULT, 'put_HasAuthorityComponent', (['in'], C.c_int32, 'value')),
+        ]
+
+    class _EnvironmentOptions4(I.IUnknown):
+        _iid_ = I.GUID('{ac52d13f-0d38-475a-9dca-876580d6793e}')
+        _methods_ = [
+            I.COMMETHOD([], I.HRESULT, 'GetCustomSchemeRegistrations', (['out'], C.POINTER(C.c_uint32), 'count'), (['out'], C.POINTER(C.POINTER(C.POINTER(_CustomSchemeRegistration))), 'schemeRegistrations')),
+            I.COMMETHOD([], I.HRESULT, 'SetCustomSchemeRegistrations', (['in'], C.c_uint32, 'count'), (['in'], C.POINTER(C.POINTER(_CustomSchemeRegistration)), 'schemeRegistrations')),
+        ]
+
+    I.ICoreWebView2CustomSchemeRegistration = _CustomSchemeRegistration
+    I.ICoreWebView2EnvironmentOptions4 = _EnvironmentOptions4
+
 from webview2_setup import MINIMUM_RUNTIME_VERSION as MINIMUM_VERSION
 E_FAIL = -2147467259
 E_ACCESSDENIED = -2147024891
+E_POINTER = -2147467261
+E_OUTOFMEMORY = -2147024882
 POLICY_BLOCKED = -2147023636
 ole32 = C.WinDLL('ole32')
 ole32.CoTaskMemAlloc.argtypes = [C.c_size_t]
@@ -61,9 +88,73 @@ def _deny(self, this, value):
     return E_ACCESSDENIED
 
 
+class CallbackSchemeRegistration(COMObject):
+    """An immutable navigation-only scheme; callbacks remain host-validated."""
+    _com_interfaces_ = [I.ICoreWebView2CustomSchemeRegistration]
+
+    def __init__(self, name):
+        self._scheme_name = name
+
+    def get_SchemeName(self, this, out):
+        return _string_get(self._scheme_name)(self, this, out)
+
+    get_TreatAsSecure = _scalar_get(0)
+    get_HasAuthorityComponent = _scalar_get(1)
+    put_TreatAsSecure = put_HasAuthorityComponent = _deny
+
+    def GetAllowedOrigins(self, this, count, origins):
+        if not count or not origins:
+            return E_POINTER
+        count[0] = 0
+        origins[0] = C.POINTER(C.c_void_p)()
+        return 0
+
+    def SetAllowedOrigins(self, this, count, origins):
+        return E_ACCESSDENIED
+
+
 class EnvironmentOptions(COMObject):
     _com_interfaces_ = [I.ICoreWebView2EnvironmentOptions, I.ICoreWebView2EnvironmentOptions2,
-                        I.ICoreWebView2EnvironmentOptions7]
+                        I.ICoreWebView2EnvironmentOptions4, I.ICoreWebView2EnvironmentOptions7]
+
+    def __init__(self):
+        # Every environment must use the same registrations when sharing a
+        # browser process. Keep owning COM pointers for the options' lifetime.
+        self._scheme_registrations = tuple(
+            CallbackSchemeRegistration(name).QueryInterface(I.ICoreWebView2CustomSchemeRegistration)
+            for name in ('auth', 'honorid'))
+
+    def GetCustomSchemeRegistrations(self, this, count, registrations):
+        if not count or not registrations:
+            return E_POINTER
+        count[0] = 0
+        # Use raw addresses here: assigning through comtypes' pointer-to-pointer
+        # helper can AddRef implicitly. The returned array owns exactly one
+        # explicit reference per entry, independent of our owning pointers.
+        output = C.cast(registrations, C.POINTER(C.c_void_p))
+        output[0] = None
+        memory = ole32.CoTaskMemAlloc(C.sizeof(C.c_void_p) * len(self._scheme_registrations))
+        if not memory:
+            return E_OUTOFMEMORY
+        entries = C.cast(memory, C.POINTER(C.c_void_p))
+        acquired = 0
+        try:
+            for index, registration in enumerate(self._scheme_registrations):
+                registration.AddRef()
+                acquired += 1
+                entries[index] = C.cast(registration, C.c_void_p).value
+        except Exception:
+            for registration in self._scheme_registrations[:acquired]:
+                registration.Release()
+            ole32.CoTaskMemFree(memory)
+            return E_FAIL
+        count[0] = len(self._scheme_registrations)
+        output[0] = memory
+        return 0
+
+    def SetCustomSchemeRegistrations(self, this, count, registrations):
+        return E_ACCESSDENIED
+
     get_AdditionalBrowserArguments = _string_get('--no-proxy-server')
     get_Language = _string_get('zh-CN')
     get_TargetCompatibleBrowserVersion = _string_get(MINIMUM_VERSION)

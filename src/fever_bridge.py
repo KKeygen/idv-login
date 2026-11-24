@@ -114,6 +114,12 @@ class FeverBridge:
     def _registered_sessions_locked(self):
         return tuple(self._sessions.values()) + tuple(self._consumed_sessions.values())
 
+    def running_game_ids(self):
+        """Only verified live IPC owners, never unfulfilled launch intents."""
+        with self._lock:
+            return {session['short_game_id'] for session in self._registered_sessions_locked()
+                    if self._is_session_sender_alive(session)}
+
     def _has_registered_process_locked(self, short_game_id: str) -> bool:
         return any(
             session["short_game_id"] == short_game_id

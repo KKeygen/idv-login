@@ -237,7 +237,8 @@ class ucChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self._has_valid_sid() else False)
 
-        if self._has_valid_sid():
+        if (not self.is_login_expired(game_id) and self._has_valid_sid()
+                and (self.sid_expire_time > 0 or not self.refreshToken)):
             return _deliver(_build())
         if bool(self.refreshToken) and self._try_refresh():
             return _deliver(_build() if self._has_valid_sid() else False)

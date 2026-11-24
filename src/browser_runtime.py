@@ -186,6 +186,12 @@ class BrowserSession:
     def _navigation_policy(self, page_id, url, is_frame):
         try:
             parsed = urlsplit(url)
+            # QQ can return http://auth://tauth.qq.com/; Chromium normalizes
+            # that to http://auth//tauth.qq.com/. Intercept before DNS lookup.
+            if ('auth' in self.callback_schemes and parsed.scheme == 'http'
+                    and parsed.netloc.lower() == 'auth'
+                    and parsed.path in ('//tauth.qq.com', '//tauth.qq.com/')):
+                return False
             return (not self.is_closing and
                     (url in ('about:blank', 'about:srcdoc') or
                      (parsed.scheme in ('http', 'https') and bool(parsed.hostname)
@@ -312,6 +318,15 @@ class BrowserSession:
     def _callback(self, page, url):
         try:
             parsed = urlsplit(url)
+            if ('auth' in self.callback_schemes and parsed.scheme == 'http'
+                    and parsed.netloc.lower() == 'auth'
+                    and parsed.path in ('//tauth.qq.com', '//tauth.qq.com/')):
+                url = 'auth://tauth.qq.com/'
+                if parsed.query:
+                    url += '?' + parsed.query
+                if parsed.fragment:
+                    url += '#' + parsed.fragment
+                parsed = urlsplit(url)
             expected = {'auth': 'tauth.qq.com', 'honorid': 'redirect_url'}
             valid = (parsed.scheme in self.callback_schemes and parsed.netloc.lower() == expected.get(parsed.scheme)
                      and parsed.username is None and parsed.password is None and parsed.port is None

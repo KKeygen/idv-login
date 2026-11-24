@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-from concurrent.futures import Future
 from contextlib import contextmanager
 import ctypes
 import json
@@ -134,6 +133,10 @@ class MpayDBSync:
         # Successful writes only: (path, SDK identity, created by this process).
         # No DB addresses, credentials, display-name copies or Channel bindings.
         self.projected = set()
+        # MPay deletes its row when we send is_remember=false. Keep this
+        # exemption for this process: delayed SDK writes can follow a refresh.
+        # Explicit tool deletion and projection cleanup still run normally.
+        self._unremembered_accounts = set()
         self._relogins = {}
         self._relogin_tasks = {}
         self._order_states = {}
@@ -272,6 +275,11 @@ class MpayDBSync:
             self.projected.difference_update(previous)
             self.projected.add((path, key, created or any(c for _, _, c in previous)))
 
+    def preserve_unremembered_account(self, key):
+        """Protect the actual response SDK identity, not the UI selection."""
+        with self.lock:
+            self._unremembered_accounts.add(key)
+
     def _delete(self, path, key):
         self.operate(path, 'delete_account', **self._args(key))
         self.projected = {(p, k, c) for p, k, c in self.projected if (p, k) != (path, key)}
@@ -351,7 +359,7 @@ class MpayDBSync:
                 self._clear_projection(game)
         for game, records in selected.items():
             try:
-                self._prepare_selected({game: records}, force_game_token=True)
+                self._prepare_selected({game: records})
                 self._project_game(game, records)
             except Exception as error:
                 log_failure(self.logger, f'[mpay-db] game={game} stage=refresh 本游戏更新失败，继续其余游戏', error)
@@ -383,69 +391,15 @@ class MpayDBSync:
             setattr(clone, key, getattr(record, key))
         return clone
 
-    def _prepare_selected(self, selected, *, force_game_token=False):
-        from prefetch_context import prefetch_scope
-        jobs = []
+    def _prepare_selected(self, selected):
+        # Both startup and game launch use exactly the same A→B/cache policy.
+        # One short synchronous pass preserves the adapter's live upstream state.
         for game, records in selected.items():
             for record in records:
-                try:
-                    # These channels exchange durable login state for a fresh game token at startup.
-                    force = record.record_source == 'manual' and (record.channel_name in ('honor', 'honor_sdk') or
-                        force_game_token and record.channel_name in ('huawei', 'nearme_vivo', 'oppo', 'xiaomi_app'))
-                    if force:
-                        record.expire_unisdk(game)
-                    if not force and self._packet(record, game):
-                        continue
-                    if record.record_source != 'manual':
-                        continue
-                    if record.channel_name == 'oppo':
-                        accounts = ((record.oppo_open_account or {}).get('gamesdk_latest_role') or {}).get('accounts') or []
-                        chosen = str(record.chosen_account_id or '')
-                        if len(accounts) > 1 and not any(str(item.get('account_id') or '').strip() == chosen for item in accounts):
-                            continue  # Known to need a user choice; do not start background renewal.
-                    future, started = Future(), time.monotonic()
-                    initial = self._renewal_state(record, game)
-                    with prefetch_scope(started + 5):
-                        clone = self._clone(record)
-                except Exception as error:
-                    self._record_error(record, game, error, stage='renewal.prepare')
-                    continue
-                def run(future=future, clone=clone, game=game, started=started):
-                    try:
-                        with prefetch_scope(started + 5):
-                            packet = clone.request_unisdk(game, interactive=False)
-                            future.set_result((clone, packet, time.monotonic()))
-                    except BaseException as error:
-                        future.set_exception(error)
-                threading.Thread(target=run, daemon=True, name='mpay-renew').start()
-                jobs.append((record, game, future, started, initial))
-        for record, game, future, started, initial in jobs:
-            try:
-                clone, packet, finished = future.result(timeout=max(0, 5 - (time.monotonic() - started)))
-                if finished > started + 5 or packet is None or packet is False:
-                    continue  # Needs user action, cancellation or timeout: not a program error.
-                with self.lock:
-                    current = self._renewal_state(record, game)
-                    if self.stopping or self.manager.query_channel(record.uuid) is not record or current != initial:
-                        continue
-                    preserved = {key: getattr(record, key) for key in ('uuid', 'name', 'last_login_time', 'game_id', 'crossGames', 'record_source')}
-                    previous = record.__dict__.copy()
-                    cache = dict(record.unisdk_cache)
-                    renewed = clone.unisdk_cache.get(getShortGameId(game))
-                    record.__dict__.update(clone.__dict__)
-                    record.__dict__.update(preserved)
-                    record.unisdk_cache = cache
-                    if renewed:
-                        record.unisdk_cache[getShortGameId(game)] = renewed
-                    try:
-                        with prefetch_scope(started + 5):
-                            self.manager.save_records()
-                    except Exception as error:
-                        record.__dict__.clear()
-                        record.__dict__.update(previous)
-                        self._record_error(record, game, error, stage='renewal.save')
-            except Exception as error:
-                self._record_error(record, game, error, stage='renewal.credentials')
+                if self.stopping:
+                    return
+                if record.record_source == 'manual':
+                    self.manager.prepare_game_credential(record, game)
 
     def promote_account(self, record, game):
         """Move a successfully logged-in SDK account; Channel owns login state."""
@@ -522,8 +476,15 @@ class MpayDBSync:
         packet = self._packet(record, game)
         name = AccountListPolicy(self.manager).account_label(record, expired=self.is_expired(record.uuid, game))
         if not packet:
-            if any(p == path and identity == key for p, identity, _ in self.projected):
+            present = any(p == path and identity == key for p, identity, _ in self.projected)
+            if not present:
+                existing = self.operate(path, 'list_accounts')
+                blocked = {self._key(error) for error in existing['errors']
+                           if error['reason'] == 'duplicate_sdk_identity'}
+                present = key not in blocked and any(self._key(item) == key for item in existing['accounts'])
+            if present:
                 self.operate(path, 'rename_account', **self._args(key), name=name)
+                self._remember_put(path, key, False)
             return None  # Preparation already reported this record; preserve existing credentials.
         created = self.operate(path, 'put_account', **self._args(key), name=name,
             position=position, machine_identifier=self.identity,
@@ -549,16 +510,18 @@ class MpayDBSync:
                 self._record_error(candidate, game, error, stage='refresh.selection')
                 continue
         if not allowed:
-            return
+            return 0
         failure = None
+        written = 0
         with self.lock:
             if self.stopping:
-                return
+                return 0
             for path in self.paths(game):
                 try:
                     self._track_head(path, game)
                     if self._write_record(path, record, game, 'preserve') is None:
                         raise ValueError('field=unisdk_cache.packet: unavailable after refresh')
+                    written += 1
                     if not any(self.is_expired(item.uuid, game) for item in selected):
                         for menu_path, menu_key, _ in tuple(self.projected):
                             if menu_path == path and menu_key[0] == game and self._menu_role(menu_key) == 'expired':
@@ -568,6 +531,7 @@ class MpayDBSync:
                     failure = failure or error
         if failure:
             raise RuntimeError('登录凭据已保存，但部分游戏账号库未刷新') from failure
+        return written
 
     def _project_game(self, game_id, records):
         with self.lock:
@@ -630,8 +594,7 @@ class MpayDBSync:
         role = self._menu_role(key)
         expired_record = None
         if role is None:
-            records = (self.manager._sauth_matches(data, game)
-                       if key[1] == 'lenovo_open' else self.manager.channels)
+            records = self.manager._sauth_matches(data, game)
             for record in records:
                 try:
                     if self._target(record, game) == key and self.is_expired(record.uuid, game):
@@ -650,15 +613,18 @@ class MpayDBSync:
             return lambda: webbrowser.open(url or 'https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e')
         if role is not None:
             return lambda: app_state.ui_mgr.open_for_game(game, 'accounts') if app_state.ui_mgr else None
-        return lambda: self._relogin_expired(expired_record, game)
+        from sauth_feedback import failure_details
+        details = failure_details(200, {'code': 401, 'subcode': 1,
+            'msg': '所选账号已标为失效，尚未重新登录。'}, local=True)
+        return lambda: self.manager.confirm_sauth_relogin(data, details)
 
-    def _relogin_expired(self, record, game):
+    def _relogin_expired(self, record, game, *, try_silent=True):
         if record.uuid in self._relogins or not self.is_expired(record.uuid, game):
             return
         from channel_relogin import ExpiredChannelLogin
         attempt = ExpiredChannelLogin(self, record, game,
             lambda: self._relogins.pop(record.uuid, None),
-            try_silent=record.record_source == 'manual' and record.channel_name in ('honor', 'honor_sdk'))
+            try_silent=try_silent and record.record_source == 'manual' and record.channel_name in ('honor', 'honor_sdk'))
         self._relogin_tasks = {key: value for key, value in self._relogin_tasks.items()
                                if value.record.uuid != record.uuid}
         self._relogins[record.uuid] = attempt
@@ -666,36 +632,37 @@ class MpayDBSync:
         attempt.start()
 
     def reconcile_game_changes(self):
-        missing = set()
-        for path in {path for path, _, _ in self.projected}:
-            if not path.exists():
-                continue
-            try:
-                response = self.operate(path, 'list_accounts')
-                rows = {self._key(item) for item in response['accounts']}
-                blocked = {self._key(error) for error in response['errors']
-                           if error['reason'] == 'duplicate_sdk_identity'}
-                for _, key, _ in tuple(item for item in self.projected if item[0] == path):
-                    if self._menu_role(key) or key in blocked:
-                        continue
-                    for record in self.manager.channels:
-                        try:
-                            if self._target(record, key[0]) != key:
-                                continue
-                        except ValueError as error:
-                            self._record_error(record, key[0], error, stage='reconcile.identity')
-                            continue
-                        if key not in rows:
-                            missing.add(record.uuid)
-                            self.projected = {(p, k, c) for p, k, c in self.projected if (p, k) != (path, key)}
-            except Exception as error:
-                log_failure(self.logger, f'[mpay-db] path={path.name} stage=reconcile.read 无法检查游戏删除', error)
-        for uuid in missing:
-            if self.manager.query_channel(uuid) is not None:
+        with self.lock:
+            missing = set()
+            for path in {path for path, _, _ in self.projected}:
+                if not path.exists():
+                    continue
                 try:
-                    self.manager.delete(uuid)
+                    response = self.operate(path, 'list_accounts')
+                    rows = {self._key(item) for item in response['accounts']}
+                    blocked = {self._key(error) for error in response['errors']
+                               if error['reason'] == 'duplicate_sdk_identity'}
+                    for _, key, _ in tuple(item for item in self.projected if item[0] == path):
+                        if self._menu_role(key) or key in blocked or key in self._unremembered_accounts:
+                            continue
+                        for record in self.manager.channels:
+                            try:
+                                if self._target(record, key[0]) != key:
+                                    continue
+                            except ValueError as error:
+                                self._record_error(record, key[0], error, stage='reconcile.identity')
+                                continue
+                            if key not in rows:
+                                missing.add(record.uuid)
+                                self.projected = {(p, k, c) for p, k, c in self.projected if (p, k) != (path, key)}
                 except Exception as error:
-                    log_failure(self.logger, f'[mpay-db] account={uuid} stage=reconcile.delete 单个账号删除同步失败，继续其余账号', error)
+                    log_failure(self.logger, f'[mpay-db] path={path.name} stage=reconcile.read 无法检查游戏删除', error)
+            for uuid in missing:
+                if self.manager.query_channel(uuid) is not None:
+                    try:
+                        self.manager.delete(uuid)
+                    except Exception as error:
+                        log_failure(self.logger, f'[mpay-db] account={uuid} stage=reconcile.delete 单个账号删除同步失败，继续其余账号', error)
 
     def related_uuids(self, uuid):
         source = self.manager.query_channel(uuid)

@@ -182,6 +182,8 @@ def handle_exit():
                 safe_exception(logger, "停止平台托管登录失败")
         app_state.fever_bridge = None
 
+    if app_state.channels_helper:
+        app_state.channels_helper.stop_credential_refresh()
     if app_state.channels_helper and app_state.channels_helper.db_sync:
         try:
             app_state.channels_helper.db_sync.shutdown()
@@ -822,25 +824,30 @@ def handle_download_task(task_file_path):
                 import time
                 time.sleep(5)
                 encoded_path = _encode_download_path(download_root)
-                encoded_repair_list_path = _encode_repair_list_path(repair_list_path)
-                #./downloadIPC  --gameid:73 --contentid:434 --subport:1737 --pubport:1740 --path:RTpcRmV2ZXJBcHBzXGR3cmcy --env:live --oversea:0 --targetVersion:v3_3028_7e8d8ea06733136dd915a6e865440158 --originVersion:v3_2547 --scene:2 --rateLimit:0  --channel:platform --locale:zh_Hans  --isSSD:1 --isRepairMode:0
+                if repair_list_path:
+                    scene = 3
+                elif task_data.get("is_update"):
+                    scene = 2
+                else:
+                    scene = 1
                 download_cmd = [
                     os.path.join(os.getcwd(), "downloadIPC.exe"),
                     f"--gameid:{distribution_id}",
                     f"--env:live",
                     f"--oversea:{1 if oversea else 0}",
-                    f"--scene:3",
+                    f"--scene:{scene}",
                     f"--rateLimit:0",
                     f"--channel:platform",
                     f"--locale:zh_Hans",
                     f"--isSSD:1",
-                    f"--isRepairMode:1",
+                    f"--isRepairMode:{int(bool(repair_list_path))}",
                     f"--contentid:{content_id}",
                     f"--subport:{heartbeat_port}",
                     f"--pubport:{progress_port}",
                     f"--path:{encoded_path}",
-                    f"--repairListPath:{encoded_repair_list_path}",
                 ]
+                if repair_list_path:
+                    download_cmd.append(f"--repairListPath:{_encode_repair_list_path(repair_list_path)}")
                 if version_code:
                     download_cmd.append(f"--targetVersion:{version_code}")
                 if original_version:
@@ -1096,6 +1103,7 @@ def setup_network_proxy(proxy_port):
     from cloudRes import CloudRes
 
     game_helper = GameManager()
+    app_state.channels_helper.game_helper = game_helper
     ui_logger = logger
 
     # Platform-specific defaults
@@ -1219,14 +1227,13 @@ def setup_network_proxy(proxy_port):
             log_failure(logger, "游戏内账号列表工件不可用；保留原渠道登录功能，等待匹配的工件", error)
         else:
             app_state.channels_helper.db_sync = db_sync
-            from prefetch_context import install_request_deadline
-            install_request_deadline()
             # DNS overrides must exist before any automatic game launch.
             try:
                 db_sync.refresh_startup()
             except Exception as error:
                 from mpay_db_sync import log_failure
                 log_failure(logger, "游戏内账号列表启动更新未完成；保留退出清理和原登录功能", error)
+    app_state.channels_helper.start_credential_refresh()
     game_helper.start_fever_auto_import()
 
     # Register the URI scheme so QR code redirects open our Qt window
@@ -1253,7 +1260,7 @@ def setup_network_proxy(proxy_port):
         elif action == "start" and game_id:
             game = game_helper.get_game(game_id)
             if game:
-                logger.info(f"通过信号启动游戏: {game.name or game_id}")
+                logger.info(f"通过信号启动游戏: {game.get_installation_display_name(installation_id)}")
                 game.start(installation_id)
             else:
                 logger.warning(f"信号指定的游戏未找到: {game_id}")
@@ -1281,7 +1288,7 @@ def setup_network_proxy(proxy_port):
         if uri_action == "start" and uri_game_id:
             game = game_helper.get_game(uri_game_id)
             if game:
-                logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
+                logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
                 game.start(uri_installation_id)
             else:
                 logger.warning(f"未找到游戏: {uri_game_id}")
@@ -1299,7 +1306,7 @@ def setup_network_proxy(proxy_port):
         # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
         game = game_helper.get_game(uri_game_id)
         if game:
-            logger.info(f"通过快捷方式启动游戏: {game.name or uri_game_id}")
+            logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
             game.start(uri_installation_id)
         else:
             logger.warning(f"未找到游戏: {uri_game_id}")

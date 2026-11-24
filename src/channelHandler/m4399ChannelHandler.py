@@ -2,11 +2,10 @@
 """4399 运营 SDK 渠道处理器。
 
 凭证恢复顺序：
-1. oauth-check 验证当前业务 state；
-2. 无效/无法验证时，用 callback URL 持久化的 refresh_token 调
+1. 用 callback URL 持久化的 refresh_token 调
    oauth-getinfobyrefresh.html；
-3. 仍失败时，用当前业务 state 调 oauth.html + source=4399 + refresh=1；
-4. 仍失败时重新打开 WebView 让用户登录。
+2. 仍失败时，用当前业务 state 调 oauth.html + source=4399 + refresh=1；
+3. 仍失败时重新打开 WebView 让用户登录。
 
 refresh_token 只从成功 callback URL 获取；两个无交互刷新接口成功响应都不含
 refresh_token，所以刷新 loginResp 时必须保留已有 refreshToken。
@@ -170,7 +169,7 @@ class m4399Channel(channelmgr.channel):
         return None
 
     def is_token_valid(self) -> bool:
-        """本地完整性检查；在线真值由 get_uniSdk_data 的 oauth-check 决定。"""
+        """本地完整性检查；无期限的游戏凭据在实际获取时重新签发。"""
         data = self._get_login_data()
         if not data:
             return False
@@ -258,38 +257,13 @@ class m4399Channel(channelmgr.channel):
     # ── Recovery chain ────────────────────────────────────────
 
     def _recover_existing_credential(self) -> bool:
-        """check -> refresh_token -> state refresh=1。失败后由上层进入 WebView。"""
+        """refresh_token -> state refresh=1。失败后由上层进入 WebView。"""
         data = self._get_login_data() or {}
         uid = str(data.get("uid") or "")
         state = str(data.get("state") or "")
 
-        # 1) Official state check.
-        if uid and state:
-            valid, code = self.m4399Login.check_state(uid, state)
-            if valid is True and self.is_token_valid():
-                self._warn_recovery_timeline(
-                    "oauth-check 有效，继续使用现有 state"
-                )
-                return True
-            if valid is True:
-                # state 有效但本地缺 access_token，仍需恢复完整登录材料。
-                self._warn_recovery_timeline(
-                    "oauth-check 有效但本地登录材料不完整，继续尝试恢复"
-                )
-            elif valid is False:
-                self._warn_recovery_timeline(
-                    f"oauth-check 未通过(code={code or '?'})，尝试 RT 轮换"
-                )
-            else:
-                self._warn_recovery_timeline(
-                    "oauth-check 无法判定(network_error)，尝试 RT 轮换"
-                )
-        else:
-            self._warn_recovery_timeline(
-                "本地 uid/state 不完整，跳过 oauth-check，尝试 RT 轮换"
-            )
-
-        # 2) refresh_token recovery. The response has NO refresh_token.
+        # A check alone does not issue B. Use A to obtain a fresh complete pair.
+        # The response has NO refresh_token, so preserve the saved A.
         if uid and self.refreshToken:
             refreshed, code = self.m4399Login.refresh_by_token(
                 uid,
@@ -310,7 +284,7 @@ class m4399Channel(channelmgr.channel):
                 "无可用 refresh_token/uid，跳过 RT 轮换，尝试 refresh=1"
             )
 
-        # 3) oauth.html state=<business state> + refresh=1.
+        # oauth.html state=<business state> + refresh=1.
         # Use the original current state even if RT refresh failed; RT failure response
         # is never accepted into loginResp.
         if state:
