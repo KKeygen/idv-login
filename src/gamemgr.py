@@ -23,10 +23,10 @@ import sys
 import time
 import json
 import base64
+from pathlib import Path, PureWindowsPath
 import shlex
 import threading
 import uuid
-from dataclasses import dataclass
 from functools import wraps
 from typing import Optional, List, Dict, Tuple, Any
 import xxhash
@@ -373,9 +373,7 @@ class GameInstallation:
 
     def get_non_sensitive_data(self) -> dict:
         data = self.to_dict()
-        data["installed"] = bool(
-            self.source != "download_pending" and self.path and os.path.isfile(self.path)
-        )
+        data["installed"] = bool(self.path and os.path.exists(self.path))
         return data
 
     @classmethod
@@ -415,14 +413,6 @@ class GameInstallation:
             except Exception:
                 pass
             return False
-
-@dataclass
-class DownloadStart:
-    process: Optional[subprocess.Popen] = None
-    post_update_actions: Optional[dict] = None
-    verified_version: str = ""
-    content_id: Any = None
-
 
 class Game:
     def __init__(
@@ -498,6 +488,7 @@ class Game:
                 default_distribution,
                 installation_state.get("legacy_projection"),
             )
+        self.last_update_async = False
         self.last_start_error = ""
 
     @staticmethod
@@ -1240,6 +1231,142 @@ class Game:
                 continue
         return result
 
+    def identify_installation_distribution(
+        self,
+        installation_id: str,
+        distribution_options: List,
+        file_info_by_distribution: Dict[int, dict],
+        launcher_data_by_distribution: Optional[Dict[int, dict]] = None,
+        force: bool = False,
+        progress_callback=None,
+        cancel_check=None,
+    ) -> int:
+        """Identify and apply the closest cloud distribution for an install.
+
+        The closest manifest wins by mismatched-file count.  Ties use the
+        first cloud-configured distribution.  When manifests cannot be scored,
+        the first distribution is still selected.  The owning ``GameManager``
+        is responsible for persisting the mutated installation.
+        """
+        installation = self.get_installation(installation_id)
+        if installation is None or (installation.distribution_id != -1 and not force):
+            return installation.distribution_id if installation else -1
+        if not installation.path or not os.path.exists(installation.path):
+            return -1
+
+        ordered_distribution_ids = list(dict.fromkeys(
+            self._normalize_distribution_ids(distribution_options or [])
+        ))
+        if not ordered_distribution_ids:
+            return installation.distribution_id
+
+        candidates = []
+        seen = set()
+        for index, option in enumerate(distribution_options or []):
+            dist_ids = self._normalize_distribution_ids([option])
+            if not dist_ids or dist_ids[0] in seen:
+                continue
+            dist_id = dist_ids[0]
+            seen.add(dist_id)
+            file_info = file_info_by_distribution.get(dist_id)
+            files = file_info.get("files", []) if isinstance(file_info, dict) else []
+            if not isinstance(files, list):
+                continue
+            files = [item for item in files if isinstance(item, dict) and item.get("op", 1) == 1]
+            if not files:
+                continue
+            candidates.append({
+                "distribution_id": dist_id,
+                "files": files,
+                "index": index,
+            })
+        launcher_data_by_distribution = launcher_data_by_distribution or {}
+        selected_distribution_id = ordered_distribution_ids[0]
+        mismatch_count = None
+        hash_cache = {}
+        scored = []
+        total_files = sum(len(item["files"]) for item in candidates)
+        checked_files = 0
+
+        def report_file():
+            nonlocal checked_files
+            checked_files += 1
+            if progress_callback:
+                progress_callback(checked_files, total_files)
+
+        try:
+            for candidate in candidates:
+                launcher_data = launcher_data_by_distribution.get(
+                    candidate["distribution_id"], {}
+                )
+                startup_path = str(
+                    launcher_data.get("startup_path")
+                    or installation.startup_path
+                    or os.path.basename(installation.path)
+                )
+                _, mismatched = self.version_check(
+                    candidate["files"],
+                    installation.installation_id,
+                    hash_cache,
+                    root_path=self._root_from_executable(
+                        installation.path, startup_path
+                    ),
+                    progress_callback=report_file if progress_callback else None,
+                    cancel_check=cancel_check,
+                )
+                scored.append((
+                    len(mismatched),
+                    candidate["index"],
+                    candidate["distribution_id"],
+                ))
+        except InterruptedError:
+            raise
+        except OSError as exc:
+            safe_exception(self.logger, "识别游戏分发时读取文件失败")
+            scored = []
+
+        if scored:
+            mismatch_count, _, selected_distribution_id = min(
+                scored, key=lambda item: (item[0], item[1])
+            )
+
+        selected_file_info = file_info_by_distribution.get(
+            selected_distribution_id, {}
+        )
+        selected_launcher_data = launcher_data_by_distribution.get(
+            selected_distribution_id, {}
+        )
+        self._claim_distribution(installation, selected_distribution_id)
+        if mismatch_count == 0 and isinstance(selected_file_info, dict):
+            if selected_file_info.get("version_code") is not None:
+                installation.installed_version = str(
+                    selected_file_info.get("version_code") or ""
+                )
+            if selected_file_info.get("app_content_id") is not None:
+                installation.content_id = selected_file_info.get("app_content_id")
+        if isinstance(selected_launcher_data, dict):
+            startup_path = str(selected_launcher_data.get("startup_path") or "")
+            if self._is_safe_startup_path_for_executable(
+                installation.path, startup_path
+            ):
+                installation.startup_path = startup_path
+            elif not installation.startup_path:
+                installation.startup_path = os.path.basename(installation.path)
+            installation.startup_args = str(
+                selected_launcher_data.get("startup_params") or ""
+            )
+        installation.updated_at = int(time.time())
+        score_text = (
+            f"{mismatch_count} 个文件不匹配"
+            if mismatch_count is not None
+            else "无法比较清单，使用首个分发"
+        )
+        self.logger.info(
+            f"已识别安装记录 {installation.installation_id} 的分发: "
+            f"{selected_distribution_id}（{score_text}）"
+        )
+        return selected_distribution_id
+
     @staticmethod
     def _is_safe_startup_path_for_executable(
         executable_path: str, startup_path: str
@@ -1270,6 +1397,65 @@ class Game:
         for _part in parts:
             root_path = os.path.dirname(root_path)
         return root_path
+
+    @staticmethod
+    def read_fever_version(root: str, content_id) -> str:
+        if not root or not content_id:
+            return ""
+        versions = set()
+        for state in (Path(root) / ".dlstorage" / "downloading").glob("*_app.state"):
+            try:
+                with state.open(encoding="utf-8-sig") as handle:
+                    version = json.load(handle).get("installed_contents", {}).get(str(content_id), {}).get("Version")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if isinstance(version, str) and version.strip():
+                versions.add(version.strip())
+        return versions.pop() if len(versions) == 1 else ""
+
+    def get_fever_origin(self, installation: GameInstallation, file_info: dict) -> str:
+        local = self.read_fever_version(
+            self.get_root_path(installation.installation_id), file_info.get("app_content_id"),
+        )
+        if local or installation.source == "fever":
+            return local
+        return installation.installed_version
+
+    def prepare_fever_import(self, installation: GameInstallation, requested_id=-1) -> str:
+        # A saved or selected distribution narrows the search. With no hint, the
+        # selected executable and its own state can identify the correct content.
+        bound = installation.distribution_id
+        if requested_id != -1 and bound not in (-1, requested_id):
+            return ""
+        options = [bound] if bound != -1 else [requested_id] if requested_id != -1 else self.get_distributions()
+        matches = []
+        executable = Path(installation.path)
+        for dist_id in dict.fromkeys(options):
+            launcher = self.get_launcher_data_for_distribution(dist_id) or {}
+            startup_path = launcher.get("startup_path") or (installation.startup_path if bound != -1 else "")
+            startup = PureWindowsPath(startup_path or "")
+            if not startup.parts or startup.drive or startup.root or ".." in startup.parts:
+                continue
+            root = executable
+            for _ in startup.parts:
+                root = root.parent
+            if os.path.normcase(root.joinpath(*startup.parts)) != os.path.normcase(executable):
+                continue
+            info = self.get_file_distribution_info(dist_id) or {}
+            content_id = info.get("app_content_id")
+            if content_id and info.get("version_code"):
+                matches.append((dist_id, launcher, info, self.read_fever_version(str(root), content_id)))
+        identified = [match for match in matches if match[-1]]
+        matches = identified or matches
+        if len(matches) != 1:
+            return ""
+        dist_id, launcher, info, version = matches[0]
+        self._claim_distribution(installation, dist_id)
+        installation.startup_path = launcher.get("startup_path") or installation.startup_path
+        installation.startup_args = installation.startup_args or launcher.get("startup_params", "")
+        installation.content_id = info["app_content_id"]
+        installation.installed_version = version
+        return info["version_code"]
 
     def get_distributions(self) -> List[int]:
         """获取游戏可用的分发ID列表"""
@@ -1333,9 +1519,7 @@ class Game:
             safe_exception(self.logger, "请求启动器信息失败")
         return None
     
-    def get_file_distribution_info(
-        self, distribution_id: int, *, refresh: bool = False,
-    ) -> Optional[dict]:
+    def get_file_distribution_info(self, distribution_id: int) -> Optional[dict]:
         """获取指定分发ID的文件分发信息"""
         cache = genv.get("file_distribution_info_cache", {})
         if not isinstance(cache, dict):
@@ -1345,7 +1529,7 @@ class Game:
         cached_data = cache.get(cache_key)
         if not cached_data and source == "cn":
             cached_data = cache.get(str(distribution_id))
-        if not refresh and isinstance(cached_data, dict) and cached_data:
+        if isinstance(cached_data, dict) and cached_data:
             return cached_data
         try:
             import requests
@@ -1369,8 +1553,9 @@ class Game:
             data = response.json().get("data", {}).get("main_content", {})
             if isinstance(data, dict) and data:
                 cache[cache_key] = data
-                # Status views reuse the process-local snapshot; explicit
-                # checks and updates ask for fresh distribution metadata.
+                # Remote launcher data is immutable for one tool process.  Do
+                # not persist it across launches, where a newer cloud version
+                # may legitimately exist.
                 genv.set("file_distribution_info_cache", cache, cached=False)
             return data
         except Exception as e:
@@ -1386,100 +1571,106 @@ class Game:
         control_file: str = "",
         is_update: bool = True,
         *,
-        repair: bool = False,
-        unknown_origin: bool = False,
-        allow_repair_fallback: bool = True,
-    ) -> Optional[DownloadStart]:
-        """Prepare the selected install, delta update, or explicit repair."""
+        repair: bool = True,
+        origin_version: Optional[str] = None,
+    ) -> bool:
+        """Install through the download core; hash local files only for repair."""
+        self.last_update_async = False
+        self.last_post_update_actions = None
         installation = self.get_installation(installation_id)
+        if installation is None:
+            self.logger.error("未找到要更新的游戏安装记录")
+            return False
         dist_id = self._coerce_distribution_id(distribution_id)
-        if not installation or dist_id < 0 or installation.distribution_id != dist_id:
-            self.logger.error("未找到匹配所选分发的安装记录")
-            return None
-        original_path = installation.path
+        if installation.distribution_id not in (-1, dist_id):
+            self.logger.error(
+                f"安装记录分发不匹配: installation={installation.distribution_id}, request={dist_id}"
+            )
+            return False
         download_root = self.get_root_path(installation.installation_id)
-        if not download_root or not os.path.isdir(download_root):
+        if not download_root or not os.path.exists(download_root):
             self.logger.error("游戏路径无效或不存在")
-            return None
-        original_version = installation.installed_version if is_update and not unknown_origin else ""
-        mode = "update" if is_update else "install"
-        if is_update and (repair or not original_version or not os.path.isfile(installation.path)):
-            if not repair and not allow_repair_fallback:
-                raise ValueError("导入完成后安装路径或已确认版本发生变化")
-            mode = "repair"
-        distribution = self.get_file_distribution_info(dist_id, refresh=is_update) or {}
-        target_version = str(distribution.get("version_code") or "")
-        content_id = distribution.get("app_content_id")
-        if not target_version or not content_id:
-            self.logger.error(f"分发 {dist_id} 缺少目标版本或内容 ID")
-            return None
-
-        if mode == "update" and original_version == target_version:
-            return DownloadStart()
+            return False
+        file_distribution_info = self.get_file_distribution_info(dist_id)
+        if not file_distribution_info:
+            self.logger.error(f"未找到分发ID {dist_id} 的文件分发信息")
+            return False
+        target_version = file_distribution_info.get("version_code")
+        content_id = file_distribution_info.get("app_content_id")
+        if is_update:
+            if origin_version is None:
+                origin_version = installation.installed_version if repair else self.get_fever_origin(
+                    installation, file_distribution_info,
+                )
+            repair = repair or not origin_version or not os.path.isfile(installation.path)
+        else:
+            repair = False
+            origin_version = ""
+        if not repair and not (target_version and content_id):
+            return False
 
         repair_list_path = ""
-        if mode == "repair":
-            files = distribution.get("files")
-            if not isinstance(files, list) or not any(
-                isinstance(item, dict) and item.get("op", 1) == 1 for item in files
-            ):
-                self.logger.error("没有可用于修复的目标版本文件清单")
-                return None
-            complete, mismatched = self.version_check(files, download_root)
-            current = self.get_installation(installation.installation_id)
-            if (current is not installation or current.distribution_id != dist_id
-                    or current.path != original_path
-                    or self.get_root_path(current.installation_id) != download_root):
-                raise ValueError("修复期间安装目录或分发已变更")
-            if complete:
+        to_update = []
+        if repair:
+            files = file_distribution_info.get("files")
+            if not files:
+                return False
+            _, to_update = self.version_check(files, installation.installation_id)
+        if is_update and ((repair and not to_update) or (not repair and origin_version == target_version)):
+            if repair:
                 from install_actions import apply_post_update_actions
-                actions = apply_post_update_actions(
-                    download_root, distribution.get("install_script"), self.logger
+                self.last_post_update_actions = apply_post_update_actions(
+                    download_root, file_distribution_info.get("install_script"), self.logger,
                 )
-                return DownloadStart(
-                    post_update_actions=actions, verified_version=target_version,
-                    content_id=content_id,
-                )
-            repair_list_path = self._create_repair_list_file([
-                item["path"].replace("\\", "/") for item in mismatched
-            ])
+            installation.distribution_id = dist_id
+            installation.installed_version = target_version or installation.installed_version
+            installation.content_id = content_id or installation.content_id
+            installation.updated_at = int(time.time())
+            installation.write_marker(self.game_id)
+            self.logger.info("游戏已是最新版本，无需更新")
+            return True
+
+        if repair:
+            repair_paths = [
+                PureWindowsPath(item["path"]).as_posix() for item in to_update if item.get("path")
+            ]
+            repair_list_path = self._create_repair_list_file(repair_paths)
             if not repair_list_path:
                 self.logger.error("创建 repair 列表文件失败")
-                return None
+                return False
 
-        # The native core owns initial and delta package planning. Only the
-        # explicit/fallback repair supplies host-side file mismatches.
         task_data = {
             "download_root": download_root,
             "concurrent_files": max_concurrent_files,
-            "download_mode": mode,
-            "version_code": target_version,
+            "directories": file_distribution_info.get("directories", []),
+            "files": to_update,
+            "version_code": file_distribution_info.get(
+                "version_code", installation.installed_version
+            ),
             "game_id": self.game_id,
             "installation_id": installation.installation_id,
             "distribution_id": dist_id,
-            "content_id": content_id,
+            "content_id":file_distribution_info.get("app_content_id"),
             "oversea": self._distribution_source(dist_id) == "oversea",
             "repair_list_path": repair_list_path,
             "progress_file": os.path.abspath(progress_file) if progress_file else "",
             "control_file": os.path.abspath(control_file) if control_file else "",
-            "original_version": original_version,
+            "original_version": origin_version,
             "is_update": bool(is_update),
-            "install_script": distribution.get("install_script"),
+            "install_script": file_distribution_info.get("install_script"),
             "start_args": installation.startup_args
             or CloudRes().get_start_argument(getShortGameId(self.game_id))
-            or "",
+            or ""
         }
         task_file_path = self._create_download_task_file(task_data)
-        process = self._spawn_download_process(task_file_path) if task_file_path else None
-        if process is None:
-            for path in (task_file_path, repair_list_path):
-                if path:
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
-            return None
-        return DownloadStart(process=process)
+        if not task_file_path:
+            self.logger.error("创建下载任务文件失败")
+            return False
+        if not self._spawn_download_process(task_file_path):
+            self.logger.error("启动下载子进程失败")
+            return False
+        self.last_update_async = True
+        return True
 
     def _create_download_task_file(self, task_data: dict) -> Optional[str]:
         try:
@@ -1509,7 +1700,7 @@ class Game:
             safe_exception(self.logger, "创建repair列表文件失败")
             return None
 
-    def _spawn_download_process(self, task_file_path: str) -> Optional[subprocess.Popen]:
+    def _spawn_download_process(self, task_file_path: str) -> bool:
         try:
             if getattr(sys, "frozen", False):
                 command = [os.path.abspath(sys.executable), "--download", task_file_path]
@@ -1529,7 +1720,7 @@ class Game:
             # The main process is already elevated during initialize().  A
             # second ShellExecute("runas") only creates a visible supervisor
             # console, so launch the download supervisor directly and silent.
-            return subprocess.Popen(
+            subprocess.Popen(
                 command,
                 cwd=script_dir,
                 stdin=subprocess.DEVNULL,
@@ -1537,30 +1728,47 @@ class Game:
                 stderr=subprocess.DEVNULL,
                 creationflags=creationflags,
             )
+            return True
         except Exception as e:
             safe_exception(self.logger, "启动下载子进程失败")
-            return None
+            return False
     def version_check(
-        self, files: List[dict], download_root: str,
+        self,
+        files: List[dict],
+        installation_id: str = "",
+        hash_cache: Optional[Dict[str, str]] = None,
+        root_path: str = "",
+        progress_callback=None,
+        cancel_check=None,
     ) -> Tuple[bool, List[dict]]:
-        """Check target manifest integrity for repair only, not version detection."""
-        root = os.path.realpath(download_root)
-        mismatched = []
+        """检查游戏版本是否匹配, 返回需要更新的文件列表"""
+        root_path = root_path or self.get_root_path(installation_id)
+        if not root_path or not os.path.exists(root_path):
+            return False, files
+        to_update = []
         for file_info in files:
-            if not isinstance(file_info, dict) or file_info.get("op", 1) != 1:
+            if cancel_check:
+                cancel_check()
+            if file_info.get("op", 1) != 1:
                 continue
-            relative = file_info.get("path")
-            if not isinstance(relative, str) or not relative or os.path.isabs(relative):
-                raise ValueError("修复清单包含无效的相对路径")
-            parts = relative.replace("\\", "/").split("/")
-            if not parts[0] or ":" in parts[0] or ".." in parts:
-                raise ValueError("修复清单包含无效的相对路径")
-            path = os.path.realpath(os.path.join(root, *parts))
-            if os.path.commonpath((root, path)) != root or path == root:
-                raise ValueError("修复清单的文件不位于游戏目录内")
-            if not os.path.isfile(path) or calculate_xxh64(path) != file_info.get("xxh", ""):
-                mismatched.append(file_info)
-        return not mismatched, mismatched
+            file_path = os.path.normpath(os.path.join(root_path, file_info.get("path", "")))
+            if not os.path.exists(file_path):
+                to_update.append(file_info)
+            else:
+                if hash_cache is not None and file_path in hash_cache:
+                    local_xxh64 = hash_cache[file_path]
+                else:
+                    local_xxh64 = (
+                        calculate_xxh64(file_path, cancel_check=cancel_check)
+                        if cancel_check else calculate_xxh64(file_path)
+                    )
+                    if hash_cache is not None:
+                        hash_cache[file_path] = local_xxh64
+                if local_xxh64 != file_info.get("xxh", ""):
+                    to_update.append(file_info)
+            if progress_callback:
+                progress_callback()
+        return len(to_update) == 0, to_update
 
     def _extract_file_size(self, file_info: dict) -> int:
         for key in ["size", "file_size", "filesize", "length", "fileSize"]:
@@ -1577,35 +1785,31 @@ class Game:
     def get_update_stats(
         self, distribution_id: int, installation_id: str = "", *, estimate_repair: bool = True,
     ) -> Optional[dict]:
-        """Keep the legacy repair estimate separate from a version-only check."""
         installation = self.get_installation(installation_id)
-        dist_id = self._coerce_distribution_id(distribution_id)
-        if not installation or dist_id < 0:
+        if installation is None:
             return None
-        allowed = (-1, dist_id) if estimate_repair else (dist_id,)
-        if installation.distribution_id not in allowed:
+        dist_id = self._coerce_distribution_id(distribution_id)
+        if installation.distribution_id not in (-1, dist_id):
             return None
         download_root = self.get_root_path(installation.installation_id)
-        if not download_root or not os.path.isdir(download_root):
+        if not download_root or not os.path.exists(download_root):
             return None
-        distribution = (
-            self.get_file_distribution_info(dist_id) if estimate_repair
-            else self.get_file_distribution_info(dist_id, refresh=True)
+        file_distribution_info = self.get_file_distribution_info(dist_id)
+        if not file_distribution_info:
+            return None
+        target_version = str(file_distribution_info.get("version_code") or "")
+        origin = installation.installed_version if estimate_repair else self.get_fever_origin(
+            installation, file_distribution_info,
         )
-        if not distribution:
-            return None
-        target_version = str(distribution.get("version_code") or "")
-        installed_version = installation.installed_version
-        if estimate_repair:
-            _, mismatches = self.version_check(distribution.get("files") or [], download_root)
-            download_bytes = sum(self._extract_file_size(item) for item in mismatches)
-            file_count = len(mismatches)
-            needs_update = bool(mismatches or (target_version and installed_version != target_version))
+        needs_update = bool(target_version and origin != target_version)
+        if estimate_repair or not origin:
+            _, to_update = self.version_check(
+                file_distribution_info.get("files", []), installation.installation_id,
+            )
+            download_bytes = sum(self._extract_file_size(item) for item in to_update)
+            file_count = len(to_update)
+            needs_update = needs_update or bool(to_update)
         else:
-            if not target_version:
-                return None
-            needs_update = not os.path.isfile(installation.path) or installed_version != target_version
-            # A version comparison does not reveal the native core's delta plan.
             download_bytes = file_count = None if needs_update else 0
         usage = shutil.disk_usage(download_root)
         return {
@@ -1615,7 +1819,6 @@ class Game:
             "disk_free_bytes": usage.free,
             "disk_total_bytes": usage.total,
             "target_version": target_version,
-            "installed_version": installed_version,
         }
 
     def get_distribution_options(self) -> List[dict]:
@@ -1849,44 +2052,56 @@ class GameManager:
         self._save_games()
         return installation
 
-    def _hydrate_installation_from_fever(self, game, installation, records):
-        """Only a unique Fever record for this exact executable is authoritative."""
-        if installation.source == "download_pending" or not installation.path:
-            return False
-        def normal(path):
-            return os.path.normcase(os.path.normpath(path or ""))
-
-        matches = [
-            record for record in records
-            if cmp_game_id(record.get("game_id"), game.game_id)
-            and normal(record.get("path")) == normal(installation.path)
-            and record.get("distribution_id", -1) >= 0
-            and installation.distribution_id in (-1, record["distribution_id"])
-        ]
-        if len(matches) != 1:
-            return False
-        record = matches[0]
+    def identify_game_installation(
+        self,
+        game_id: str,
+        installation_id: str,
+        *,
+        force: bool = False,
+        persist: bool = True,
+        progress_callback=None,
+        cancel_check=None,
+    ) -> int:
+        """Classify one local install against every cloud distribution."""
+        game = self.get_existing_game(game_id)
+        installation = game.get_installation(installation_id) if game else None
+        if installation is None:
+            return -1
+        if installation.distribution_id != -1 and not force:
+            return installation.distribution_id
+        distribution_options = game.get_distribution_options()
+        distribution_ids = game._normalize_distribution_ids(distribution_options)
+        if not distribution_ids:
+            return installation.distribution_id
+        file_info_by_distribution = {}
+        launcher_data_by_distribution = {}
+        for dist_id in distribution_ids:
+            if cancel_check:
+                cancel_check()
+            launcher_data_by_distribution[dist_id] = (
+                game.get_launcher_data_for_distribution(dist_id) or {}
+            )
+            file_info_by_distribution[dist_id] = (
+                game.get_file_distribution_info(dist_id) or {}
+            )
         before = installation.to_dict()
-        if installation.distribution_id == -1:
-            game._claim_distribution(installation, record["distribution_id"])
-        if not installation.installed_version:
-            installation.installed_version = str(record.get("version_code") or "")
-        if installation.content_id is None:
-            installation.content_id = record.get("content_id")
-        startup_path = str(record.get("startup_path") or "")
-        if game._is_safe_startup_path_for_executable(installation.path, startup_path):
-            installation.startup_path = startup_path
-        if not installation.startup_args:
-            installation.startup_args = str(record.get("startup_args") or "")
-        if installation.to_dict() == before:
-            return False
-        installation.updated_at = int(time.time())
-        return True
+        result = game.identify_installation_distribution(
+            installation.installation_id,
+            distribution_options,
+            file_info_by_distribution,
+            launcher_data_by_distribution,
+            force=force,
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+        if persist and installation.to_dict() != before:
+            self._save_games()
+        return result
 
     @_installation_change_locked
     def set_game_path(
         self, game_id: str, path: str, *, identify=True, preserve_missing=False,
-        cancel_check=None, import_details=None, distribution_id=-1,
+        progress_callback=None, cancel_check=None,
     ) -> bool:
         if not game_id:
             return False
@@ -1894,13 +2109,6 @@ class GameManager:
         if game is None:
             return False
         normalized = GameInstallation._normalize_path(path)
-        previous = None
-        if import_details is not None:
-            key = os.path.normcase(os.path.normpath(normalized))
-            previous = next((
-                item.to_dict() for item in game.installations.values()
-                if item.path and os.path.normcase(os.path.normpath(item.path)) == key
-            ), None)
         marker = GameInstallation.read_marker(normalized)
         installation = None
         if marker and cmp_game_id(marker.get("game_id", ""), game_id):
@@ -1947,20 +2155,19 @@ class GameManager:
         if installation is not None:
             if not installation.startup_path:
                 installation.startup_path = os.path.basename(normalized)
-            if identify and (
-                installation.distribution_id == -1 or not installation.installed_version
-            ):
-                if cancel_check:
-                    cancel_check()
-                self._hydrate_installation_from_fever(
-                    game, installation, self.list_fever_games()
-                )
-            if import_details is not None:
-                from game_import import prepare_import_installation
-                import_details.update(prepare_import_installation(
-                    game, installation, previous, requested_distribution_id=distribution_id,
+            # A concrete distribution on an existing path is the persisted
+            # result of an earlier classification.  Trust it instead of
+            # hashing the game again whenever the same path is selected or
+            # reconciled by launcher-status.
+            if identify and installation.distribution_id == -1:
+                self.identify_game_installation(
+                    game_id,
+                    installation.installation_id,
+                    force=False,
+                    persist=False,
+                    progress_callback=progress_callback,
                     cancel_check=cancel_check,
-                ))
+                )
         game.last_used_time = int(time.time())
         self._save_games()
         return True
@@ -2232,6 +2439,7 @@ class GameManager:
                                 install_path,
                                 running_process_name,
                                 startup_path,
+                                version_code,
                             ]):
                                 index += 1
                                 continue
@@ -2263,7 +2471,7 @@ class GameManager:
                                 "display_name": display_name,
                                 "path": executable_path,
                                 "distribution_id": int(subkey_name),
-                                "version_code": str(version_code or ""),
+                                "version_code": str(version_code),
                                 "content_id": content_id,
                                 "startup_path": startup_path,
                                 "startup_args": str(
@@ -2278,19 +2486,70 @@ class GameManager:
         return result
 
     def initialize_downloadable_installation_versions(
-        self, *, write_markers=True, cancel_check=None
+        self, *, write_markers=True, progress_callback=None, cancel_check=None
     ) -> int:
-        records = [record for record in self.list_fever_games() if record.get("version_code")]
+        cloud = CloudRes()
         changed_count = 0
         for game in self.games.values():
-            for installation in list(game.installations.values()):
+            short_game_id = getShortGameId(game.game_id)
+            if not cloud.is_downloadable(short_game_id):
+                continue
+            pending = [
+                item for item in game.installations.values()
+                if item.path
+                and os.path.isfile(item.path)
+                and not item.installed_version
+            ]
+            if not pending:
+                continue
+            distribution_options = game.get_distribution_options()
+            distribution_ids = game._normalize_distribution_ids(
+                distribution_options
+            )
+            if not distribution_ids:
+                continue
+            file_info_by_distribution = {}
+            launcher_data_by_distribution = {}
+            for dist_id in distribution_ids:
                 if cancel_check:
                     cancel_check()
-                if (not installation.installed_version and os.path.isfile(installation.path)
-                        and self._hydrate_installation_from_fever(game, installation, records)):
-                    changed_count += 1
-                    if write_markers:
-                        installation.write_marker(game.game_id)
+                file_info_by_distribution[dist_id] = game.get_file_distribution_info(dist_id) or {}
+                launcher_data_by_distribution[dist_id] = game.get_launcher_data_for_distribution(dist_id) or {}
+            for installation in pending:
+                if cancel_check:
+                    cancel_check()
+                before = (
+                    installation.distribution_id,
+                    installation.installed_version,
+                    installation.content_id,
+                    installation.startup_path,
+                    installation.startup_args,
+                )
+                game.identify_installation_distribution(
+                    installation.installation_id,
+                    ([installation.distribution_id] if installation.distribution_id != -1
+                     else distribution_options),
+                    file_info_by_distribution,
+                    launcher_data_by_distribution,
+                    force=True,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                )
+                after = (
+                    installation.distribution_id,
+                    installation.installed_version,
+                    installation.content_id,
+                    installation.startup_path,
+                    installation.startup_args,
+                )
+                if after == before:
+                    continue
+                changed_count += 1
+                if write_markers:
+                    installation.write_marker(game.game_id)
+                self.logger.info(
+                    f"已检查本地游戏版本: {game.game_id}, installation={installation.installation_id}"
+                )
         if changed_count:
             self._save_games()
         return changed_count
@@ -2310,8 +2569,7 @@ class GameManager:
                 cancel_check()
             target_game_id = str(record.get("game_id") or "")
             target_path = str(record.get("path") or "")
-            if (not target_game_id or not target_path or not os.path.isfile(target_path)
-                    or not record.get("version_code")):
+            if not target_game_id or not target_path or not os.path.isfile(target_path):
                 continue
             final_game_id = self.find_matching_game_id(target_game_id) or target_game_id
             game = self.get_existing_game(final_game_id)
@@ -2395,9 +2653,7 @@ class GameManager:
         notify: bool = True,
         refresh_registry: bool = True,
         return_installation: bool = False,
-        import_details=None,
-        cancel_check=None,
-    ):
+    ) -> Optional[str]:
         if not game_id:
             return None
         if refresh_registry:
@@ -2423,7 +2679,7 @@ class GameManager:
         if not target:
             return None
         executable_path = target.get("path", "")
-        if not executable_path or not os.path.isfile(executable_path):
+        if not executable_path:
             return None
         target_game_id = target.get("game_id")
         matched_game_id = self.find_matching_game_id(target_game_id)
@@ -2431,16 +2687,6 @@ class GameManager:
         game = self.games.get(final_game_id)
         display_name = target.get("display_name")
         distribution_id = target.get("distribution_id", -1)
-        if return_installation and game:
-            from nativebridge import NativeTaskRegistry
-            pending = NativeTaskRegistry.find_pending_download(game.game_id, distribution_id)
-            if pending:
-                current = game.get_installation_for_distribution(distribution_id)
-                if current and os.path.normcase(os.path.normpath(current.path)) == os.path.normcase(
-                    os.path.normpath(executable_path)
-                ):
-                    return final_game_id, current
-                raise ValueError("该分发正在下载或修复，请等到任务结束后再导入")
         if game:
             if display_name:
                 game.name = display_name
@@ -2450,17 +2696,10 @@ class GameManager:
                 name=display_name if display_name else final_game_id,
             )
             self.games[final_game_id] = game
-        previous = None
-        if import_details is not None:
-            key = os.path.normcase(os.path.normpath(executable_path))
-            previous = next((
-                item.to_dict() for item in game.installations.values()
-                if item.path and os.path.normcase(os.path.normpath(item.path)) == key
-            ), None)
         installation = game.add_installation(
             path=executable_path,
             distribution_id=distribution_id,
-            installed_version=target.get("version_code", "") if import_details is None else "",
+            installed_version=target.get("version_code", ""),
             source="fever",
             content_id=target.get("content_id"),
             startup_path=(
@@ -2468,14 +2707,14 @@ class GameManager:
             ),
             startup_args=target.get("startup_args", ""),
         )
-        # Passive startup hydration keeps its existing registry behavior.
-        # Explicit imports use the registry for identity, not version evidence.
-        if import_details is not None:
-            from game_import import prepare_import_installation
-            import_details.update(prepare_import_installation(
-                game, installation, previous, requested_distribution_id=distribution_id,
-                cancel_check=cancel_check,
-            ))
+        # Fever's registry already provides the authoritative distribution,
+        # version, content id, startup path, and startup arguments.  Do not
+        # re-classify this installation by hashing every cloud distribution:
+        # that is both redundant and needlessly expensive during import.
+        if target.get("version_code"):
+            installation.installed_version = str(target["version_code"])
+        if target.get("content_id") is not None:
+            installation.content_id = target.get("content_id")
         if create_shortcut:
             try:
                 game.create_tool_launch_shortcut(

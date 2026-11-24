@@ -125,25 +125,6 @@ class NativeTaskRegistry:
         return max(pending, key=lambda item: int(item.get("created_at", 0))) if pending else None
 
     @classmethod
-    def create_download(cls, kind, game_id, distribution_id, **values):
-        """Reserve a distribution before a worker can start another download."""
-        from envmgr import genv
-
-        with cls._lock:
-            pending = cls.find_pending_download(game_id, distribution_id)
-            if pending:
-                return pending["task_id"], False
-            task_id = cls.create(kind)
-            workdir = genv.get("FP_WORKDIR", os.getcwd())
-            cls.update(
-                task_id, game_id=game_id, distribution_id=distribution_id,
-                status_file=os.path.join(workdir, f"download_status_{task_id}.json"),
-                control_file=os.path.join(workdir, f"download_control_{task_id}.json"),
-                phase="preparing", progress_percent=0, **values,
-            )
-            return task_id, True
-
-    @classmethod
     def create_import(cls, key: str, **values) -> tuple[str, bool]:
         with cls._lock:
             cls._cleanup_locked(int(time.time()))
@@ -209,144 +190,6 @@ class NativeTaskRegistry:
                     pass
 
 
-def reconcile_download(manager, task):
-    """Reflect a terminal supervisor result into the existing live record."""
-    if (task.get("kind") not in ("launcher-install", "launcher-update")
-            or task.get("status") != "done"):
-        return task
-    task_id = task["task_id"]
-    with manager._save_lock:
-        task = NativeTaskRegistry.get(task_id) or task
-        if task.get("reconciled"):
-            return task
-        game = manager.get_existing_game(task.get("game_id") or "")
-        installation_id = task.get("installation_id")
-        installation = game.get_installation(installation_id) if game and installation_id else None
-        expected_path = task.get("path")
-        same_scope = (
-            installation and expected_path
-            and os.path.normcase(os.path.realpath(installation.path))
-            == os.path.normcase(os.path.realpath(expected_path))
-            and installation.distribution_id == task.get("distribution_id")
-        )
-        if same_scope:
-            if task.get("success"):
-                target_version = task.get("target_version")
-                if target_version:
-                    installation.installed_version = str(target_version)
-                    if task.get("content_id") is not None:
-                        installation.content_id = task["content_id"]
-                    installation.source = "download"
-                    installation.updated_at = int(time.time())
-                    manager._save_games()
-            elif task.get("kind") == "launcher-install" and task.get("created_installation"):
-                manager.remove_game_installation(game.game_id, installation_id)
-        NativeTaskRegistry.update(task_id, reconciled=True)
-        return {**task, "reconciled": True}
-
-
-def finish_download_process(manager, task_id, process):
-    """Observe the final supervisor write even when no browser polls."""
-    process.wait()
-    task = NativeTaskRegistry.get(task_id)
-    if task and task.get("status") != "done":
-        NativeTaskRegistry.finish(
-            task_id, success=False, phase="failed", error="下载进程未返回最终结果",
-        )
-        task = NativeTaskRegistry.get(task_id)
-    if task:
-        reconcile_download(manager, task)
-
-
-def start_launcher_update(
-    manager, game, installation, distribution_id, concurrent, *, repair=False, imported=False,
-    unknown_origin=False,
-):
-    """Start an update/repair for exactly one already-committed installation."""
-    from logutil import safe_exception
-
-    with manager._save_lock:
-        if (manager.get_existing_game(game.game_id) is not game
-                or game.get_installation(installation.installation_id) is not installation
-                or installation.distribution_id != distribution_id):
-            raise ValueError("安装记录已变更，请重新选择")
-        path = installation.path
-        root = game.get_root_path(installation.installation_id)
-        if imported and not repair and (not installation.installed_version or not os.path.isfile(path)):
-            raise ValueError("导入完成后安装路径或已确认版本发生变化")
-        repair = repair or not installation.installed_version or not os.path.isfile(path)
-        task_id, created = NativeTaskRegistry.create_download(
-            "launcher-update", game.game_id, distribution_id,
-            installation_id=installation.installation_id, path=path,
-            operation="repair" if repair else "update",
-        )
-        if not created:
-            pending = NativeTaskRegistry.get(task_id) or {}
-            if pending.get("installation_id") != installation.installation_id:
-                raise ValueError("该分发已有其他安装的下载任务")
-            return task_id, False
-        task = NativeTaskRegistry.get(task_id)
-
-    def run():
-        try:
-            if imported:
-                from fever_install_state import confirmed_install_root, normalized_path
-                launcher = game.get_launcher_data_for_distribution(distribution_id) or {}
-                confirmed_root = confirmed_install_root(path, launcher.get("startup_path"))
-                if (distribution_id not in game.get_distributions() or not confirmed_root
-                        or confirmed_root != normalized_path(os.path.realpath(root))
-                        or installation.path != path
-                        or game.get_root_path(installation.installation_id) != root):
-                    raise ValueError("无法用分发的启动程序确认更新或修复目录")
-            # An imported version is already committed. Only this separate
-            # download operation may promote it to the target version.
-            NativeTaskRegistry.update(task_id, phase="checking" if repair else "preparing")
-            result = game.try_update(
-                distribution_id, concurrent, installation.installation_id,
-                progress_file=task["status_file"], control_file=task["control_file"],
-                repair=repair, unknown_origin=unknown_origin,
-                allow_repair_fallback=not imported or repair,
-            )
-            if result is None:
-                raise RuntimeError("启动游戏修复失败" if repair else "启动游戏更新失败")
-            if result.process is not None:
-                NativeTaskRegistry.update(
-                    task_id, success=True, phase="download_started",
-                    version=installation.installed_version, download_async=True,
-                )
-                finish_download_process(manager, task_id, result.process)
-            else:
-                if result.verified_version:
-                    with manager._save_lock:
-                        current = game.get_installation(installation.installation_id)
-                        if (current is not installation or current.distribution_id != distribution_id
-                                or current.path != path
-                                or game.get_root_path(current.installation_id) != root):
-                            raise ValueError("修复期间安装目录或分发已变更")
-                        current.installed_version = result.verified_version
-                        current.content_id = result.content_id
-                        if current.source == "download_pending":
-                            current.source = "download"
-                        current.updated_at = int(time.time())
-                        current.write_marker(game.game_id)
-                        manager._save_games()
-                NativeTaskRegistry.finish(
-                    task_id, success=True, phase="finished", progress_percent=100,
-                    version=installation.installed_version, download_async=False,
-                    post_update_actions=result.post_update_actions,
-                )
-        except Exception as exc:
-            safe_exception(manager.logger, "后台处理游戏更新/修复失败")
-            NativeTaskRegistry.finish(task_id, success=False, phase="failed", error=str(exc))
-
-    try:
-        threading.Thread(target=run, name=f"launcher-update-{task_id[:8]}", daemon=True).start()
-    except Exception as exc:
-        NativeTaskRegistry.finish(task_id, success=False, phase="failed", error=str(exc))
-        raise
-    return task_id, True
-
-
 def capabilities() -> dict:
     return {
         "success": True,
@@ -358,7 +201,7 @@ def capabilities() -> dict:
         "download_progress": True,
         "download_pause_resume": True,
         "import_tasks_v1": True,
-        "fever_update_modes_v1": True,
+        "fever_update_modes_v1": sys.platform == "win32",
         "platform": sys.platform,
     }
 
