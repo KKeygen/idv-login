@@ -177,8 +177,7 @@ class CloudRes:
         try:
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return data if isinstance(data, dict) and type(data.get('lastModified')) is int else {}
+                    return json.load(f)
             return {}
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse cache file: {type(e).__name__} line={e.lineno} column={e.colno}")
