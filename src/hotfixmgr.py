@@ -66,6 +66,8 @@ def probe_cache_write_once() -> bool:
         genv.set("hotfix_probed", True, True, require_saved=True)
         return bool(genv.get_from_file("hotfix_probed", False))
     except Exception:
+        from logutil import safe_exception
+        safe_exception(logger, "配置写入探测失败")
         return False
 
 
@@ -676,13 +678,11 @@ def pre_start_check_and_rollback_if_needed():
     # A reinstall may have replaced a pending module and its backup. Do not
     # restore the previous installation; the current cloud list decides later.
     records = _get_records()
-    changed = [hid for hid in pending_ids
-               if records.get(hid, {}).get('installed_sha256')
-               and not _installed_file_matches(records[hid])]
-    if changed:
-        for hid in changed:
-            _record_update(hid, {'status': 'needs_reapply'}, require_saved=True)
-        pending_ids = [hid for hid in pending_ids if hid not in changed]
+    active = [hid for hid in pending_ids
+              if not records.get(hid, {}).get('installed_sha256')
+              or _installed_file_matches(records[hid])]
+    if active != pending_ids:
+        pending_ids = active
         _set_pending_ids(pending_ids)
     if not pending_ids:
         return

@@ -17,40 +17,8 @@ from native_uimgr import (UIManager as NativeUIManager, configure_application_ic
     configure_windows_app_identity, register_url_scheme, _minimize_console_window)
 from native_ui.chrome import _WindowsFramelessWindow, _fit_frameless_launcher_size
 from webview2_host import WebView2Host, WebView2Error, runtime_status, MINIMUM_RUNTIME_VERSION, RUNTIME_DOWNLOAD_URL
-from fever_webview2_bridge import (BASE_HEADERS, ENTRY, ORIGIN, cloud_transport_script,
+from fever_webview2_bridge import (BASE_HEADERS, ENTRY, ORIGIN, cloud_transport_script, WINDOW_CONTROLS_SCRIPT,
     RequestRejected, authorize, json_response, navigation_allowed, trusted_document)
-
-WINDOW_CONTROLS_SCRIPT = r"""(() => {
-  if (window !== window.top || location.origin !== 'https://idv-ui.invalid'
-      || location.pathname !== '/index.html') return;
-  document.addEventListener('DOMContentLoaded', () => {
-    const host = document.createElement('div');
-    host.style.cssText = 'position:fixed;top:12px;right:12px;z-index:2147483647';
-    const root = host.attachShadow({mode:'closed'});
-    root.innerHTML = `<style>
-      div {display:flex;gap:2px;background:transparent}
-      button {display:grid;place-items:center;width:34px;height:28px;padding:0;
-        border:0;border-radius:9px;background:transparent;color:white;cursor:pointer}
-      button:hover,button:focus-visible {background:rgba(255,255,255,.15)}
-      button[data-action=close]:hover {background:#c42b1c}
-      svg {width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.4}
-    </style><div>
-      <button data-action="minimize" aria-label="最小化" title="最小化"><svg viewBox="0 0 16 16"><path d="M3 11h10"/></svg></button>
-      <button data-action="maximize" aria-label="最大化或还原" title="最大化或还原"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10"/></svg></button>
-      <button data-action="close" aria-label="关闭" title="关闭"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button>
-    </div>`;
-    root.querySelectorAll('button').forEach(button => {
-      button.addEventListener('click', event => {
-        event.stopPropagation();
-        fetch('/_idv-login/webview2/window-controls', {method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({action:button.dataset.action})}).catch(() => {});
-      });
-    });
-    document.body.appendChild(host);
-  }, {once:true});
-})();"""
-
 
 def _log_failure(logger, operation):
     import traceback

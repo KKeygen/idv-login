@@ -108,10 +108,9 @@ class ExpiredChannelLogin:
                 self._finish(None, notify=False)
                 return
             if isinstance(packet, dict):
-                from channel_cache import credential_expires_at
                 self.record.unionToken = clone.unionToken
                 self.record.honorLogin = clone.honorLogin
-                self.record.cache_unisdk(packet, credential_expires_at(clone))
+                self.record.cache_unisdk(packet)
                 self._packet_ready(packet)
             elif isinstance(packet, Exception):
                 self._finish(packet)

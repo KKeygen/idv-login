@@ -1849,8 +1849,7 @@ class GameManager:
     
     def __init__(self):
         self.logger = setup_logger()
-        from active_games import ActiveGames
-        self._active_games = ActiveGames(self.logger)
+        self._sdk_processes = {}
         self.games: Dict[str, Game] = {}
         self._save_lock = threading.RLock()
         self._fever_import_thread = None
@@ -1999,18 +1998,34 @@ class GameManager:
     def note_sdk_process(self, game_id, process_id):
         """Bind SDK-reported identity to the title, not a particular installation."""
         short = getShortGameId(game_id)
-        if self._active_games.note_native_request(short, process_id):
+        try:
+            pid = int(process_id)
+        except (TypeError, ValueError):
+            return
+        if short and pid > 0 and pid != os.getpid():
+            self._sdk_processes[pid] = short
             game = self.get_existing_game(short)
             if game is not None:
                 game.is_running = True
 
     def update_running_state(self):
-        running = self._active_games.running_game_ids()
+        running = set()
+        if self._sdk_processes and sys.platform == 'win32':
+            import psutil
+            try:
+                alive = set(psutil.pids())
+            except OSError as error:
+                self.logger.debug('无法确认原生游戏是否仍在运行: {}', type(error).__name__)
+            else:
+                for pid, title in tuple(self._sdk_processes.items()):
+                    if pid in alive:
+                        running.add(title)
+                    else:
+                        self._sdk_processes.pop(pid, None)
         if app_state.fever_bridge is not None:
             running.update(app_state.fever_bridge.running_game_ids())
-        with self._save_lock:
-            for game in self.games.values():
-                game.is_running = getShortGameId(game.game_id) in running
+        for game in tuple(self.games.values()):
+            game.is_running = getShortGameId(game.game_id) in running
 
     def list_games(self) -> List[dict]:
         """列出所有已保存的游戏信息"""

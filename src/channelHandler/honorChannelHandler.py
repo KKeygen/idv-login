@@ -165,8 +165,7 @@ class honorChannel(channelmgr.channel):
             if cancel_event is not None and cancel_event.is_set():
                 return None
             if isinstance(result, dict):
-                from channel_cache import credential_expires_at
-                record.cache_unisdk(result, credential_expires_at(record))
+                record.cache_unisdk(result)
             return result
 
         if on_complete is None:
@@ -215,8 +214,6 @@ class honorChannel(channelmgr.channel):
                 if interactive and clone.honorLogin.canReauthorize():
                     self.request_user_login(on_complete=logged_in)
                     return
-            elif isinstance(result, Exception):
-                self.expire_unisdk(game)
             on_complete(result)
 
         def worker():

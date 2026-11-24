@@ -15,11 +15,6 @@ from channelHandler.channelUtils import cmp_game_id
 
 logger = setup_logger()
 
-# fetch_json_from_url 返回状态
-_MODIFIED = "modified"
-_NOT_MODIFIED = "not_modified"
-_ERROR = "error"
-
 class CloudRes:
     # 单例实例
     _instance = None
@@ -49,7 +44,6 @@ class CloudRes:
             self.local_data = self.load_local_cache()
             self.session = requests.Session()
             self.session.trust_env = False
-            self._meta_lock = threading.Lock()
             from gamecatalog import DynamicGameCatalog
             self.dynamic_game_catalog = DynamicGameCatalog(cache_dir=self.cache_dir)
             self._initialized = True
@@ -61,20 +55,12 @@ class CloudRes:
 
     def _set_url_meta(self, url, meta):
         """保存指定 URL 的 HTTP 缓存验证器"""
-        with self._meta_lock:
-            all_meta = dict(genv.get("_cloud_http_meta", {}))
-            all_meta[url] = meta
-            genv.set("_cloud_http_meta", all_meta, True)
+        all_meta = dict(genv.get("_cloud_http_meta", {}))
+        all_meta[url] = meta
+        genv.set("_cloud_http_meta", all_meta, True)
 
     def fetch_json_from_url(self, urls=None, snapshot=None):
-        """尝试从云端获取配置，支持 HTTP 条件请求 (ETag/If-Modified-Since)。
-        
-        Returns:
-            tuple: (status, data)
-                - (_MODIFIED, dict): 服务器返回了新数据
-                - (_NOT_MODIFIED, None): 304 未修改
-                - (_ERROR, None): 所有 URL 均失败
-        """
+        """返回可用配置及可选的签名缓存；没有可用响应时返回 None。"""
         if self.signatures_required:
             return self._fetch_verified_json(urls, snapshot)
         local_data = snapshot[1] if snapshot is not None else self.local_data
@@ -93,10 +79,8 @@ class CloudRes:
 
                 if response.status_code == 304:
                     if headers:
-                        return (_NOT_MODIFIED, None)
-                    response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers={})
-                    if response.status_code == 304:
-                        continue
+                        return local_data, None
+                    continue
 
                 response.raise_for_status()
                 data = response.json()
@@ -114,7 +98,7 @@ class CloudRes:
                 if new_meta:
                     self._set_url_meta(url, new_meta)
 
-                return (_MODIFIED, data)
+                return data, None
             except requests.RequestException as e:
                 status = getattr(getattr(e, 'response', None), 'status_code', None)
                 logger.debug(f"Failed to fetch JSON from source {index}: {type(e).__name__} status={status}")
@@ -122,7 +106,7 @@ class CloudRes:
                 logger.debug(f"Invalid JSON received from source {index}: {type(e).__name__}")
             except Exception as e:
                 logger.debug(f"Unexpected error while fetching JSON from source {index}: {type(e).__name__}")
-        return (_ERROR, None)
+        return None
 
     def _fetch_verified_json(self, urls=None, snapshot=None):
         """Use only validators tied to the exact, previously verified cache."""
@@ -142,13 +126,11 @@ class CloudRes:
                         and meta.get('payload_sha256') == cached_hash else None)
                 headers = {'If-None-Match': etag} if cached_bytes and isinstance(etag, str) and etag else {}
                 response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers=headers)
-                if getattr(response, 'status_code', 200) == 304:
+                if response.status_code == 304:
                     if headers:
-                        return (_NOT_MODIFIED, None)
+                        return local_data, None
                     # A 304 without a matching validated cache is unusable.
-                    response = self.session.get(url, timeout=60, verify=should_verify_ssl(), headers={})
-                    if getattr(response, 'status_code', 200) == 304:
-                        continue
+                    continue
                 response.raise_for_status()
                 payload = response.content
                 if not verify_cloud_config(payload):
@@ -162,7 +144,7 @@ class CloudRes:
                 if version == current_version and current_payload != canonical_cloud_config(payload)[1]:
                     continue
                 # Store the ETag alongside the exact bytes it describes.
-                etag = getattr(response, 'headers', {}).get('ETag')
+                etag = response.headers.get('ETag')
                 candidate = {'payload': base64.b64encode(payload).decode('ascii')}
                 kept = dict(validators) if payload == cached_bytes else {}
                 if isinstance(etag, str) and etag:
@@ -171,12 +153,10 @@ class CloudRes:
                     kept.pop(url, None)
                 if kept:
                     candidate['validators'] = kept
-                if version == current_version:
-                    return (_NOT_MODIFIED, candidate if candidate != cache else None)
-                return (_MODIFIED, (data, candidate))
+                return data, candidate if candidate != cache else None
             except (requests.RequestException, ValueError, UnicodeError) as e:
                 logger.debug(f'获取已签名云配置失败: {type(e).__name__}')
-        return (_ERROR, None)
+        return None
 
     def load_local_cache(self):
         if self.signatures_required:
@@ -221,7 +201,7 @@ class CloudRes:
             try:
                 result = self.fetch_json_from_url([url], snapshot)
             except Exception:
-                result = (_ERROR, None)
+                result = None
             results.put(result)
 
         def collect():
@@ -232,19 +212,19 @@ class CloudRes:
                     if remaining <= 0:
                         break
                     try:
-                        status, data = results.get(timeout=remaining)
+                        result = results.get(timeout=remaining)
                     except queue.Empty:
                         break
-                    if status == _ERROR:
+                    if result is None:
                         continue
                     try:
-                        self._apply_fetch_result(status, data, background=applied)
+                        self._apply_fetch_result(*result, background=applied)
                     except OSError:
                         continue
                     applied = True
                     ready.set()
                 if not applied:
-                    self._apply_fetch_result(_ERROR, None)
+                    logger.warning("获取云端配置失败，将继续使用本地配置")
             finally:
                 ready.set()
 
@@ -253,39 +233,12 @@ class CloudRes:
         threading.Thread(target=collect, daemon=True).start()
         ready.wait(max(0, deadline - time.monotonic()))
 
-    def _apply_fetch_result(self, status, cloud_data, background=False):
+    def _apply_fetch_result(self, cloud_data, signed_cache, background=False):
+        from secure_write import write_json_restricted
 
-        if status == _NOT_MODIFIED:
-            if self.signatures_required and cloud_data is not None:
-                import base64
-                candidate = base64.b64decode(cloud_data['payload'], validate=True)
-                current = (base64.b64decode(self._verified_payload['payload'], validate=True)
-                           if self._verified_payload else None)
-                if not current or canonical_cloud_config(candidate)[1] != canonical_cloud_config(current)[1]:
-                    return
-                # Updating a same-version ETag is optional: preserve the valid
-                # existing cache if the metadata cannot be written.
-                try:
-                    from secure_write import write_json_restricted
-                    write_json_restricted(self.signed_cache_file, cloud_data, atomic_required=True)
-                    self._verified_payload = cloud_data
-                except Exception:
-                    logger.warning("无法保存云配置缓存验证器")
-            if not background:
-                logger.info("本地配置已是最新")
-            return
-
-        if status == _ERROR or cloud_data is None:
-            logger.warning("获取云端配置失败，将继续使用本地配置")
-            return
-
-        if self.signatures_required:
-            cloud_data, signed_cache = cloud_data
-
-        cloud_last_modified = cloud_data.get('lastModified', 0)
-        local_last_modified = self.local_data.get('lastModified', 0)
-        if cloud_last_modified > local_last_modified:
-            from secure_write import write_json_restricted
+        version = cloud_data.get('lastModified', 0)
+        current_version = self.local_data.get('lastModified', 0)
+        if version > current_version:
             if self.signatures_required:
                 write_json_restricted(self.signed_cache_file, signed_cache, atomic_required=True)
                 self._verified_payload = signed_cache
@@ -294,9 +247,19 @@ class CloudRes:
             self.local_data = cloud_data
             if not background:
                 logger.info("云端配置有更新，应用成功")
-        else:
-            if not background:
-                logger.info("本地配置已是最新")
+            return
+        if version == current_version and signed_cache and self._verified_payload:
+            import base64
+            payload = base64.b64decode(signed_cache['payload'], validate=True)
+            current = base64.b64decode(self._verified_payload['payload'], validate=True)
+            if canonical_cloud_config(payload)[1] == canonical_cloud_config(current)[1]:
+                try:
+                    write_json_restricted(self.signed_cache_file, signed_cache, atomic_required=True)
+                    self._verified_payload = signed_cache
+                except OSError:
+                    logger.warning("无法保存云配置缓存验证器")
+        if not background:
+            logger.info("本地配置已是最新")
 
     def get_channelData(self, channelName,shortGameId):
         data=self.local_data.get('data', [])

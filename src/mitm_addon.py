@@ -859,7 +859,7 @@ class IDVLoginAddon:
                 pending = self.stack_mgr.pop_pending_login_info(game_id, process_id)
                 if pending:
                     manager.import_from_scan(pending, resp_data, game_id)
-                    from channel_cache import packet_identity
+                    from channelHandler.channelUtils import packet_identity
                     ext = user.get('pc_ext_info') or resp_data.get('ext_info') or {}
                     try:
                         _, sdk_channel, sdkuid = packet_identity({'login_channel': login_channel,
@@ -898,7 +898,7 @@ class IDVLoginAddon:
                     json.dumps(cd, ensure_ascii=False).encode()).decode()
                 flow.response.content = json.dumps(resp_data).encode()
             if login_channel and not login_channel.startswith('netease'):
-                from channel_cache import packet_identity
+                from channelHandler.channelUtils import packet_identity
                 try:
                     identity = packet_identity({'login_channel': login_channel,
                         'extra_unisdk_data': (user.get('pc_ext_info') or {}).get('extra_unisdk_data')
@@ -911,7 +911,7 @@ class IDVLoginAddon:
                         sync.preserve_unremembered_account(identity)
                     self._pending_tool_auth.add(identity)
                 except ValueError:
-                    self.logger.debug("exchange_token 的渠道 SAUTH 身份无效；不使用外层账号 ID 代替 SDKUID")
+                    pass  # 无法建立账号身份时不接管这条 MPay 记录。
         except Exception as error:
             from mpay_db_sync import log_failure
             log_failure(self.logger, f'[channel] game={effective_game_id} stage=exchange.observe 处理登录回包失败；保留原游戏响应', error)

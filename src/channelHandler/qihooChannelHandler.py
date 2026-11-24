@@ -62,7 +62,7 @@ class qihooChannel(channelmgr.channel):
         self.qt_cookie: str = qt_cookie or ""
         # 登录接口返回的原始 data（含 qid / qoauth_token）
         self.userInfo: Optional[Dict[str, Any]] = userInfo
-        # access_token 过期时间戳，仅由服务返回的 expires_in 计算。
+        # access_token 过期时间戳（expires_in 约 10 小时）
         self.token_expire_time: int = int(token_expire_time or 0)
 
         self.app_id, self.app_key, self.protocol_app_channel, self.sdk_ver = \
@@ -132,7 +132,7 @@ class qihooChannel(channelmgr.channel):
         cred = self._credentials()
         if not (cred["qid"] and cred["access_token"]):
             return False
-        # 仅使用已知截止时间，留 5 分钟余量。
+        # expires_in 约 10 小时；留 5 分钟余量
         if self.token_expire_time and int(time.time()) >= self.token_expire_time - 300:
             return False
         return True
@@ -267,8 +267,7 @@ class qihooChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self._has_valid_token() else False)
 
-        if (not self.is_login_expired(game_id) and self._has_valid_token()
-                and (self.token_expire_time > 0 or not self.qt_cookie)):
+        if self._has_valid_token() and not self.is_login_expired(game_id):
             return _deliver(_build())
         if on_complete is not None:
             self.request_user_login(on_complete=_on_login_done, interactive=interactive)

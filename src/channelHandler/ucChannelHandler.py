@@ -237,10 +237,9 @@ class ucChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self._has_valid_sid() else False)
 
-        if (not self.is_login_expired(game_id) and self._has_valid_sid()
-                and (self.sid_expire_time > 0 or not self.refreshToken)):
+        if self._has_valid_sid() and not self.is_login_expired(game_id):
             return _deliver(_build())
-        if bool(self.refreshToken) and self._try_refresh():
+        if self.refreshToken and self._try_refresh():
             return _deliver(_build() if self._has_valid_sid() else False)
         if not interactive:
             return _deliver(False)
@@ -272,9 +271,7 @@ class ucChannel(channelmgr.channel):
         sid = str(data.get("sid") or "")
         account_id = str(data.get("accountId") or data.get("ucid") or "")
         if not sid or not account_id:
-            raise RuntimeError(
-                f"UC 缺少 sid 或 accountId: sid={sid}, accountId={account_id}"
-            )
+            raise RuntimeError("UC 缺少 sid 或 accountId")
 
         import base64 as b64mod
 

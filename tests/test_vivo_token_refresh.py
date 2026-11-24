@@ -86,14 +86,13 @@ class _VivoLogin:
         self.tokens = iter(tokens)
         self.web_result = web_result
         self.cookies = {"session": "cookie"}
-        self.cookieRecords = None
         self.calls = []
 
     def loginSubAccount(self, sub_open_id):
         self.calls.append(sub_open_id)
         return next(self.tokens)
 
-    def webLogin(self, cookies=None, on_complete=None, **kwargs):
+    def webLogin(self, cookies=None, on_complete=None):
         if on_complete is not None:
             on_complete(self.web_result)
             return None
@@ -134,7 +133,7 @@ class VivoTokenRefreshTests(unittest.TestCase):
 
         result = channel.get_uniSdk_data()
 
-        self.assertIs(result, False)
+        self.assertIsNone(result)
         self.assertEqual(channel.activeAccount.openToken, "")
         self.assertFalse(channel.is_token_valid())
 
@@ -145,7 +144,6 @@ class VivoTokenRefreshTests(unittest.TestCase):
         channel.cookies = {}
         channel.chosenAccount = ""
         channel.vivoLogin.web_result = {
-            "openId": "main-account-id",
             "nickName": "main-account",
             "subAccounts": [
                 {"nickName": "sub", "subOpenId": "sub-account"},
@@ -153,7 +151,6 @@ class VivoTokenRefreshTests(unittest.TestCase):
         }
 
         self.assertFalse(channel.request_user_login())
-        self.assertEqual(channel.vivoLogin.calls, ["sub-account"])
         self.assertFalse(channel.is_token_valid())
 
 

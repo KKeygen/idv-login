@@ -17,7 +17,10 @@
  """
 
 from loguru import logger
+import json
+import re
 import sys
+import traceback
 
 
 def _telemetry_sink(message):
@@ -125,3 +128,27 @@ def safe_exception(target_logger, message, *args):
             target_logger.error(f"HTTP status={error.response.status_code} response={error.response.text}")
     except Exception:
         pass
+
+
+def exception_summary(error):
+    """Exception chain with source locations and approved facts, never frame locals."""
+    lines, seen = [], set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        facts = type(error).__name__
+        value = str(error)
+        if re.fullmatch(r'field=[A-Za-z0-9_.]+: [A-Za-z0-9 _/().-]+', value) or re.fullmatch(
+                r'MPay Wasm [a-z_]+ failed: status=-?[0-9]+', value) or re.fullmatch(
+                r'channel=[a-z0-9_]+ step=[a-z0-9_]+ code=(-?[0-9]+|invalid)', value):
+            facts += ': ' + value
+        if isinstance(getattr(error, 'errno', None), int):
+            facts += f' errno={error.errno}'
+        if isinstance(error, json.JSONDecodeError):
+            facts += f' line={error.lineno} column={error.colno}'
+        response = getattr(error, 'response', None)
+        status = getattr(response, 'status_code', None)
+        if isinstance(status, int):
+            facts += f' http_status={status}'
+        lines.append(facts + '\n' + ''.join(traceback.format_tb(error.__traceback__)))
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+    return '\nCaused by: '.join(lines)

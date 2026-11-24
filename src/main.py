@@ -1288,7 +1288,8 @@ def setup_network_proxy(proxy_port):
         if uri_action == "start" and uri_game_id:
             game = game_helper.get_game(uri_game_id)
             if game:
-                logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
+                game_name = game.get_installation_display_name(uri_installation_id)
+                logger.info("通过快捷方式启动游戏: {}", game_name)
                 game.start(uri_installation_id)
             else:
                 logger.warning(f"未找到游戏: {uri_game_id}")
@@ -1306,7 +1307,8 @@ def setup_network_proxy(proxy_port):
         # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
         game = game_helper.get_game(uri_game_id)
         if game:
-            logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
+            game_name = game.get_installation_display_name(uri_installation_id)
+            logger.info("通过快捷方式启动游戏: {}", game_name)
             game.start(uri_installation_id)
         else:
             logger.warning(f"未找到游戏: {uri_game_id}")

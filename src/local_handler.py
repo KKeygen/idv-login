@@ -1179,7 +1179,7 @@ class LocalRequestHandler:
                         "path_status": path_status,
                     })
                 target_dir = path_status["normalized_path"]
-                task_id = NativeTaskRegistry.create("launcher-install")
+                task_id = NativeTaskRegistry.create(NativeTaskRegistry.DOWNLOAD_INSTALL)
                 progress_file = os.path.join(
                     genv.get("FP_WORKDIR", os.getcwd()),
                     f"download_status_{task_id}.json",
@@ -1439,7 +1439,7 @@ class LocalRequestHandler:
         gid = game.game_id
         from nativebridge import NativeTaskRegistry
 
-        task_id = NativeTaskRegistry.create("launcher-update")
+        task_id = NativeTaskRegistry.create(NativeTaskRegistry.DOWNLOAD_UPDATE)
         progress_file = os.path.join(
             genv.get("FP_WORKDIR", os.getcwd()),
             f"download_status_{task_id}.json",
@@ -2014,7 +2014,7 @@ class LocalRequestHandler:
                 "success": False,
                 "error": "Unknown task_id",
             })
-        if (task.get("kind") in ("launcher-install", "launcher-update")
+        if (task.get("kind") in (NativeTaskRegistry.DOWNLOAD_INSTALL, NativeTaskRegistry.DOWNLOAD_UPDATE)
                 and task.get("status") == "done" and not task.get("reconciled")):
             with self.game_helper._save_lock:
                 game = self.game_helper.get_existing_game(str(task.get("game_id") or ""))
@@ -2031,12 +2031,12 @@ class LocalRequestHandler:
                     )
                     if task.get("content_id") is not None:
                         installation.content_id = task.get("content_id")
-                    if task.get("kind") == "launcher-install":
+                    if task.get("kind") == NativeTaskRegistry.DOWNLOAD_INSTALL:
                         installation.source = "download"
                     installation.updated_at = int(time.time())
                     self.game_helper._save_games()
                 elif (
-                    task.get("kind") == "launcher-install"
+                    task.get("kind") == NativeTaskRegistry.DOWNLOAD_INSTALL
                     and task.get("created_installation")
                     and installation
                 ):
@@ -2063,7 +2063,7 @@ class LocalRequestHandler:
                 "error": "下载控制只支持暂停或继续",
             })
         task = NativeTaskRegistry.get(task_id)
-        if not task or task.get("kind") not in ("launcher-install", "launcher-update"):
+        if not task or task.get("kind") not in (NativeTaskRegistry.DOWNLOAD_INSTALL, NativeTaskRegistry.DOWNLOAD_UPDATE):
             return self._json_response(404, {
                 "success": False,
                 "error": "未找到下载任务",

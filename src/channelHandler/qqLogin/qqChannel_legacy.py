@@ -180,7 +180,7 @@ class QQLogin:
             safe_exception(self.logger, "解析 judgeLoginData 失败")
 
     def _exchange_code(self, code, pf=None, pfkey=None):
-        """通过 YSDK /cmd/QQCodeLogin 换取 token，缺期限时沿用 60 天默认值。"""
+        """通过 YSDK /cmd/QQCodeLogin 换取 60 天 token"""
         import hmac, hashlib, base64, json as _json
         timestamp = str(int(time.time()))
         body = _json.dumps({"appID": self.qq_appid, "loginCode": code})

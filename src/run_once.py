@@ -130,7 +130,7 @@ def migrate_channel_records():
         return
     import json
     from channelmgr import legacy_record_source
-    from channel_cache import exception_summary
+    from logutil import exception_summary
     from secure_write import write_json_restricted
 
     target = genv.get("FP_CHANNEL_RECORD")
@@ -210,13 +210,7 @@ def run_once():
     if not genv.get("config_fixed_0403", False):
         import hotfixmgr
         if not hotfixmgr.probe_cache_write_once():
-            logger.warning("config.json 写入不可用；保留原配置，不自动删除或重置")
-            _show_msgbox(
-                "设置暂时无法保存",
-                "原配置和账号记录均已保留。请检查配置文件或目录权限。\n"
-                "如配置损坏，请退出工具后保留该文件，再用正常备份恢复。",
-                is_error=True,
-            )
+            logger.warning("配置写入失败，原配置保留。请退出工具，检查空闲空间及配置目录权限；仍失败时保留日志。")
 
     # 代理模式引导（多游戏有账号时）
     try:
