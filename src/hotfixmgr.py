@@ -791,10 +791,8 @@ def _staged_hotfix_path(hid):
     return os.path.join(genv.get("FP_WORKDIR") or os.getcwd(), "hotfix_staged", name)
 
 
-def _read_staged_hotfix(item, record):
+def _read_verified_staged_source(item):
     hid = _make_id(item)
-    if record.get("status") != "pending_restart" or _make_id(record) != hid:
-        return None
     try:
         source_hash = _hotfix_source_hash(item, required=True)
         with open(_staged_hotfix_path(hid), "rb") as source_file:
@@ -879,7 +877,8 @@ def _manual_hotfix_entries(cloudres, version):
             state = "pending_validation" if stored == "pending_validate" else "applied"
         elif hid != latest.get(item.get("target_module")):
             state = "superseded"
-        elif _read_staged_hotfix(item, record) is not None:
+        elif (stored == "pending_restart" and _make_id(record) == hid
+              and _read_verified_staged_source(item) is not None):
             state = "restart_required"
             message = "已校验并准备，重启后应用"
         elif hid in skipped or stored in ("skipped", "rolled_back"):
@@ -984,12 +983,13 @@ def handle_if_needed(cloudres):
         if not hid:
             continue
         record = records.get(hid, {}) or {}
-        if required and current_version:
-            if hid not in skipped or record.get("skip_reason") == "user_exit_during_countdown":
-                source = _read_staged_hotfix(item, record)
-                if source is not None:
-                    staged.append((item, source))
-                    continue
+        if (required and current_version and record.get("status") == "pending_restart"
+                and _make_id(record) == hid
+                and (hid not in skipped or record.get("skip_reason") == "user_exit_during_countdown")):
+            source = _read_verified_staged_source(item)
+            if source is not None:
+                staged.append((item, source))
+                continue
         if hid in skipped:
             continue
         if record.get("status") in ("applied", "pending_validate") and _installed_file_matches(record):
@@ -1037,6 +1037,11 @@ def _apply_startup_hotfixes(items, require_hashes):
     applied_ids = []
     for item, staged_source in items:
         hid = _make_id(item)
+        record = _get_records().get(hid, {})
+        if (require_hashes and staged_source is None
+                and isinstance(record, dict) and record.get("status") == "apply_failed"):
+            # A failed restart may have left the verified download intact.
+            staged_source = _read_verified_staged_source(item)
         _record_update(hid, {"status": "applying", "ts": int(time.time())})
         if staged_source is None:
             ok, message = _apply_one(item, require_hashes=require_hashes)
