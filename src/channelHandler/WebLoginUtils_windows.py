@@ -62,7 +62,7 @@ class WebBrowser(QWidget):
         self._url = "about:blank"
         self._cleanup_called = self._finished = self._browser_running = False
         self._login_cancelled = False
-        self._startup_error = self._setup_dialog = None
+        self._startup_error = None
         self._drag_pos = None
         self._moving_focus = False
         self._toast_label = self._toast_timer = None
@@ -229,6 +229,89 @@ class WebBrowser(QWidget):
         self._pages[page_id] = page
         return page
 
+    def _show_startup_error(self):
+        from PyQt6.QtGui import QDesktopServices
+        from PyQt6.QtWidgets import QDialog
+        from native_ui.dialogs import dialog_layout, primary_button
+        from webview2_host import MINIMUM_RUNTIME_VERSION, RUNTIME_DOWNLOAD_URL
+
+        clear_retry = 2
+        dialog = QDialog(self)
+        dialog.setWindowTitle("WebView2 登录组件准备")
+        layout = dialog_layout(dialog, width=560)
+
+        message = QLabel(str(self._startup_error))
+        message.setTextFormat(Qt.TextFormat.PlainText)
+        message.setWordWrap(True)
+        layout.addWidget(message)
+        note = QLabel(
+            "登录页面使用系统 Microsoft Edge WebView2 Runtime，不要求安装 Chrome。\n"
+            "缺失或版本过旧时，工具会自动下载并安装；失败后可以重试或从微软官网安装。\n"
+            f"最低 Runtime 版本：{MINIMUM_RUNTIME_VERSION}。\n"
+            "工具使用微软共享 Runtime 和本工具的独立登录资料。"
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        links = QHBoxLayout()
+        download = QPushButton("微软 WebView2 官方获取")
+        download.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RUNTIME_DOWNLOAD_URL)))
+        links.addWidget(download)
+        layout.addLayout(links)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+        retry = primary_button(QPushButton("重试"))
+        retry.clicked.connect(dialog.accept)
+        buttons.addWidget(retry)
+        clear = QPushButton("清除独立登录状态并重试")
+        clear.clicked.connect(lambda: dialog.done(clear_retry))
+        buttons.addWidget(clear)
+        cancel = QPushButton("取消")
+        cancel.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel)
+
+        def on_finished(result):
+            dialog.deleteLater()
+            if self._finished or self._cleanup_called:
+                return
+            if result == QDialog.DialogCode.Accepted:
+                self._start_browser()
+            elif result == clear_retry:
+                self._clear_login_state_and_retry()
+            else:
+                self._complete()
+
+        dialog.finished.connect(on_finished)
+        dialog.resize(dialog.minimumWidth(), dialog.sizeHint().height())
+        dialog.open()
+
+    def _clear_login_state_and_retry(self):
+        self.setEnabled(False)
+        self._status_label.setText("正在清除本工具的独立登录状态…")
+
+        def cleared(future):
+            try:
+                success = future.result() is True
+            except Exception:
+                success = False
+
+            def resume():
+                if self._finished or self._cleanup_called:
+                    return
+                self.setEnabled(True)
+                if success:
+                    self._start_browser()
+                else:
+                    app_state.toast("无法安全清除独立登录状态，本次登录已取消。", 7000)
+                    self._complete()
+
+            app_state.run_on_main_thread(resume)
+
+        self.session.clear_cookies().add_done_callback(cleared)
+
     def _on_browser_event(self, event, *args):
         if event == "preparing_runtime":
             if not self._cleanup_called:
@@ -294,36 +377,7 @@ class WebBrowser(QWidget):
                 self._replace_cookie_records(())
                 app_state.toast("浏览器已关闭，未确认登录状态。请重新登录。", 7000)
             if self._startup_error and not self._cleanup_called:
-                from browser_setup import BrowserSetupDialog
-                def retry():
-                    self._setup_dialog.deleteLater()
-                    self._setup_dialog = None
-                    self._start_browser()
-                def clear_retry():
-                    self._setup_dialog.deleteLater()
-                    self._setup_dialog = None
-                    self.setEnabled(False)
-                    self._status_label.setText("正在清除本工具的独立登录状态…")
-                    def cleared(future):
-                        try:
-                            success = future.result() is True
-                        except Exception:
-                            success = False
-                        def resume():
-                            if self._finished or self._cleanup_called:
-                                return
-                            self.setEnabled(True)
-                            if success:
-                                self._start_browser()
-                            else:
-                                app_state.toast("无法安全清除独立登录状态，本次登录已取消。", 7000)
-                                self._complete()
-                        app_state.run_on_main_thread(resume)
-                    self.session.clear_cookies().add_done_callback(cleared)
-                self._setup_dialog = BrowserSetupDialog(
-                    self._startup_error, on_retry=retry, on_cancel=self._complete,
-                    on_clear_retry=clear_retry, parent=self)
-                self._setup_dialog.open()
+                self._show_startup_error()
             else:
                 self._complete()
             return

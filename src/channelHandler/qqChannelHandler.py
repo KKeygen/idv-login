@@ -16,6 +16,7 @@
  along with this program. If not, see <https://www.gnu.org/licenses/>.
 """
 import json
+import sys
 import time
 import base64
 
@@ -28,8 +29,12 @@ import app_state
 from logutil import setup_logger
 from ssl_utils import should_verify_ssl
 from channelHandler.channelUtils import getShortGameId
-from channelHandler.qqLogin.qqChannel import QQLogin
 from channelHandler.wechatChannelHandler import myappVeriftResp
+
+if sys.platform == "win32":
+    from channelHandler.qqLogin.qqChannel_windows import QQLogin
+else:
+    from channelHandler.qqLogin.qqChannel_legacy import QQLogin
 
 
 class qqChannel(channelmgr.channel):
