@@ -215,10 +215,10 @@ class ComHost:
         self.subscribe(f7,'FrameCreated','ICoreWebView2FrameChildFrameCreatedEventHandler',
             lambda s,a:self.track_frame(page,a.get_Frame()),subscriptions,page.id)
         def destroyed(sender,args):
-            def remove():
-                self.revoke(subscriptions)
-                page.frames[:]=[item for item in page.frames if item is not subscriptions]
-            self.later(remove)
+            page.frames[:]=[item for item in page.frames if item is not subscriptions]
+            # The native frame is already destroyed. Release local references
+            # after this callback returns, without calling its remove_* methods.
+            self.later(subscriptions.clear)
         self.subscribe(f,'Destroyed','ICoreWebView2FrameDestroyedEventHandler',destroyed,subscriptions,page.id)
 
     def configure(self,page):

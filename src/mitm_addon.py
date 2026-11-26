@@ -200,6 +200,9 @@ class IDVLoginAddon:
             flow.metadata["idv_selected_uuid"] = self.genv.get("CHANNEL_ACCOUNT_SELECTED", "")
 
         request_role = self._classify_mpay_request(flow)
+        if request_role == ROLE_NATIVE_GAME:
+            values = _request_values(flow.request)
+            self.game_helper.note_sdk_process(values.get('game_id', ''), values.get('process_id'))
         if request_role == ROLE_BRIDGED_GAME:
             return
         if request_role == ROLE_HOSTED_FEVER_MPAY:
@@ -381,8 +384,10 @@ class IDVLoginAddon:
                                   flow.response.get_text(strict=False))
             except Exception:
                 pass
+        from sauth_feedback import failure_details
+        details = failure_details(http_status, payload) if not success else ''
         try:
-            matched = bool(manager and manager.record_sauth(data, success))
+            matched = bool(manager and manager.record_sauth(data, success, details))
         except Exception as error:
             from mpay_db_sync import log_failure
             log_failure(self.logger, f'[channel] game={key[0]} channel={key[1]} stage=sauth.record 登录状态记录失败', error)
@@ -390,16 +395,12 @@ class IDVLoginAddon:
         if success:
             if self.game_helper.get_auto_close_setting(key[0]):
                 self._trigger_auto_close()
-        elif matched:
-            self.logger.debug('game={} channel={} stage=sauth.result 登录未成功，关联账号已标记过期', key[0], key[1])
-            if key[1] == 'huawei' and isinstance(payload, dict) and payload.get('code') == 401:
-                try:
-                    debug = json.loads(base64.b64decode(payload.get('debug_message', '')))
-                except (ValueError, TypeError, UnicodeError):
-                    debug = {}
-                if (isinstance(debug, dict) and debug.get('rtnCode') == 3001
-                        and re.fullmatch(r'param \[ts:\d+\] should between \[\d+,\d+\] \.', str(debug.get('errMsg', '')))):
-                    app_state.toast('华为账号须在工具启动后的 5 分钟内登录。若需中途切换华为账号，请在渠道服管理界面选择该账号，通过二维码重新登录后再试。', duration=10000)
+        elif not matched:
+            if manager:
+                manager.confirm_sauth_relogin(data, details)
+            else:
+                from sauth_feedback import show_message
+                show_message('sauth-failed', details + '\n请使用游戏原生登录。')
 
     def error(self, flow: http.HTTPFlow):
         if (flow.request.pretty_host.lower() == getattr(self, "auth_status_domain", "")
@@ -858,7 +859,7 @@ class IDVLoginAddon:
                 pending = self.stack_mgr.pop_pending_login_info(game_id, process_id)
                 if pending:
                     manager.import_from_scan(pending, resp_data, game_id)
-                    from channel_cache import packet_identity
+                    from channelHandler.channelUtils import packet_identity
                     ext = user.get('pc_ext_info') or resp_data.get('ext_info') or {}
                     try:
                         _, sdk_channel, sdkuid = packet_identity({'login_channel': login_channel,
@@ -897,13 +898,20 @@ class IDVLoginAddon:
                     json.dumps(cd, ensure_ascii=False).encode()).decode()
                 flow.response.content = json.dumps(resp_data).encode()
             if login_channel and not login_channel.startswith('netease'):
-                from channel_cache import packet_identity
+                from channelHandler.channelUtils import packet_identity
                 try:
                     identity = packet_identity({'login_channel': login_channel,
-                        'extra_unisdk_data': (user.get('pc_ext_info') or {}).get('extra_unisdk_data', '')})
+                        'extra_unisdk_data': (user.get('pc_ext_info') or {}).get('extra_unisdk_data')
+                            or (resp_data.get('ext_info') or {}).get('extra_unisdk_data', '')})
+                    # Before returning the rewritten response: MPay removes this
+                    # account for is_remember=false, even if later SAUTH fails.
+                    # The actual response may differ from the UI selection.
+                    sync = getattr(manager, 'db_sync', None)
+                    if not remember and sync is not None:
+                        sync.preserve_unremembered_account(identity)
                     self._pending_tool_auth.add(identity)
                 except ValueError:
-                    self.logger.debug("exchange_token 的渠道 SAUTH 身份无效；不使用外层账号 ID 代替 SDKUID")
+                    pass  # 无法建立账号身份时不接管这条 MPay 记录。
         except Exception as error:
             from mpay_db_sync import log_failure
             log_failure(self.logger, f'[channel] game={effective_game_id} stage=exchange.observe 处理登录回包失败；保留原游戏响应', error)
@@ -938,7 +946,12 @@ class IDVLoginAddon:
                 import app_state
                 if hasattr(app_state, "app") and app_state.app is not None:
                     from PyQt6.QtCore import QMetaObject, Qt
-                    QMetaObject.invokeMethod(app_state.app, "quit", Qt.ConnectionType.QueuedConnection)
+                    def quit_when_ready():
+                        from sauth_feedback import after_relogin_notice
+                        quit_app = lambda: QMetaObject.invokeMethod(app_state.app, "quit", Qt.ConnectionType.QueuedConnection)
+                        if not after_relogin_notice(quit_app):
+                            quit_app()
+                    app_state.run_on_main_thread(quit_when_ready)
                     return
             except Exception as e:
                 safe_exception(self.logger, "通知主循环退出失败")

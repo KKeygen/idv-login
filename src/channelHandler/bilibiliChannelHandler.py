@@ -139,7 +139,8 @@ class bilibiliChannel(channelmgr.channel):
                 access_key, game_id=self.biliLogin.game_id, app_key=self.biliLogin.app_key
             )
             if not isinstance(resp, dict) or resp.get("code") != 0:
-                self.logger.warning(f"Bilibili auto.login 刷新失败: {resp}")
+                code = resp.get("code") if isinstance(resp, dict) else None
+                self.logger.warning("Bilibili auto.login 刷新失败，结果码: {}", code if type(code) is int else "未知")
                 return False
 
             refreshed_data = dict(data)
@@ -234,10 +235,11 @@ class bilibiliChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self.is_token_valid() else False)
 
-        if self.is_token_valid():
+        if self.is_token_valid() and not self.is_login_expired(game_id):
             return _deliver(_build())
-        if bool(self._get_login_data() and self._get_login_data().get("access_key")) and self.validate_token_online():
-            return _deliver(_build() if self.is_token_valid() else False)
+        # 游戏拒绝现有 access_key 时，先走渠道本身的 auto.login，不能据此判定账号必然失效。
+        if self.validate_token_online() and self.is_token_valid():
+            return _deliver(_build())
         if not interactive:
             return _deliver(False)
         if on_complete is not None:
@@ -253,7 +255,7 @@ class bilibiliChannel(channelmgr.channel):
         uid = str(data.get("uid") or "")
         access_key = str(data.get("access_key") or "")
         if not uid or not access_key:
-            raise RuntimeError(f"bilibili 缺少 uid 或 access_key: uid={uid}")
+            raise RuntimeError("bilibili 缺少 uid 或 access_key")
 
         import base64 as b64mod
 

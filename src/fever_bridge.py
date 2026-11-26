@@ -114,6 +114,11 @@ class FeverBridge:
     def _registered_sessions_locked(self):
         return tuple(self._sessions.values()) + tuple(self._consumed_sessions.values())
 
+    def running_game_ids(self):
+        """Only verified live IPC owners, never unfulfilled launch intents."""
+        sessions = tuple(self._sessions.values()) + tuple(self._consumed_sessions.values())
+        return {session['short_game_id'] for session in sessions if self._is_session_sender_alive(session)}
+
     def _has_registered_process_locked(self, short_game_id: str) -> bool:
         return any(
             session["short_game_id"] == short_game_id
@@ -1026,7 +1031,7 @@ class FeverBridge:
 
     def _request_channel_qrcode_ticket(self, record, device_id, session):
         """Confirm a fresh QR session; only the target game exchanges its code."""
-        from channel_cache import exception_summary
+        from logutil import exception_summary
         from ssl_utils import should_verify_ssl
 
         params = {

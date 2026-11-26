@@ -24,6 +24,10 @@ import app_state
 class NativeTaskRegistry:
     """Small in-memory task registry for native dialogs and background work."""
 
+    # Existing JSON task kinds consumed by Fever WebUI.
+    DOWNLOAD_INSTALL = "launcher-install"
+    DOWNLOAD_UPDATE = "launcher-update"
+
     _lock = threading.RLock()
     _tasks: Dict[str, dict] = {}
     _ttl_seconds = 30 * 60
@@ -114,7 +118,7 @@ class NativeTaskRegistry:
             task_ids = [
                 task_id
                 for task_id, task in cls._tasks.items()
-                if task.get("kind") in ("launcher-install", "launcher-update")
+                if task.get("kind") in (cls.DOWNLOAD_INSTALL, cls.DOWNLOAD_UPDATE)
                 and str(task.get("game_id") or "") == target_game
                 and int(task.get("distribution_id", -1)) == target_distribution
             ]
@@ -201,6 +205,7 @@ def capabilities() -> dict:
         "download_progress": True,
         "download_pause_resume": True,
         "import_tasks_v1": True,
+        "fever_update_modes_v1": sys.platform == "win32",
         "platform": sys.platform,
     }
 

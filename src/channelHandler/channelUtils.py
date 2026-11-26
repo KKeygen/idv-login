@@ -3,6 +3,8 @@ import random
 import string
 import hmac
 import hashlib
+import base64
+from urllib.parse import unquote
 
 import requests
 import app_state
@@ -90,3 +92,46 @@ def cmp_game_id(game_id_a, game_id_b):
 
 #jsodn=r'''{"gameid":"g37","login_channel":"huawei","app_channel":"huawei","platform":"ad","sdkuid":"2850086000509138399","udid":"ff6030012b3b7523","sessionid":"XhsKeIsuSahyroMt4\/h20maxXw4U7zsrjUzm6M76EY074yS6DdLOob7upxgVpmkuO8ctydVfUqEHJHh9C3hAtlM9Rw8+aawKIbKH3lbi7KIkuy48zAjfTHSNpzrAh5OgMhgmtR0IsriqKsLyLEftt\/VWZVLgpXQtLnJ+U+\/wRFF+bdKJJgSlYIMrwKNS8RnpYd1GwEtQbsXJll9QWYSWfbzh3eSYGhJNlaRcO+kTLfgFC69oqCxKo0t1hhXINO\/5O8QomaUqNqdXHSKZNda+OtOYcaR79+YsIASomS9UM0JOuLX7rEGtuu6L4SVJuj9zq3J4otjQy4p6GvCvn46dsg==","sdk_version":"6.8.0.300","is_unisdk_guest":0,"ip":"117.182.131.79","aim_info":"{\"tz\":\"+0800\",\"tzid\":\"Asia\\\/Shanghai\",\"country\":\"CN\",\"aim\":\"117.182.131.79\"}","source_app_channel":"huawei","source_platform":"ad","extra_data":"{\"playerLevel\":\"1\",\"sdk_info\":{\"openid\":\"MDFAMTA1MzExODlAYzEyNGY3MzFlZmIyYTUyNTViaYjhkYTdiaMDMxMGU3NzJANjcyNjg5OTM5NDdhYWNhZjEwMTZjOGZlM2ZkMjJhM2Y1OGIwNTZjYzY2MTE4ZmVmZTFjNjMyNjU\",\"accessToken\":\"DQEAAPQETsGlqdrFHSaDsBPLzjXbXmy7JHnCYfGcO3FyqUfqZfclJ+SduEr81L9e5u3Fuoxv\\\/gGzpvF0Q5lRjsBORmqk18R2BoveWRr7U3KD\",\"transtition_version\":1}}","get_access_token":"1","timestamp":"1722481565653","realname":"{\"realname_type\":0}","client_login_sn":"7b26ec3b046d99ccc03af95334d35dc1","step":"-872582536","step2":"884046348","hostid":0,"sdklog":"{\"device_model\":\"BLA-AL00\",\"os_name\":\"android\",\"os_ver\":\"12\",\"udid\":\"ff6030012b3b7523\",\"app_ver\":\"240131\",\"imei\":\"\",\"country_code\":\"CN\",\"is_emulator\":1,\"is_root\":1,\"oaid\":\"\"}"}'''
 #print(calcSign("https://mgbsdk.matrix.netease.com/g37/sdk/uni_sauth","POST",(jsodn)))
+
+
+def packet_auth(packet):
+    """Decode a saved packet's actual SAUTH body, without logging credentials."""
+    if not isinstance(packet, dict):
+        raise ValueError('field=packet: expected object')
+    extra = packet.get('extra_unisdk_data')
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except (TypeError, ValueError) as error:
+            raise ValueError('field=extra_unisdk_data: invalid JSON') from error
+    if not isinstance(extra, dict):
+        raise ValueError('field=extra_unisdk_data: expected object')
+    encoded = extra.get('SAUTH_JSON')
+    if not isinstance(encoded, str) or not encoded:
+        raise ValueError('field=SAUTH_JSON: missing nonempty string')
+    try:
+        auth = json.loads(base64.b64decode(unquote(encoded)))
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise ValueError('field=SAUTH_JSON: invalid base64/JSON') from error
+    if not isinstance(auth, dict):
+        raise ValueError('field=SAUTH_JSON: expected object')
+    return auth
+
+
+def packet_identity(packet):
+    """Read actual SAUTH identity; error text names fields, never their values."""
+    auth = packet_auth(packet)
+    for field in ('gameid', 'login_channel'):
+        value = auth.get(field)
+        if not isinstance(value, str) or not value or '\0' in value:
+            raise ValueError(f'field=SAUTH_JSON.{field}: missing/invalid string')
+    sdkuid = auth.get('sdkuid')
+    if (isinstance(sdkuid, bool) or not isinstance(sdkuid, (str, int))
+            or not str(sdkuid) or '\0' in str(sdkuid)):
+        raise ValueError('field=SAUTH_JSON.sdkuid: missing/invalid SDK UID')
+    if auth['login_channel'] != packet.get('login_channel'):
+        raise ValueError('field=SAUTH_JSON.login_channel: differs from packet.login_channel')
+    game = getShortGameId(auth['gameid'])
+    if not game:
+        raise ValueError('field=SAUTH_JSON.gameid: empty short game ID')
+    return game, auth['login_channel'], str(sdkuid)

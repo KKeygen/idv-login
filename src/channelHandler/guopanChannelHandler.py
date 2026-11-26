@@ -40,7 +40,6 @@ class guopanChannel(channelmgr.channel):
                                else secrets.token_hex(16))
         self._active_dialog = None
         self._login_pending = False
-        self._guopan_packet_ready = False
 
     @staticmethod
     def _saved_fields(data):
@@ -67,18 +66,6 @@ class guopanChannel(channelmgr.channel):
     def is_token_valid(self):
         return all(isinstance(self.guopanSession.get(key), str) and self.guopanSession[key]
                    for key in ("uin", "login_key", "selected_uin", "game_uin"))
-
-    def cached_unisdk(self, game_id):
-        return super().cached_unisdk(game_id) if self._guopan_packet_ready else None
-
-    def cache_unisdk(self, packet, expires_at=None):
-        result = super().cache_unisdk(packet, expires_at)
-        self._guopan_packet_ready = True
-        return result
-
-    def request_unisdk(self, game_id="", on_complete=None, *, interactive=True, force=False, cancel_event=None):
-        self._guopan_packet_ready = False
-        return super().request_unisdk(game_id, on_complete, interactive=interactive, force=True, cancel_event=cancel_event)
 
     def _client(self):
         return GuopanClient(self.channelConfig["app_id"], self.channelConfig["app_key"],

@@ -2,7 +2,7 @@
 """Oppo(heytap) 网页登录渠道。
 
 当前阶段：WebView 登录 -> 捕获 `loginResp` -> 走 OpenAccount `api/authorize` 并持久化。
-使用阶段：每次实际使用前调用 OpenAccount `api/token/refresh`，将返回的 token 合并回本地状态。
+使用阶段：复用 HTMS token 签发游戏 ticket；缺失或被拒绝时才刷新 OpenAccount 凭据。
 """
 from __future__ import annotations
 
@@ -213,13 +213,14 @@ class oppoChannel(channelmgr.channel):
         return bool(self.oppo_open_account["authorize"]["success"])
 
     def refresh_before_use(self) -> Dict[str, Any]:
-        """每次“实际使用”前刷新一次 open-account token。
+        """需要恢复 HTMS 凭据时刷新 open-account token。
 
         返回 refresh 的原始响应（并把关键信息合并回 loginResp/oppo_open_account）。
         """
 
         # refresh 依赖 authorize 期望的 sessionTicket；若没做过，尽量先补一次
-        self._ensure_authorized()
+        if not self._ensure_authorized():
+            raise RuntimeError("channel=oppo step=authorize code=invalid")
 
         tokens = self._extract_login_tokens()
         missing = [
@@ -255,7 +256,7 @@ class oppoChannel(channelmgr.channel):
         if not isinstance(resp, dict):
             raise TypeError("OpenAccount refresh 返回必须为 dict")
         if not self.oppo_open_account["refresh"]["success"]:
-            return resp
+            raise RuntimeError("channel=oppo step=token_refresh code=invalid")
         data = resp.get("data") or {}
         if not isinstance(data, dict):
             raise TypeError("OpenAccount refresh resp.data 必须为 dict")
@@ -423,6 +424,19 @@ class oppoChannel(channelmgr.channel):
         res["SAUTH_JSON"] = base64.b64encode(json.dumps(json_data).encode()).decode()
         return json.dumps(res)
 
+    def _login_gamesdk(self, client, pkg_name):
+        """Issue B with the saved HTMS token; recover A once only when needed."""
+        secondary_token = self._pick_secondary_token()
+        if secondary_token:
+            result = client.user_login(pkg_name=pkg_name, secondary_token=secondary_token)
+            if (not result.code or result.code == "200") and getattr(result, "ticket", ""):
+                return secondary_token, result
+        self.refresh_before_use()
+        secondary_token = self._pick_secondary_token()
+        if not secondary_token:
+            raise RuntimeError("未找到 secondaryToken（loginResp.secondaryTokenMap 为空）")
+        return secondary_token, client.user_login(pkg_name=pkg_name, secondary_token=secondary_token)
+
     def _get_session(self, user_id: str, game_id: str, *, interactive=True):
         short_game_id = getShortGameId(game_id or self.game_id)
         if not short_game_id:
@@ -433,13 +447,6 @@ class oppoChannel(channelmgr.channel):
             success = self.request_user_login(game_id=game_id)
             if success is not True:
                 return success
-
-        # 使用前 refresh 一次，尽量拿到最新 secondaryTokenMap（失败直接抛出）
-        self.refresh_before_use()
-
-        secondary_token = self._pick_secondary_token()
-        if not secondary_token:
-            raise RuntimeError("未找到 secondaryToken（loginResp.secondaryTokenMap 为空）")
 
         pkg_name = self._pick_gamesdk_pkg_name(short_game_id)
         if not pkg_name:
@@ -482,7 +489,7 @@ class oppoChannel(channelmgr.channel):
 
         client = OppoGameSdkClient(profile)
 
-        login_res = client.user_login(pkg_name=pkg_name, secondary_token=secondary_token)
+        secondary_token, login_res = self._login_gamesdk(client, pkg_name)
         self.oppo_open_account["gamesdk_user_login"] = {
             "ts": _now_ms(),
             "code": login_res.code,

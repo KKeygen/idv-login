@@ -267,7 +267,7 @@ class qihooChannel(channelmgr.channel):
                 return _deliver(None if success is None else False)
             return _deliver(_build() if self._has_valid_token() else False)
 
-        if self._has_valid_token():
+        if self._has_valid_token() and not self.is_login_expired(game_id):
             return _deliver(_build())
         if on_complete is not None:
             self.request_user_login(on_complete=_on_login_done, interactive=interactive)

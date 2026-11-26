@@ -63,9 +63,11 @@ def probe_cache_write_once() -> bool:
     注意：此探测只应在"决定是否进入 hotfix 逻辑前"执行一次。
     """
     try:
-        genv.set("hotfix_probed", True, True)
+        genv.set("hotfix_probed", True, True, require_saved=True)
         return bool(genv.get_from_file("hotfix_probed", False))
     except Exception:
+        from logutil import safe_exception
+        safe_exception(logger, "配置写入探测失败")
         return False
 
 
@@ -81,20 +83,48 @@ def _get_records() -> dict:
     return records if isinstance(records, dict) else {}
 
 
-def _set_records(records: dict):
+def _set_records(records: dict, *, require_saved=False):
     if not isinstance(records, dict):
         records = {}
-    genv.set("hotfix_records", records, True)
+    genv.set("hotfix_records", records, True, require_saved=require_saved)
 
 
-def _record_update(hotfix_id: str, patch: dict):
-    records = _get_records()
+def _record_update(hotfix_id: str, patch: dict, *, require_saved=False):
+    records = dict(_get_records())
     rec = records.get(hotfix_id, {})
     if not isinstance(rec, dict):
         rec = {}
-    rec.update(patch or {})
+    rec = dict(rec, **(patch or {}))
     records[hotfix_id] = rec
-    _set_records(records)
+    _set_records(records, require_saved=require_saved)
+
+
+def _file_sha256(path):
+    with open(path, 'rb') as file:
+        return hashlib.sha256(file.read()).hexdigest()
+
+
+def _installed_file_matches(record):
+    expected = record.get('installed_sha256')
+    if not expected:
+        return False
+    if record.get('target_kind') == 'overlay_py':
+        path = record.get('target_path')
+    else:
+        path, _ = _resolve_module_target_path(record.get('target_module', ''))
+    try:
+        return bool(path) and _file_sha256(path) == expected
+    except OSError:
+        return False
+
+
+def _save_installed_record(hotfix_id, record):
+    try:
+        record['installed_sha256'] = _file_sha256(record['target_path'])
+        _record_update(hotfix_id, record, require_saved=True)
+    except Exception as error:
+        return False, f"保存热更新状态失败: {error}"
+    return True, ''
 
 
 def _get_pending_ids() -> List[str]:
@@ -269,20 +299,35 @@ def _compile_to_pyc(source_path: str, pyc_path: str) -> Tuple[bool, str]:
 
 def _download_text(url: str, fallbacks: List[str], expected_sha256: str = "") -> Tuple[bool, bytes, str]:
     from ssl_utils import should_verify_ssl
-    sess = requests.Session()
-    sess.trust_env = False
+    import queue
+    import threading
+    results = queue.Queue()
     headers = {"Accept": "text/plain, */*"}
-    for source_url in [url] + fallbacks:
+
+    def download(source_url):
         try:
+            sess = requests.Session()
+            sess.trust_env = False
             resp = sess.get(source_url, timeout=20, headers=headers, verify=should_verify_ssl())
             if resp.status_code == 200:
                 if expected_sha256 and not hmac.compare_digest(hashlib.sha256(resp.content).hexdigest(), expected_sha256):
-                    last_error = "源码 SHA-256 不匹配"
-                    continue
-                return True, resp.content, ""
-            last_error = f"HTTP {resp.status_code}"
-        except requests.RequestException as e:
-            last_error = str(e)
+                    result = (False, b"", "源码 SHA-256 不匹配")
+                else:
+                    result = (True, resp.content, "")
+            else:
+                result = (False, b"", f"HTTP {resp.status_code}")
+        except Exception as e:
+            result = (False, b"", str(e))
+        results.put(result)
+
+    sources = [url] + fallbacks
+    for source_url in sources:
+        threading.Thread(target=download, args=(source_url,), daemon=True).start()
+    last_error = ""
+    for _ in sources:
+        ok, content, last_error = results.get()
+        if ok:
+            return True, content, ""
     return False, b"", last_error
 
 
@@ -513,7 +558,7 @@ def _apply_one(item: dict, require_hashes: bool = False) -> Tuple[bool, str]:
     else:
         return False, f"不支持的目标类型: {target_kind}"
 
-    _record_update(
+    saved, error = _save_installed_record(
         hotfix_id,
         {
             "status": "pending_validate",
@@ -527,6 +572,8 @@ def _apply_one(item: dict, require_hashes: bool = False) -> Tuple[bool, str]:
             "url": url,
         },
     )
+    if not saved:
+        return False, error
     return True, f"应用成功: {module_name} ({commit})"
 
 
@@ -567,7 +614,7 @@ def _apply_one_overlay(item: dict, hotfix_id: str, module_name: str, commit: str
             pass
         return False, f"写入外置热更新文件失败: {e}"
 
-    _record_update(
+    saved, error = _save_installed_record(
         hotfix_id,
         {
             "status": "pending_validate",
@@ -581,6 +628,8 @@ def _apply_one_overlay(item: dict, hotfix_id: str, module_name: str, commit: str
             "url": url,
         },
     )
+    if not saved:
+        return False, error
     return True, f"应用成功: {module_name} ({commit}, macOS 外置覆盖)"
 
 
@@ -626,6 +675,18 @@ def pre_start_check_and_rollback_if_needed():
     if not pending_ids:
         return
 
+    # A reinstall may have replaced a pending module and its backup. Do not
+    # restore the previous installation; the current cloud list decides later.
+    records = _get_records()
+    active = [hid for hid in pending_ids
+              if not records.get(hid, {}).get('installed_sha256')
+              or _installed_file_matches(records[hid])]
+    if active != pending_ids:
+        pending_ids = active
+        _set_pending_ids(pending_ids)
+    if not pending_ids:
+        return
+
     # 若上次运行崩溃，则回滚所有待验证 hotfix，并标记为永久跳过
     if prev_state == "crash":
         for hid in list(pending_ids):
@@ -667,7 +728,9 @@ def handle_if_needed(cloudres):
     skipped = set(_get_skipped_ids())
     records = _get_records()
 
-    candidates = []
+    # Complete module replacements follow cloud order: only the last eligible
+    # entry can remain installed. Checking older hashes would cause a loop.
+    current_modules = {}
     for item in hotfixes:
         if not isinstance(item, dict):
             continue
@@ -676,13 +739,17 @@ def handle_if_needed(cloudres):
             need_versions = [need_versions]
         if current_version and need_versions and current_version not in [str(v) for v in need_versions]:
             continue
+        current_modules[item.get('target_module')] = item
+
+    candidates = []
+    for item in current_modules.values():
         hid = _make_id(item)
         if not hid:
             continue
         if hid in skipped:
             continue
-        status = (records.get(hid, {}) or {}).get("status")
-        if status in ("applied", "pending_validate"):
+        record = records.get(hid, {}) or {}
+        if record.get("status") in ("applied", "pending_validate") and _installed_file_matches(record):
             continue
         candidates.append(item)
 

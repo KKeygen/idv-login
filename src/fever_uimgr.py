@@ -9,7 +9,7 @@ import sys
 import threading
 from urllib.parse import urlencode
 
-from PyQt6.QtCore import QEvent, QObject, Qt, QUrl, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -17,9 +17,8 @@ from native_uimgr import (UIManager as NativeUIManager, configure_application_ic
     configure_windows_app_identity, register_url_scheme, _minimize_console_window)
 from native_ui.chrome import _WindowsFramelessWindow, _fit_frameless_launcher_size
 from webview2_host import WebView2Host, WebView2Error, runtime_status, MINIMUM_RUNTIME_VERSION, RUNTIME_DOWNLOAD_URL
-from fever_webview2_bridge import (BASE_HEADERS, ENTRY, ORIGIN, cloud_transport_script,
+from fever_webview2_bridge import (BASE_HEADERS, ENTRY, ORIGIN, cloud_transport_script, WINDOW_CONTROLS_SCRIPT,
     RequestRejected, authorize, json_response, navigation_allowed, trusted_document)
-
 
 def _log_failure(logger, operation):
     import traceback
@@ -139,12 +138,9 @@ class FeverWindow(_WindowsFramelessWindow):
         self.setWindowTitle('IDV Login · Fever WebUI')
         self.setWindowIcon(QApplication.instance().windowIcon())
         self.setMinimumSize(760, 540)
-        self._layout.setContentsMargins(7, 7, 7, 7)
         self.surface = _Surface(self)
         self.set_content_widget(self.surface)
-        self._window_controls.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
-        self._window_controls.winId()
-        self._window_controls.raise_()
+        self._window_controls.hide()
         screen = self.screen() or QApplication.primaryScreen()
         rect = screen.availableGeometry()
         self.resize(*_fit_frameless_launcher_size(rect.width(), rect.height()))
@@ -199,7 +195,7 @@ class FeverWindow(_WindowsFramelessWindow):
             self.jobs.completed.connect(self._finish_request, Qt.ConnectionType.QueuedConnection)
             self.host = WebView2Host(int(self.surface.winId()), str(profile),
                 on_event=self._event, navigation_policy=navigation_allowed,
-                scripts=[cloud_transport_script()])
+                scripts=[cloud_transport_script(), WINDOW_CONTROLS_SCRIPT])
             self.surface.host = self.host
             self.host.add_resource_filter(ENTRY, allow_document=True)
             self.host.add_resource_filter(ORIGIN + '/_idv-login/*')
@@ -293,9 +289,11 @@ class FeverWindow(_WindowsFramelessWindow):
             if not data.get('success') and data.get('web_error') != 14:
                 self._host_failed('Fever 页面未能载入，请关闭窗口后重试。')
         elif name == 'focus_requested':
-            controls = self._window_controls
-            target = controls._minimize_button if data.get('reason') == 'next' else controls._close_button
-            target.setFocus(Qt.FocusReason.TabFocusReason)
+            last = data.get('reason') == 'previous'
+            self._call_host('evaluate', 1, """(() => {
+              const nodes = [...document.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter(n => n.getClientRects().length);
+              if (nodes.length) nodes[%s].focus();
+            })()""" % ('nodes.length-1' if last else '0'))
         elif name == 'page':
             if data.get('page_id', 1) != 1:
                 self._call_host('close_page', data['page_id'])
@@ -352,10 +350,21 @@ class FeverWindow(_WindowsFramelessWindow):
             pass
 
     def _native_action(self, rid, path, body, method):
-        if path not in ('/_idv-login/webview2/copy-text', '/_idv-login/webview2/save-text'):
+        if path not in ('/_idv-login/webview2/copy-text', '/_idv-login/webview2/save-text',
+                        '/_idv-login/webview2/window-controls'):
             raise RequestRejected(404, 'Not found')
         if method != 'POST' or not isinstance(body, dict):
             raise RequestRejected(405, 'POST required')
+        if path.endswith('/window-controls'):
+            actions = {'minimize': self.showMinimized, 'maximize': self.toggle_maximized,
+                       'close': self.close}
+            name = body.get('action')
+            action = actions.get(name) if isinstance(name, str) else None
+            if action is None:
+                raise RequestRejected(400, 'Invalid window action')
+            self._finish_request(rid, json_response(200, {'success': True}))
+            QTimer.singleShot(0, action)
+            return
         text = body.get('text')
         if not isinstance(text, str) or len(text.encode('utf-8')) > 4096:
             raise RequestRejected(400, 'Invalid text')
@@ -418,12 +427,6 @@ class FeverWindow(_WindowsFramelessWindow):
             self._call_host('visible', False)
         self.surface.hide()
         self._failure.show()
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.WindowStateChange:
-            inset = 0 if self.isMaximized() else 7
-            self._layout.setContentsMargins(inset, inset, inset, inset)
 
     def moveEvent(self, event):
         super().moveEvent(event)

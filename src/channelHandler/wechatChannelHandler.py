@@ -374,7 +374,7 @@ class wechatChannel(channelmgr.channel):
                 return False
 
         try:
-            valid = self.is_token_valid()
+            valid = not self.is_login_expired(game_id) and self.is_token_valid()
         except Exception:
             if not interactive:
                 raise
