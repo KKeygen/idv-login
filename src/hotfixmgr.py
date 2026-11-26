@@ -116,10 +116,20 @@ def _installed_file_matches(record):
         return False
 
 
-def _save_installed_record(hotfix_id, record):
+def _save_installed_record(hotfix_id, record, *, staged=False):
     try:
         record['installed_sha256'] = _file_sha256(record['target_path'])
-        _record_update(hotfix_id, record, require_saved=True)
+        if staged:
+            # Commit the receipt, crash-validation list, and deliberate skip together.
+            records = dict(_get_records())
+            records[hotfix_id] = record
+            genv.update_cached({
+                "hotfix_records": records,
+                "hotfix_skipped": [hid for hid in _get_skipped_ids() if hid != hotfix_id],
+                "hotfix_pending_validate": list(dict.fromkeys(_get_pending_ids() + [hotfix_id])),
+            })
+        else:
+            _record_update(hotfix_id, record, require_saved=True)
     except Exception as error:
         return False, f"保存热更新状态失败: {error}"
     return True, ''
@@ -427,7 +437,7 @@ def restart_self(reason: str = "", *, debug_mode=None):
 # 应用 / 回滚
 # ------------------------------------------------------------------
 
-def _apply_one(item: dict, require_hashes: bool = False) -> Tuple[bool, str]:
+def _apply_one(item: dict, require_hashes: bool = False, *, staged_source=None) -> Tuple[bool, str]:
     """返回 (success, message)。成功时会落盘并编译。"""
     hotfix_id = _make_id(item)
     module_name = (item or {}).get("target_module", "")
@@ -436,7 +446,10 @@ def _apply_one(item: dict, require_hashes: bool = False) -> Tuple[bool, str]:
         return False, "配置缺少 target_module 或 target_commit"
 
     if _is_macos_pyinstaller():
-        return _apply_one_overlay(item, hotfix_id, module_name, commit, require_hashes)
+        return _apply_one_overlay(
+            item, hotfix_id, module_name, commit, require_hashes,
+            staged_source=staged_source,
+        )
 
     target_path, target_kind = _resolve_module_target_path(module_name)
     if not target_path or not target_kind:
@@ -447,9 +460,12 @@ def _apply_one(item: dict, require_hashes: bool = False) -> Tuple[bool, str]:
         return False, f"模块文件不可写（可能无权限或在只读目录）: {target_path}"
 
     url, fallbacks = _build_remote_source_info(module_name, commit)
-    ok, content, err = _get_verified_hotfix(item, url, fallbacks, require_hashes)
-    if not ok:
-        return False, f"下载失败: {url} ({err})"
+    if staged_source is None:
+        ok, content, err = _get_verified_hotfix(item, url, fallbacks, require_hashes)
+        if not ok:
+            return False, f"下载失败: {url} ({err})"
+    else:
+        content = staged_source
 
     backup_path = _next_backup_path(target_path)
 
@@ -569,23 +585,42 @@ def _apply_one(item: dict, require_hashes: bool = False) -> Tuple[bool, str]:
             "applied_at": int(time.time()),
             "url": url,
         },
+        staged=staged_source is not None,
     )
     if not saved:
+        if staged_source is not None:
+            try:
+                shutil.copy2(backup_path, target_path)
+                if target_kind == "py":
+                    _delete_pyc_for_source(target_path)
+                os.remove(backup_path)
+            except OSError:
+                logger.warning("【热更新】保存失败后无法还原模块: %s", module_name)
         return False, error
     return True, f"应用成功: {module_name} ({commit})"
 
 
-def _apply_one_overlay(item: dict, hotfix_id: str, module_name: str, commit: str, require_hashes: bool = False) -> Tuple[bool, str]:
+def _apply_one_overlay(
+    item: dict, hotfix_id: str, module_name: str, commit: str,
+    require_hashes: bool = False, *, staged_source=None,
+) -> Tuple[bool, str]:
     """为 macOS PyInstaller 应用外置源码覆盖，不修改包内文件。"""
     url, fallbacks = _build_remote_source_info(module_name, commit)
-    ok, content, err = _get_verified_hotfix(item, url, fallbacks, require_hashes)
-    if not ok:
-        return False, f"下载失败: {url} ({err})"
+    if staged_source is None:
+        ok, content, err = _get_verified_hotfix(item, url, fallbacks, require_hashes)
+        if not ok:
+            return False, f"下载失败: {url} ({err})"
+    else:
+        content = staged_source
 
     patch_root = os.path.join(_overlay_root(), _safe_hotfix_dir_name(hotfix_id))
     target_path = os.path.join(patch_root, *module_name.split(".")) + ".py"
     tmp_path = target_path + ".hotfix.tmp"
+    previous_source = None
     try:
+        if staged_source is not None and os.path.isfile(target_path):
+            with open(target_path, "rb") as installed_source:
+                previous_source = installed_source.read()
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
         with open(tmp_path, "wb") as f:
             f.write(content)
@@ -625,8 +660,20 @@ def _apply_one_overlay(item: dict, hotfix_id: str, module_name: str, commit: str
             "applied_at": int(time.time()),
             "url": url,
         },
+        staged=staged_source is not None,
     )
     if not saved:
+        if staged_source is not None:
+            try:
+                if previous_source is None:
+                    os.remove(target_path)
+                else:
+                    with open(tmp_path, "wb") as old_source:
+                        old_source.write(previous_source)
+                    os.replace(tmp_path, target_path)
+                _delete_pyc_for_source(target_path)
+            except OSError:
+                logger.warning("【热更新】保存失败后无法还原外置模块: %s", module_name)
         return False, error
     return True, f"应用成功: {module_name} ({commit}, macOS 外置覆盖)"
 
@@ -707,6 +754,210 @@ def pre_start_check_and_rollback_if_needed():
         _set_pending_ids([])
 
 
+def _hotfixes_for_version(cloudres, version):
+    if not cloudres:
+        return []
+    try:
+        hotfixes = cloudres.get_hotfixes()
+    except Exception:
+        return []
+    applicable = []
+    for item in hotfixes or []:
+        if not isinstance(item, dict):
+            continue
+        need_versions = item.get("need_hotfix_version", [])
+        if isinstance(need_versions, str):
+            need_versions = [need_versions]
+        if need_versions and not isinstance(need_versions, (list, tuple)):
+            continue
+        if version and need_versions and version not in [str(v) for v in need_versions]:
+            continue
+        applicable.append(item)
+    return applicable
+
+
+def manual_hotfix_unavailable(cloudres):
+    if not genv.get("VERSION"):
+        return "开发环境没有安装版本，无法应用热更新"
+    if not getattr(cloudres, "signatures_required", False):
+        return "当前没有经过签名验证的热更新目录"
+    if not getattr(cloudres, "local_data", None):
+        return "官方热更新目录尚不可用"
+    return ""
+
+
+def _staged_hotfix_path(hid):
+    name = hashlib.sha256(hid.encode("utf-8")).hexdigest() + ".py"
+    return os.path.join(genv.get("FP_WORKDIR") or os.getcwd(), "hotfix_staged", name)
+
+
+def _read_staged_hotfix(item, record):
+    hid = _make_id(item)
+    if record.get("status") != "pending_restart" or _make_id(record) != hid:
+        return None
+    try:
+        source_hash = _hotfix_source_hash(item, required=True)
+        with open(_staged_hotfix_path(hid), "rb") as source_file:
+            source = source_file.read()
+        if hmac.compare_digest(hashlib.sha256(source).hexdigest(), source_hash):
+            return source
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _stage_hotfix(item):
+    from secure_write import write_file_restricted
+
+    hid = _make_id(item)
+    module = item["target_module"]
+    commit = item["target_commit"]
+    url, fallbacks = _build_remote_source_info(module, commit)
+    ok, source, error = _get_verified_hotfix(item, url, fallbacks, True)
+    if not ok:
+        return False, error
+    path = _staged_hotfix_path(hid)
+    try:
+        compile(source, f"{module}.py", "exec")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        write_file_restricted(path, source)
+        _record_update(hid, {
+            "status": "pending_restart", "target_module": module, "target_commit": commit,
+        }, require_saved=True)
+    except Exception as error:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return False, f"保存待应用热更新失败: {error}"
+    return True, ""
+
+
+def _public_hotfix(item, status, record):
+    module = item.get("target_module")
+    commit = item.get("target_commit")
+    if not (isinstance(module, str)
+            and len(module) <= 160 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", module)
+            and isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit)):
+        return None
+    note = item.get("note")
+    entry = {
+        "id": _make_id(item), "module": module, "commit": commit,
+        "note": note[:1000] if isinstance(note, str) else "", "status": status,
+        "applyable": status in ("pending", "skipped"),
+    }
+    if status in ("applied", "pending_validation"):
+        applied_at = record.get("applied_at")
+        if type(applied_at) is int:
+            entry["applied_at"] = applied_at
+    return entry
+
+
+def _manual_hotfix_entries(cloudres, version):
+    catalog = [item for item in _hotfixes_for_version(cloudres, version)
+               if isinstance(item.get("target_module"), str)]
+    latest = {item["target_module"]: _make_id(item) for item in catalog}
+    items = {_make_id(item): item for item in catalog}
+    records = _get_records()
+    skipped = set(_get_skipped_ids())
+    for hid, record in records.items():
+        if (hid.startswith(f"{version}|") and isinstance(record, dict)
+                and hid == _make_id(record) and hid not in items
+                and record.get("status") in ("applied", "pending_validate")
+                and _installed_file_matches(record)):
+            items[hid] = record
+
+    entries = []
+    for hid, item in items.items():
+        record = records.get(hid)
+        if not isinstance(record, dict):
+            record = {}
+        stored = record.get("status")
+        message = ""
+        if (stored in ("applied", "pending_validate")
+                and _make_id(record) == hid and _installed_file_matches(record)):
+            state = "pending_validation" if stored == "pending_validate" else "applied"
+        elif hid != latest.get(item.get("target_module")):
+            state = "superseded"
+        elif _read_staged_hotfix(item, record) is not None:
+            state = "restart_required"
+            message = "已校验并准备，重启后应用"
+        elif hid in skipped or stored in ("skipped", "rolled_back"):
+            if stored != "rolled_back" and record.get("skip_reason") == "user_exit_during_countdown":
+                state = "skipped"
+                message = "上次已跳过，可手动应用"
+            else:
+                state = "blocked"
+                message = "此热更新已回滚或永久停用"
+        else:
+            state = "pending"
+            if stored == "apply_failed":
+                message = "上次应用失败，可重试"
+        if state in ("pending", "skipped"):
+            try:
+                _hotfix_source_hash(item, required=True)
+            except ValueError:
+                state, message = "blocked", "官方条目缺少有效的源码校验值"
+        public = _public_hotfix(item, state, record)
+        if public:
+            if message:
+                public["message"] = message
+            entries.append((item, public))
+    return entries
+
+
+def manual_hotfix_status(cloudres):
+    version = str(genv.get("VERSION") or "")
+    reason = manual_hotfix_unavailable(cloudres)
+    entries = _manual_hotfix_entries(None if reason else cloudres, version) if version else []
+    items = [public for _, public in entries]
+    return {
+        "success": True, "version": version, "available": not reason,
+        "available_reason": reason,
+        "restart_required": any(item["status"] == "restart_required" for item in items),
+        "applyable_count": sum(item["applyable"] for item in items),
+        "items": items,
+    }
+
+
+def apply_pending_hotfixes(cloudres):
+    reason = manual_hotfix_unavailable(cloudres)
+    if reason:
+        return {"success": False, "results": [], "restart_required": False, "error": reason}
+    entries = _manual_hotfix_entries(cloudres, str(genv.get("VERSION") or ""))
+    restart_required = any(item["status"] == "restart_required" for _, item in entries)
+    if any(item["applyable"] for _, item in entries) and not probe_cache_write_once():
+        return {"success": False, "results": [], "restart_required": restart_required,
+                "error": "无法保存热更新状态，请检查配置目录写入权限"}
+
+    failed = False
+    results = []
+    for item, public in entries:
+        result = {key: public[key] for key in ("id", "module", "commit")}
+        if public["status"] in ("blocked", "superseded"):
+            result.update(status="skipped", message=public.get("message") or "已有较新的热更新")
+        elif public["applyable"]:
+            try:
+                ok, detail = _stage_hotfix(item)
+            except Exception:
+                from logutil import safe_exception
+                safe_exception(logger, "手动应用热更新出错")
+                ok, detail = False, "应用过程异常"
+            if ok:
+                restart_required = True
+                result.update(status="staged", message="已校验并准备，重启后应用")
+            else:
+                failed = True
+                logger.warning("【热更新】%s: %s", public["id"], detail)
+                if public["status"] != "skipped":
+                    _record_update(public["id"], {"status": "apply_failed"})
+                result.update(status="failed", message="热更新准备失败，请查看本地日志")
+        else:
+            continue
+        results.append(result)
+    return {"success": not failed, "results": results, "restart_required": restart_required}
+
+
 def handle_if_needed(cloudres):
     """根据 CloudRes 下发配置，提示并应用热更新（必要时重启）。
 
@@ -715,44 +966,38 @@ def handle_if_needed(cloudres):
     cloudres : CloudRes
         云端资源管理实例（原 main.py 中的 m_cloudres）。
     """
-    if not cloudres:
-        return
-    try:
-        hotfixes = cloudres.get_hotfixes()
-    except Exception:
-        hotfixes = []
-    if not hotfixes:
-        return
-
     current_version = str(genv.get("VERSION", ""))
     skipped = set(_get_skipped_ids())
     records = _get_records()
 
-    # Complete module replacements follow cloud order: only the last eligible
-    # entry can remain installed. Checking older hashes would cause a loop.
-    current_modules = {}
-    for item in hotfixes:
-        if not isinstance(item, dict):
-            continue
-        need_versions = item.get("need_hotfix_version", [])
-        if isinstance(need_versions, str):
-            need_versions = [need_versions]
-        if current_version and need_versions and current_version not in [str(v) for v in need_versions]:
-            continue
-        current_modules[item.get('target_module')] = item
+    # A module replacement supersedes all earlier applicable entries for it.
+    current_modules = {
+        item.get("target_module"): item
+        for item in _hotfixes_for_version(cloudres, current_version)
+    }
 
+    required = bool(getattr(cloudres, "signatures_required", False))
     candidates = []
+    staged = []
     for item in current_modules.values():
         hid = _make_id(item)
         if not hid:
             continue
+        record = records.get(hid, {}) or {}
+        if required and current_version:
+            if hid not in skipped or record.get("skip_reason") == "user_exit_during_countdown":
+                source = _read_staged_hotfix(item, record)
+                if source is not None:
+                    staged.append((item, source))
+                    continue
         if hid in skipped:
             continue
-        record = records.get(hid, {}) or {}
         if record.get("status") in ("applied", "pending_validate") and _installed_file_matches(record):
             continue
         candidates.append(item)
 
+    if staged and _apply_startup_hotfixes(staged, required):
+        return
     if not candidates:
         return
 
@@ -785,28 +1030,39 @@ def handle_if_needed(cloudres):
     prompt_active = False
     prompt_items = []
 
+    _apply_startup_hotfixes(((item, None) for item in candidates), required)
+
+
+def _apply_startup_hotfixes(items, require_hashes):
     applied_ids = []
-    success_any = False
-    for item in candidates:
+    for item, staged_source in items:
         hid = _make_id(item)
         _record_update(hid, {"status": "applying", "ts": int(time.time())})
-        ok, msg = _apply_one(item, require_hashes=bool(getattr(cloudres, "signatures_required", False)))
-        print(f"【热更新】{hid}: {msg}")
-        if ok:
-            success_any = True
-            applied_ids.append(hid)
+        if staged_source is None:
+            ok, message = _apply_one(item, require_hashes=require_hashes)
         else:
-            if getattr(cloudres, "signatures_required", False):
-                # Invalid or unavailable mirrored data may be transient; retry
-                # on a later launch rather than permanently skipping this HF.
-                _record_update(hid, {"status": "apply_failed", "error": msg})
-            else:
-                _record_update(hid, {"status": "skipped", "skip_reason": "apply_failed", "error": msg})
-                _add_skipped([hid])
+            ok, message = _apply_one(item, require_hashes=True, staged_source=staged_source)
+        print(f"【热更新】{hid}: {message}")
+        if ok:
+            applied_ids.append(hid)
+            if staged_source is not None:
+                try:
+                    os.remove(_staged_hotfix_path(hid))
+                except OSError:
+                    pass
+        elif require_hashes:
+            # A missing or invalid mirror can be transient, so allow a later retry.
+            _record_update(hid, {"status": "apply_failed", "error": message})
+        else:
+            _record_update(hid, {"status": "skipped", "skip_reason": "apply_failed", "error": message})
+            _add_skipped([hid])
 
-    if success_any:
-        _set_pending_ids(applied_ids)
+    if applied_ids:
+        pending = list(dict.fromkeys(_get_pending_ids() + applied_ids))
+        if pending != _get_pending_ids():
+            _set_pending_ids(pending)
         restart_self("已应用热更新")
+    return bool(applied_ids)
 
 
 def handle_exit_skip_if_active():
