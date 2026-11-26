@@ -1140,7 +1140,7 @@ class LocalRequestHandler:
                 return self._json_response(400, {"success": False, "error": "当前平台不支持安装"})
             gid = args["game_id"]
             dist_id = int(args["distribution_id"])
-            game = self.game_helper.get_game(gid)
+            game = self.game_helper.get_game_or_temp(gid)
             launcher_data = game.get_launcher_data_for_distribution(dist_id)
             if not launcher_data:
                 return self._json_response(404, {"success": False, "error": "未找到启动器信息"})
@@ -1158,9 +1158,72 @@ class LocalRequestHandler:
             startup_args = launcher_data.get("startup_params", "") or ""
             content_id = file_info.get("app_content_id")
 
-            # New browser/WebEngine UI: directory selection is a separate HTTP
-            # native task, so hashing and download preparation can run off the
-            # Qt event loop.  Omitting target_dir keeps the released HTML flow.
+            display_name = launcher_data.get("display_name") or launcher_data.get("app_name") or gid
+
+            def install_at(target_dir, max_conc, *, native_task=None):
+                if native_task:
+                    task_id, progress_file, control_file = native_task
+                    NativeTaskRegistry.update(task_id, phase="preparing", progress_percent=0)
+                else:
+                    os.makedirs(target_dir, exist_ok=True)
+                game_path = os.path.join(target_dir, startup_path)
+                with self.game_helper._save_lock:
+                    current = self.game_helper.get_existing_game(gid)
+                    existing_ids = set(current.installations) if current else set()
+                    installation = self.game_helper.add_game_installation(
+                        game_id=gid,
+                        path=game_path,
+                        distribution_id=dist_id,
+                        source="download_pending" if native_task else "download",
+                        content_id=content_id,
+                        startup_path=startup_path,
+                        startup_args=startup_args,
+                        game_name=display_name,
+                    )
+                    game = self.game_helper.get_existing_game(gid)
+                if installation is None:
+                    raise RuntimeError("创建游戏安装记录失败")
+                created = installation.installation_id not in existing_ids
+
+                options = {}
+                if native_task:
+                    NativeTaskRegistry.update(
+                        task_id, phase="checking", progress_percent=0, path=game_path,
+                        installation_id=installation.installation_id,
+                        created_installation=created,
+                    )
+                    options.update(progress_file=progress_file, control_file=control_file)
+                completed = False
+                try:
+                    completed = game.try_update(
+                        dist_id, max_conc, installation.installation_id,
+                        is_update=False, **options,
+                    )
+                    if not completed and native_task:
+                        raise RuntimeError("启动游戏下载失败")
+                    download_async = bool(completed and game.last_update_async)
+                    if completed and not download_async:
+                        installation.source = "download"
+                        if CloudRes().is_convert_to_normal(getShortGameId(gid)):
+                            game.create_tool_launch_shortcut(
+                                installation.path, installation.installation_id
+                            )
+                        self.game_helper._save_games()
+                except Exception:
+                    completed = False
+                    raise
+                finally:
+                    if not completed and created:
+                        self.game_helper.remove_game_installation(gid, installation.installation_id)
+                return {
+                    "success": completed,
+                    "path": game_path,
+                    "installation_id": installation.installation_id,
+                    "version": installation.installed_version,
+                }, download_async
+
+            # Fever supplies a directory selected by the native picker. The old
+            # interface still opens the picker as part of the install request.
             payload = body or args or {}
             requested_target_dir = str(payload.get("target_dir") or "").strip()
             if requested_target_dir:
@@ -1186,100 +1249,31 @@ class LocalRequestHandler:
                 )
                 control_file = self._download_control_file(task_id)
                 NativeTaskRegistry.update(
-                    task_id,
-                    status_file=progress_file,
-                    control_file=control_file,
-                )
-                NativeTaskRegistry.update(
-                    task_id,
-                    game_id=gid,
-                    distribution_id=dist_id,
+                    task_id, status_file=progress_file, control_file=control_file,
+                    game_id=gid, distribution_id=dist_id, content_id=content_id,
                     target_version=file_info.get("version_code", ""),
-                    content_id=content_id,
                 )
                 max_conc = int(payload.get("concurrent", "4"))
-                game_helper = self.game_helper
-                logger = self.logger
 
                 def install_in_background():
-                    installation = None
-                    created_installation = False
                     try:
-                        NativeTaskRegistry.update(
-                            task_id, phase="preparing", progress_percent=0
+                        result, download_async = install_at(
+                            target_dir, max_conc, native_task=(task_id, progress_file, control_file)
                         )
-                        game_path = os.path.join(target_dir, startup_path)
-                        display_name = (
-                            launcher_data.get("display_name")
-                            or launcher_data.get("app_name")
-                            or gid
-                        )
-                        game_helper.rename_game(gid, display_name)
-                        existing_installation_ids = set(game.installations)
-                        installation = game_helper.add_game_installation(
-                            game_id=gid,
-                            path=game_path,
-                            distribution_id=dist_id,
-                            source="download_pending",
-                            content_id=content_id,
-                            startup_path=startup_path,
-                            startup_args=startup_args,
-                        )
-                        if installation is None:
-                            raise RuntimeError("创建游戏安装记录失败")
-                        created_installation = (
-                            installation.installation_id
-                            not in existing_installation_ids
-                        )
-                        NativeTaskRegistry.update(
-                            task_id,
-                            phase="checking",
-                            progress_percent=0,
-                            installation_id=installation.installation_id,
-                            created_installation=created_installation,
-                            path=game_path,
-                        )
-                        updated = game.try_update(
-                            dist_id,
-                            max_conc,
-                            installation.installation_id,
-                            progress_file=progress_file,
-                            control_file=control_file,
-                            is_update=False,
-                        )
-                        if not updated:
-                            raise RuntimeError("启动游戏下载失败")
-                        if not game.last_update_async:
-                            installation.source = "download"
-                            sgid = getShortGameId(gid)
-                            if CloudRes().is_convert_to_normal(sgid):
-                                game.create_tool_launch_shortcut(
-                                    installation.path,
-                                    installation.installation_id,
-                                )
-                        game_helper._save_games()
-                        task_values = {
-                            "success": True,
-                            "phase": "download_started" if game.last_update_async else "finished",
-                            "progress_percent": 100 if not game.last_update_async else 0,
-                            "path": game_path,
-                            "installation_id": installation.installation_id,
-                            "version": installation.installed_version,
-                            "download_async": bool(game.last_update_async),
-                        }
-                        if game.last_update_async:
-                            NativeTaskRegistry.update(task_id, **task_values)
+                        if download_async:
+                            NativeTaskRegistry.update(
+                                task_id, **result, phase="download_started",
+                                progress_percent=0, download_async=True,
+                            )
                         else:
-                            NativeTaskRegistry.finish(task_id, **task_values)
+                            NativeTaskRegistry.finish(
+                                task_id, **result, phase="finished",
+                                progress_percent=100, download_async=False,
+                            )
                     except Exception as exc:
-                        if installation is not None and created_installation:
-                            game_helper.remove_game_installation(gid, installation.installation_id)
-                        safe_exception(logger, "后台安装启动器失败")
+                        safe_exception(self.logger, "后台安装启动器失败")
                         NativeTaskRegistry.finish(
-                            task_id,
-                            success=False,
-                            phase="failed",
-                            error=str(exc),
+                            task_id, success=False, phase="failed", error=str(exc),
                         )
 
                 threading.Thread(
@@ -1288,152 +1282,61 @@ class LocalRequestHandler:
                     daemon=True,
                 ).start()
                 return self._json_response(202, {
-                    "success": True,
-                    "status": "pending",
-                    "task_id": task_id,
+                    "success": True, "status": "pending", "task_id": task_id,
                 })
 
-            try:
-                from PyQt6.QtWidgets import QApplication
-                app = QApplication.instance()
-            except Exception:
-                app = None
-
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            max_conc = int(args.get("concurrent", "4"))
             if app and app.property("_main_loop_running"):
-                import uuid as uuid_mod
-                task_id = str(uuid_mod.uuid4())
-                LocalRequestHandler._pending_imports[task_id] = {"status": "pending"}
-
-                game_helper = self.game_helper
-                logger = self.logger
-                max_conc = int(args.get("concurrent", "4"))
+                import uuid
+                task_id = str(uuid.uuid4())
+                self._pending_imports[task_id] = {"status": "pending"}
 
                 def do_install():
+                    result = {"success": False}
                     try:
-                        from PyQt6.QtWidgets import QFileDialog, QWidget
-                        from PyQt6.QtCore import Qt
-                        dummy = QWidget()
-                        dummy.setWindowFlags(Qt.WindowType.Tool)
-                        dummy.show()
-                        dummy.raise_()
-                        dummy.activateWindow()
-                        LocalRequestHandler._force_dialog_foreground(dummy)
-                        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-                        target_dir = QFileDialog.getExistingDirectory(
-                            dummy, "选择安装目录", desktop,
-                            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
-                        )
-                        dummy.close()
-                        if not target_dir:
-                            LocalRequestHandler._pending_imports[task_id] = {
-                                "status": "done", "success": False, "cancelled": True,
-                                "error": "用户取消选择安装目录",
-                            }
-                            return
-                        os.makedirs(target_dir, exist_ok=True)
-                        game_path = os.path.join(target_dir, startup_path)
-                        display_name = launcher_data.get("display_name") or launcher_data.get("app_name") or gid
-                        game_helper.rename_game(gid, display_name)
-                        existing_installation_ids = set(game.installations)
-                        installation = game_helper.add_game_installation(
-                            game_id=gid,
-                            path=game_path,
-                            distribution_id=dist_id,
-                            source="download",
-                            content_id=content_id,
-                            startup_path=startup_path,
-                            startup_args=startup_args,
-                        )
-                        if installation is None:
-                            raise RuntimeError("创建游戏安装记录失败")
-                        updated = game.try_update(
-                            dist_id, max_conc, installation.installation_id,
-                            is_update=False,
-                        )
-                        if not updated and installation.installation_id not in existing_installation_ids:
-                            game_helper.remove_game_installation(gid, installation.installation_id)
-                        if updated and not game.last_update_async:
-                            installation.source = "download"
-                            sgid = getShortGameId(gid)
-                            if CloudRes().is_convert_to_normal(sgid):
-                                game.create_tool_launch_shortcut(
-                                    installation.path, installation.installation_id
-                                )
-                        game_helper._save_games()
-                        LocalRequestHandler._pending_imports[task_id] = {
-                            "status": "done", "success": updated,
-                            "path": game_path,
-                            "installation_id": installation.installation_id,
-                            "version": installation.installed_version,
-                        }
-                    except Exception as e:
-                        safe_exception(logger, "异步安装启动器失败")
-                        LocalRequestHandler._pending_imports[task_id] = {
-                            "status": "done", "success": False, "error": str(e)
-                        }
+                        target_dir = self._pick_launcher_install_directory()
+                        if target_dir:
+                            result, _ = install_at(target_dir, max_conc)
+                        else:
+                            result.update(cancelled=True, error="用户取消选择安装目录")
+                    except Exception as exc:
+                        safe_exception(self.logger, "异步安装启动器失败")
+                        result["error"] = str(exc)
+                    self._pending_imports[task_id] = {"status": "done", **result}
 
                 app_state.run_on_main_thread(do_install)
                 return self._json_response(200, {"status": "pending", "task_id": task_id})
 
-            # 同步模式 fallback
-            from PyQt6.QtWidgets import QApplication, QFileDialog, QWidget
-            from PyQt6.QtCore import Qt
-            app_inst = QApplication.instance()
-            if app_inst is None:
-                app_inst = QApplication(sys.argv)
-            dummy = QWidget()
-            dummy.setWindowFlags(Qt.WindowType.Tool)
-            dummy.show()
-            dummy.raise_()
-            dummy.activateWindow()
-            self._force_dialog_foreground(dummy)
-            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-            target_dir = QFileDialog.getExistingDirectory(
-                dummy, "选择安装目录", desktop,
-                QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
-            )
-            dummy.close()
+            if app is None:
+                app = QApplication(sys.argv)
+            target_dir = self._pick_launcher_install_directory()
             if not target_dir:
                 return self._json_response(400, {"success": False, "error": "用户取消选择安装目录"})
-            os.makedirs(target_dir, exist_ok=True)
-            game_path = os.path.join(target_dir, startup_path)
-            display_name = launcher_data.get("display_name") or launcher_data.get("app_name") or gid
-            self.game_helper.rename_game(gid, display_name)
-            existing_installation_ids = set(game.installations)
-            installation = self.game_helper.add_game_installation(
-                game_id=gid,
-                path=game_path,
-                distribution_id=dist_id,
-                source="download",
-                content_id=content_id,
-                startup_path=startup_path,
-                startup_args=startup_args,
-            )
-            if installation is None:
-                return self._json_response(500, {"success": False, "error": "创建游戏安装记录失败"})
-            max_conc = int(args.get("concurrent", "4"))
-            updated = game.try_update(
-                dist_id, max_conc, installation.installation_id, is_update=False
-            )
-            if not updated and installation.installation_id not in existing_installation_ids:
-                self.game_helper.remove_game_installation(gid, installation.installation_id)
-            if updated and not game.last_update_async:
-                installation.source = "download"
-                sgid = getShortGameId(gid)
-                if CloudRes().is_convert_to_normal(sgid):
-                    game.create_tool_launch_shortcut(
-                        installation.path, installation.installation_id
-                    )
-            self.game_helper._save_games()
-            return self._json_response(200, {
-                "success": updated,
-                "path": game_path,
-                "installation_id": installation.installation_id,
-                "version": installation.installed_version,
-            })
+            result, _ = install_at(target_dir, max_conc)
+            return self._json_response(200, result)
         except Exception as e:
             safe_exception(self.logger, "安装启动器失败")
             return self._json_response(500, {"success": False, "error": str(e)})
+
+    def _pick_launcher_install_directory(self):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QFileDialog, QWidget
+
+        window = QWidget()
+        window.setWindowFlags(Qt.WindowType.Tool)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        self._force_dialog_foreground(window)
+        try:
+            return QFileDialog.getExistingDirectory(
+                window, "选择安装目录", os.path.join(os.path.expanduser("~"), "Desktop"),
+                QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
+            )
+        finally:
+            window.close()
 
     def _start_launcher_update(self, game, installation, dist_id, max_conc, *, repair=None, origin_version=None):
         gid = game.game_id
