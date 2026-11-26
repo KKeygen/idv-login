@@ -39,7 +39,7 @@ def start_import(manager, *, source, game_id="", path="", distribution_id=-1, af
 
 
 def _run_import(manager, task_id, source, game_id, path, distribution_id, after_import=None):
-    from gamemgr import Game, GameInstallation, GameManager, _FEVER_GAMES_CACHE_KEY, _FEVER_GAMES_CACHE_LOCK
+    from gamemgr import Game, GameManager, _FEVER_GAMES_CACHE_KEY, _FEVER_GAMES_CACHE_LOCK
     from envmgr import genv
 
     def check_cancel():
@@ -67,9 +67,14 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
             records = manager.list_fever_games()
         check_cancel()
         with manager._save_lock:
+            games = manager.games
+            if source != "startup":
+                # An explicit import only reads or changes the selected title.
+                target_id = manager.find_matching_game_id(game_id)
+                games = {target_id: games[target_id]} if target_id is not None else {}
             baseline = {
                 gid: (copy.deepcopy(game.to_dict()), copy.deepcopy(game.to_installation_state()))
-                for gid, game in list(manager.games.items())
+                for gid, game in games.items()
             }
         staged = GameManager.__new__(GameManager)
         staged.logger = manager.logger
@@ -109,90 +114,40 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
         check_cancel()
         changes = {}
         results = []
+        requested_path_key = _path_key(path)
+        requested_result = None
         for gid, game in staged.games.items():
-            old_state = baseline.get(gid, ({}, {}))[1].get("installations", {})
-            changed = [item for item in game.installations.values()
-                       if item.to_dict() != old_state.get(item.installation_id)]
-            if changed or (source != "startup" and gid == game_id):
-                changes[gid] = game
-            for item in game.installations.values():
-                selected = source != "startup" and gid == game_id and (
-                    not path or _path_key(item.path) == _path_key(path)
-                ) and (source == "manual" or distribution_id == -1 or item.distribution_id == distribution_id)
-                if item in changed or selected:
-                    results.append({
-                        "success": True, "game_id": gid, "path": item.path,
-                        "installation_id": item.installation_id,
-                        "distribution_id": item.distribution_id,
-                        "version": item.installed_version,
-                        "installed_version": item.installed_version,
-                    })
-        with manager._save_lock:
-            for gid in changes:
-                live = manager.get_existing_game(gid)
-                current = live.to_installation_state().get("installations", {}) if live else {}
-                previous = baseline.get(gid, ({}, {}))[1].get("installations", {})
-                def identity(records):
-                    return {iid: {key: value for key, value in data.items()
-                                  if key not in ("settings", "updated_at")}
-                            for iid, data in records.items()}
-                if identity(current) != identity(previous):
-                    raise ValueError("安装记录已在导入期间变更，请重新导入")
-            for item in results:
-                if not os.path.isfile(item["path"]):
-                    raise ValueError("游戏启动程序已在导入期间移走，请重新选择")
-            NativeTaskRegistry.begin_import_commit(task_id)
-            committed = {}
-            deltas = {}
-            for gid, staged_game in changes.items():
-                live = manager.get_existing_game(gid)
-                prepared = Game.from_dict(
-                    copy.deepcopy(live.to_dict()), copy.deepcopy(live.to_installation_state())
-                ) if live else staged_game
-                merged = {}
-                for iid, item in staged_game.installations.items():
-                    before = baseline.get(gid, ({}, {}))[1].get("installations", {}).get(iid, {})
-                    current = live.installations.get(iid) if live else None
-                    item_data = item.to_dict()
-                    delta = {key: value for key, value in item_data.items()
-                             if key not in ("settings", "updated_at", "created_at")
-                             and (not current or value != before.get(key))}
-                    deltas[(gid, iid)] = delta
-                    data = current.to_dict() if current else item_data
-                    data.update(delta)
-                    data["updated_at"] = max(data["updated_at"], item.updated_at)
-                    merged[iid] = GameInstallation.from_dict(data)
-                prepared.installations = merged
-                if live and live.name == baseline.get(gid, ({}, {}))[0].get("name"):
-                    prepared.name = staged_game.name
-                prepared.last_used_time = max(prepared.last_used_time, staged_game.last_used_time)
-                committed[gid] = prepared
-            if committed:
-                all_games = {**manager.games, **committed}
-                genv.update_cached({
-                    manager.GAMES_CACHE_KEY: {gid: game.to_dict() for gid, game in all_games.items()},
-                    manager.INSTALLATIONS_CACHE_KEY: {
-                        gid: game.to_installation_state() for gid, game in all_games.items()
-                    },
-                })
-            for gid, prepared in committed.items():
-                live = manager.get_existing_game(gid)
-                if live is None:
-                    manager.games[gid] = prepared
+            original_game, original_state = baseline.get(gid, ({}, {}))
+            previous = original_state.get("installations", {})
+            requested_game = source != "startup" and gid == game_id
+            needs_commit = requested_game
+            staged_installations = {}
+            for iid, item in game.installations.items():
+                data = item.to_dict()
+                staged_installations[iid] = data
+                changed = data != previous.get(item.installation_id)
+                if changed:
+                    needs_commit = True
+                same_path = requested_game and _path_key(item.path) == requested_path_key
+                requested = requested_game and (not path or same_path) and (
+                    source == "manual" or distribution_id == -1
+                    or item.distribution_id == distribution_id
+                )
+                if not changed and not requested:
                     continue
-                merged = {}
-                for iid, item in prepared.installations.items():
-                    current = live.installations.get(iid)
-                    if current:
-                        for key, value in deltas[(gid, iid)].items():
-                            setattr(current, key, value)
-                        current.updated_at = max(current.updated_at, item.updated_at)
-                        item = current
-                    merged[iid] = item
-                live.installations = merged
-                if live.name == baseline.get(gid, ({}, {}))[0].get("name"):
-                    live.name = prepared.name
-                live.last_used_time = max(live.last_used_time, prepared.last_used_time)
+                result = {
+                    "success": True, "game_id": gid, "path": item.path,
+                    "installation_id": item.installation_id,
+                    "distribution_id": item.distribution_id,
+                    "version": item.installed_version,
+                    "installed_version": item.installed_version,
+                }
+                results.append(result)
+                if same_path and requested_result is None:
+                    requested_result = result
+            if needs_commit:
+                changes[gid] = (game, original_game.get("name"), previous, staged_installations)
+        _commit_import(manager, task_id, changes, results)
         if source == "startup":
             for item in results:
                 try:
@@ -220,9 +175,8 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
         values = {"results": results, "phase": "finished", "progress_percent": 100,
                   "cancelable": False}
         if source != "startup" and results:
-            selected = next((item for item in results if item["game_id"] == game_id
-                             and _path_key(item["path"]) == _path_key(path)), results[-1])
-            if after_import and _path_key(selected["path"]) == _path_key(path):
+            selected = requested_result if requested_result is not None else results[-1]
+            if after_import and _path_key(selected["path"]) == requested_path_key:
                 selected.update(after_import(game_id, selected["installation_id"], path, distribution_id))
             values.update(selected)
             values.pop("success", None)
@@ -239,6 +193,95 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
     finally:
         if acquired:
             _IMPORT_LOCK.release()
+
+
+def _commit_import(manager, task_id, changes, results):
+    """Persist imports before applying them to the existing runtime objects."""
+    from envmgr import genv
+    from gamemgr import Game, GameInstallation
+
+    with manager._save_lock:
+        targets = []
+        for gid, (_, _, previous, _) in changes.items():
+            live = manager.get_existing_game(gid)
+            current = live.installations if live else {}
+            if current.keys() != previous.keys() or any(
+                getattr(current[iid], field) != value
+                for iid, data in previous.items()
+                for field, value in data.items()
+                if field not in ("settings", "updated_at")
+            ):
+                raise ValueError("安装记录已在导入期间变更，请重新导入")
+            targets.append((gid, live))
+        for result in results:
+            if not os.path.isfile(result["path"]):
+                raise ValueError("游戏启动程序已在导入期间移走，请重新选择")
+        NativeTaskRegistry.begin_import_commit(task_id)
+        if not targets:
+            return
+
+        all_games = dict(manager.games)
+        pending = []
+        for gid, live in targets:
+            staged_game, previous_name, previous, staged_installations = changes[gid]
+            prepared = staged_game
+            if live is not None:
+                title = live.to_dict()
+                # Normalize title settings without reconstructing the legacy path.
+                title["path"] = ""
+                prepared = Game.from_dict(copy.deepcopy(title), {
+                    "force_fever_bridge_distributions": sorted(live.force_fever_bridge_distributions),
+                })
+                if live.name == previous_name:
+                    prepared.name = staged_game.name
+            prepared.last_used_time = max(prepared.last_used_time, staged_game.last_used_time)
+
+            persisted = {}
+            installations = {}
+            patches = []
+            current_installations = live.installations if live is not None else {}
+            for iid, staged_data in staged_installations.items():
+                current = current_installations.get(iid)
+                if current is None:
+                    saved = GameInstallation.from_dict(staged_data)
+                    installations[iid] = saved
+                else:
+                    before = previous.get(iid, {})
+                    delta = {
+                        key: value for key, value in staged_data.items()
+                        if key not in ("settings", "updated_at", "created_at")
+                        and value != before.get(key)
+                    }
+                    data = current.to_dict()
+                    data.update(delta)
+                    data["updated_at"] = max(data["updated_at"], staged_data["updated_at"])
+                    saved = GameInstallation.from_dict(data)
+                    installations[iid] = current
+                    patches.append((current, delta, saved.updated_at))
+                persisted[iid] = saved
+            prepared.installations = persisted
+            all_games[gid] = prepared
+            pending.append((gid, live, prepared, previous_name, installations, patches))
+
+        genv.update_cached({
+            manager.GAMES_CACHE_KEY: {gid: game.to_dict() for gid, game in all_games.items()},
+            manager.INSTALLATIONS_CACHE_KEY: {
+                gid: game.to_installation_state() for gid, game in all_games.items()
+            },
+        })
+
+        for gid, live, prepared, previous_name, installations, patches in pending:
+            if live is None:
+                manager.games[gid] = prepared
+                continue
+            for current, delta, updated_at in patches:
+                for key, value in delta.items():
+                    setattr(current, key, value)
+                current.updated_at = max(current.updated_at, updated_at)
+            live.installations = installations
+            if live.name == previous_name:
+                live.name = prepared.name
+            live.last_used_time = max(live.last_used_time, prepared.last_used_time)
 
 
 def import_state(manager):
