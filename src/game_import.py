@@ -14,7 +14,7 @@ def _path_key(path):
     return os.path.normcase(os.path.normpath(str(path or "")))
 
 
-def start_import(manager, *, source, game_id="", path="", distribution_id=-1):
+def start_import(manager, *, source, game_id="", path="", distribution_id=-1, after_import=None):
     if source not in ("manual", "fever", "startup"):
         raise ValueError("不支持的导入来源")
     if source != "startup" and not game_id:
@@ -32,13 +32,13 @@ def start_import(manager, *, source, game_id="", path="", distribution_id=-1):
     if created:
         threading.Thread(
             target=_run_import,
-            args=(manager, task_id, source, resolved_id, path, int(distribution_id)),
+            args=(manager, task_id, source, resolved_id, path, int(distribution_id), after_import),
             name=f"game-import-{task_id[:8]}", daemon=True,
         ).start()
     return NativeTaskRegistry.get(task_id)
 
 
-def _run_import(manager, task_id, source, game_id, path, distribution_id):
+def _run_import(manager, task_id, source, game_id, path, distribution_id, after_import=None):
     from gamemgr import Game, GameInstallation, GameManager, _FEVER_GAMES_CACHE_KEY, _FEVER_GAMES_CACHE_LOCK
     from envmgr import genv
 
@@ -80,7 +80,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
         NativeTaskRegistry.update(task_id, phase="checking")
         if source == "manual":
             if not staged.set_game_path(
-                game_id, path, preserve_missing=True,
+                game_id, path, preserve_missing=True, identify=after_import is None,
                 progress_callback=progress, cancel_check=check_cancel,
             ):
                 raise ValueError("导入游戏路径失败")
@@ -118,7 +118,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
             for item in game.installations.values():
                 selected = source != "startup" and gid == game_id and (
                     not path or _path_key(item.path) == _path_key(path)
-                ) and (distribution_id == -1 or item.distribution_id == distribution_id)
+                ) and (source == "manual" or distribution_id == -1 or item.distribution_id == distribution_id)
                 if item in changed or selected:
                     results.append({
                         "success": True, "game_id": gid, "path": item.path,
@@ -220,7 +220,11 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id):
         values = {"results": results, "phase": "finished", "progress_percent": 100,
                   "cancelable": False}
         if source != "startup" and results:
-            values.update(results[-1])
+            selected = next((item for item in results if item["game_id"] == game_id
+                             and _path_key(item["path"]) == _path_key(path)), results[-1])
+            if after_import and _path_key(selected["path"]) == _path_key(path):
+                selected.update(after_import(game_id, selected["installation_id"], path, distribution_id))
+            values.update(selected)
             values.pop("success", None)
         if source == "startup" and not results:
             values["acknowledged"] = True

@@ -201,6 +201,7 @@ def capabilities() -> dict:
         "download_progress": True,
         "download_pause_resume": True,
         "import_tasks_v1": True,
+        "fever_update_modes_v1": sys.platform == "win32",
         "platform": sys.platform,
     }
 

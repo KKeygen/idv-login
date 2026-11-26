@@ -824,25 +824,30 @@ def handle_download_task(task_file_path):
                 import time
                 time.sleep(5)
                 encoded_path = _encode_download_path(download_root)
-                encoded_repair_list_path = _encode_repair_list_path(repair_list_path)
-                #./downloadIPC  --gameid:73 --contentid:434 --subport:1737 --pubport:1740 --path:RTpcRmV2ZXJBcHBzXGR3cmcy --env:live --oversea:0 --targetVersion:v3_3028_7e8d8ea06733136dd915a6e865440158 --originVersion:v3_2547 --scene:2 --rateLimit:0  --channel:platform --locale:zh_Hans  --isSSD:1 --isRepairMode:0
+                if repair_list_path:
+                    scene = 3
+                elif task_data.get("is_update"):
+                    scene = 2
+                else:
+                    scene = 1
                 download_cmd = [
                     os.path.join(os.getcwd(), "downloadIPC.exe"),
                     f"--gameid:{distribution_id}",
                     f"--env:live",
                     f"--oversea:{1 if oversea else 0}",
-                    f"--scene:3",
+                    f"--scene:{scene}",
                     f"--rateLimit:0",
                     f"--channel:platform",
                     f"--locale:zh_Hans",
                     f"--isSSD:1",
-                    f"--isRepairMode:1",
+                    f"--isRepairMode:{int(bool(repair_list_path))}",
                     f"--contentid:{content_id}",
                     f"--subport:{heartbeat_port}",
                     f"--pubport:{progress_port}",
                     f"--path:{encoded_path}",
-                    f"--repairListPath:{encoded_repair_list_path}",
                 ]
+                if repair_list_path:
+                    download_cmd.append(f"--repairListPath:{_encode_repair_list_path(repair_list_path)}")
                 if version_code:
                     download_cmd.append(f"--targetVersion:{version_code}")
                 if original_version:
