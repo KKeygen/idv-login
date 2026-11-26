@@ -32,7 +32,9 @@ def _genv_set(key, value, cached=False):
     _genv_store[key] = value
 
 
-envmgr.genv = types.SimpleNamespace(get=_genv_get, set=_genv_set)
+envmgr.genv = types.SimpleNamespace(
+    get=_genv_get, set=_genv_set, update_cached=_genv_store.update,
+)
 sys.modules["envmgr"] = envmgr
 
 logutil = types.ModuleType("logutil")

@@ -1906,8 +1906,10 @@ class GameManager:
                     game_id: game.to_installation_state()
                     for game_id, game in self.games.items()
                 }
-                genv.set(self.GAMES_CACHE_KEY, game_settings, cached=True)
-                genv.set(self.INSTALLATIONS_CACHE_KEY, installation_settings, cached=True)
+                genv.update_cached({
+                    self.GAMES_CACHE_KEY: game_settings,
+                    self.INSTALLATIONS_CACHE_KEY: installation_settings,
+                })
             except Exception as e:
                 safe_exception(self.logger, "保存游戏设置失败")
 
@@ -2033,12 +2035,17 @@ class GameManager:
         startup_path: str = "",
         startup_args: str = "",
         installation_id: str = "",
+        *,
+        game_name: str = "",
     ) -> Optional[GameInstallation]:
         if not game_id or not path:
             return None
-        game = self.get_game(game_id)
+        game = self.get_existing_game(game_id)
         if game is None:
-            return None
+            game = Game(game_id=game_id)
+            self.games[game_id] = game
+        if game_name:
+            game.name = game_name
         installation = game.add_installation(
             path=path,
             distribution_id=distribution_id,
