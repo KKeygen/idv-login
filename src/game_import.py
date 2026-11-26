@@ -67,9 +67,14 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
             records = manager.list_fever_games()
         check_cancel()
         with manager._save_lock:
+            games = manager.games
+            if source != "startup":
+                # An explicit import only reads or changes the selected title.
+                target_id = manager.find_matching_game_id(game_id)
+                games = {target_id: games[target_id]} if target_id is not None else {}
             baseline = {
                 gid: (copy.deepcopy(game.to_dict()), copy.deepcopy(game.to_installation_state()))
-                for gid, game in list(manager.games.items())
+                for gid, game in games.items()
             }
         staged = GameManager.__new__(GameManager)
         staged.logger = manager.logger
