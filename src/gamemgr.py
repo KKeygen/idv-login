@@ -1897,7 +1897,7 @@ class GameManager:
             # 初始化空数据以恢复
             genv.set(self.GAMES_CACHE_KEY, {}, cached=True)
 
-    def _save_games(self):
+    def _save_games(self, *, require_saved=False):
         """保存游戏设置到缓存"""
         with self._save_lock:
             try:
@@ -1910,7 +1910,9 @@ class GameManager:
                     self.GAMES_CACHE_KEY: game_settings,
                     self.INSTALLATIONS_CACHE_KEY: installation_settings,
                 })
-            except Exception as e:
+            except Exception:
+                if require_saved:
+                    raise
                 safe_exception(self.logger, "保存游戏设置失败")
 
     def save_account_switching(self, settings, choices):
@@ -2041,23 +2043,40 @@ class GameManager:
         if not game_id or not path:
             return None
         game = self.get_existing_game(game_id)
-        if game is None:
+        created_game = game is None
+        if created_game:
             game = Game(game_id=game_id)
-            self.games[game_id] = game
-        if game_name:
-            game.name = game_name
-        installation = game.add_installation(
-            path=path,
-            distribution_id=distribution_id,
-            installed_version=installed_version,
-            source=source,
-            content_id=content_id,
-            startup_path=startup_path,
-            startup_args=startup_args,
-            installation_id=installation_id,
-        )
-        self._save_games()
-        return installation
+        previous_name, previous_last_used = game.name, game.last_used_time
+        previous_installations = game.installations.copy()
+        previous_fields = [(item, vars(item).copy()) for item in previous_installations.values()]
+        try:
+            if game_name:
+                game.name = game_name
+            installation = game.add_installation(
+                path=path,
+                distribution_id=distribution_id,
+                installed_version=installed_version,
+                source=source,
+                content_id=content_id,
+                startup_path=startup_path,
+                startup_args=startup_args,
+                installation_id=installation_id,
+            )
+            if created_game:
+                self.games[game_id] = game
+            # The downloader reopens the recorded installation in another process.
+            self._save_games(require_saved=True)
+            return installation
+        except Exception:
+            if created_game:
+                self.games.pop(game_id, None)
+            else:
+                game.name, game.last_used_time = previous_name, previous_last_used
+                game.installations.clear()
+                game.installations.update(previous_installations)
+                for item, fields in previous_fields:
+                    vars(item).update(fields)
+            raise
 
     def identify_game_installation(
         self,
