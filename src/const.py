@@ -381,25 +381,62 @@ html = r"""<!DOCTYPE html>
             });
         }
 
-        function switchChannel(uuid) {
-            fetch(`/_idv-login/switch?uuid=${uuid}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.current == uuid) {
-                        swal({
-                            title: "模拟登录成功",
-                            icon: "success",
-                            button: "确定",
-                        });
-                        location.reload();
-                    } else {
-                        swal({
-                            title: "登录失败",
-                            icon: "error",
-                            button: "确定",
-                        });
-                    }
+        async function switchChannel(uuid) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
+            async function readResult(url) {
+                const response = await fetch(url, { signal: controller.signal });
+                if (!response.ok) throw new Error("无法读取登录状态");
+                return response.json();
+            }
+
+            try {
+                let data = await readResult(`/_idv-login/switch?uuid=${encodeURIComponent(uuid)}`);
+                if (data.status === "pending") {
+                    if (!data.task_id) throw new Error("登录任务缺少编号");
+                    const statusUrl = `/_idv-login/switch-status?task_id=${encodeURIComponent(data.task_id)}`;
+                    swal({
+                        title: "正在处理登录",
+                        icon: "info",
+                        buttons: false,
+                        closeOnClickOutside: false,
+                        closeOnEsc: false,
+                    });
+                    do {
+                        data = await readResult(statusUrl);
+                        if (data.status === "pending") {
+                            await new Promise(resolve => setTimeout(resolve, 750));
+                        }
+                    } while (data.status === "pending");
+                    if (data.status !== "done") throw new Error("登录任务状态不可用");
+                }
+
+                const asyncSuccess = data.status === "done" && data.success !== false
+                    && data.result !== undefined && data.result !== false && data.result !== null;
+                if (data.cancelled === true) {
+                    swal({ title: "已取消登录", icon: "info", button: "确定" });
+                } else if (data.current === uuid || asyncSuccess) {
+                    swal({ title: "模拟登录成功", icon: "success", button: "确定" });
+                    location.reload();
+                } else {
+                    swal({
+                        title: "登录失败",
+                        text: data.error || "请检查登录窗口后再试。",
+                        icon: "error",
+                        button: "确定",
+                    });
+                }
+            } catch {
+                swal({
+                    title: "未能确认登录结果",
+                    text: "请先检查游戏或登录窗口的状态，再决定是否重试。",
+                    icon: "warning",
+                    button: "确定",
                 });
+            } finally {
+                clearTimeout(timeout);
+            }
         }
         function defaultChannel(uuid) {
             game_id = getQueryVariable("game_id");
