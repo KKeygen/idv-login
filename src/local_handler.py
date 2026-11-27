@@ -738,7 +738,6 @@ class LocalRequestHandler:
             update_mode = args.get("update_mode", "")
             installation_id = args.get("installation_id", "")
             distribution_id = int(args.get("distribution_id", -1))
-            game_path = ""
 
             game = self.game_helper.get_game(gid)
             if not game and update_mode:
@@ -763,83 +762,29 @@ class LocalRequestHandler:
                     "game_id": gid,
                 })
 
-            if enabled or update_mode == "path_only":
-                try:
-                    from PyQt6.QtWidgets import QApplication
-                    app = QApplication.instance()
-                except Exception:
-                    app = None
+            def save_settings(auto_start, path, name):
+                self.game_helper.set_game_auto_start(
+                    gid, auto_start, installation_id, distribution_id
+                )
+                self.game_helper.set_game_path(gid, path)
+                selected_game = self.game_helper.get_game(gid)
+                if selected_game and (
+                    not selected_game.name or selected_game.name == selected_game.game_id
+                ):
+                    self.game_helper.rename_game(gid, name)
+                return {
+                    "success": True, "enabled": auto_start, "path": path, "game_id": gid,
+                }
 
-                if app and app.property("_main_loop_running"):
-                    import uuid as uuid_mod
-                    task_id = str(uuid_mod.uuid4())
-                    LocalRequestHandler._pending_imports[task_id] = {"status": "pending"}
+            if not enabled and update_mode != "path_only":
+                result = save_settings(False, "", game.name if game else "")
+                return self._json_response(200, result)
 
-                    game_helper = self.game_helper
-                    logger = self.logger
+            from PyQt6.QtWidgets import QApplication
 
-                    def do_select():
-                        try:
-                            from PyQt6.QtWidgets import QFileDialog, QWidget
-                            from PyQt6.QtCore import Qt
-                            dummy_parent = QWidget()
-                            dummy_parent.setWindowFlags(Qt.WindowType.Tool)
-                            dummy_parent.show()
-                            dummy_parent.raise_()
-                            dummy_parent.activateWindow()
-                            LocalRequestHandler._force_dialog_foreground(dummy_parent)
-                            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                            sel_path, _ = QFileDialog.getOpenFileName(
-                                dummy_parent,
-                                "选择游戏启动程序或快捷方式",
-                                desktop_path,
-                                "游戏文件 (*.exe *.lnk);;所有文件 (*.*)",
-                            )
-                            dummy_parent.close()
-
-                            if not sel_path:
-                                LocalRequestHandler._pending_imports[task_id] = {
-                                    "status": "done", "success": False, "cancelled": True,
-                                    "enabled": False, "path": "",
-                                }
-                                return
-
-                            name = os.path.splitext(os.path.basename(sel_path))[0]
-                            if sel_path.lower().endswith(".lnk") and sys.platform == "win32":
-                                import win32com.client
-                                shell = win32com.client.Dispatch("WScript.Shell")
-                                shortcut = shell.CreateShortcut(sel_path)
-                                sel_path = shortcut.Targetpath
-
-                            game_helper.set_game_auto_start(
-                                gid, True, installation_id, distribution_id
-                            )
-                            game_helper.set_game_path(gid, sel_path)
-                            selected_game = game_helper.get_game(gid)
-                            if selected_game and (
-                                not selected_game.name or selected_game.name == selected_game.game_id
-                            ):
-                                game_helper.rename_game(gid, name)
-                            LocalRequestHandler._pending_imports[task_id] = {
-                                "status": "done", "success": True,
-                                "enabled": True, "path": sel_path, "game_id": gid,
-                            }
-                        except Exception as e:
-                            safe_exception(logger, "异步选择游戏路径失败")
-                            LocalRequestHandler._pending_imports[task_id] = {
-                                "status": "done", "success": False, "error": str(e)
-                            }
-
-                    app_state.run_on_main_thread(do_select)
-                    return self._json_response(200, {"status": "pending", "task_id": task_id})
-
-                # 同步模式 fallback
-                from PyQt6.QtWidgets import QApplication, QFileDialog, QWidget
+            def select_and_save():
                 from PyQt6.QtCore import Qt
-
-                app_inst = QApplication.instance()
-                if app_inst is None:
-                    app_inst = QApplication(sys.argv)
+                from PyQt6.QtWidgets import QFileDialog, QWidget
 
                 dummy_parent = QWidget()
                 dummy_parent.setWindowFlags(Qt.WindowType.Tool)
@@ -847,9 +792,8 @@ class LocalRequestHandler:
                 dummy_parent.raise_()
                 dummy_parent.activateWindow()
                 self._force_dialog_foreground(dummy_parent)
-
                 desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                game_path, _ = QFileDialog.getOpenFileName(
+                path, _ = QFileDialog.getOpenFileName(
                     dummy_parent,
                     "选择游戏启动程序或快捷方式",
                     desktop_path,
@@ -857,35 +801,42 @@ class LocalRequestHandler:
                 )
                 dummy_parent.close()
 
-                if not game_path:
-                    return self._json_response(200, {"success": False, "error": "用户取消选择游戏路径"})
-
-                name = os.path.splitext(os.path.basename(game_path))[0]
-
-                if game_path.lower().endswith(".lnk") and sys.platform == "win32":
+                if not path:
+                    return None
+                name = os.path.splitext(os.path.basename(path))[0]
+                if sys.platform == "win32" and path.lower().endswith(".lnk"):
                     import win32com.client
                     shell = win32com.client.Dispatch("WScript.Shell")
-                    shortcut = shell.CreateShortcut(game_path)
-                    game_path = shortcut.Targetpath
-                
-                # 如果是仅更新路径或原本是因为开启而调用的选路径，均绑定下发 enabled=True
-                enabled = True
-            else:
-                game_path = ""
-                name = game.name if game else ""
+                    path = shell.CreateShortcut(path).Targetpath
+                return save_settings(True, path, name)
 
-            self.game_helper.set_game_auto_start(
-                gid, enabled, installation_id, distribution_id
-            )
-            self.game_helper.set_game_path(gid, game_path)
-            selected_game = self.game_helper.get_game(gid)
-            if selected_game and (
-                not selected_game.name or selected_game.name == selected_game.game_id
-            ):
-                self.game_helper.rename_game(gid, name)
-            return self._json_response(200, {
-                "success": True, "enabled": enabled, "path": game_path, "game_id": gid
-            })
+            app = QApplication.instance()
+            if app and app.property("_main_loop_running"):
+                import uuid as uuid_mod
+                task_id = str(uuid_mod.uuid4())
+                LocalRequestHandler._pending_imports[task_id] = {"status": "pending"}
+
+                def do_select():
+                    try:
+                        result = select_and_save()
+                        if result is None:
+                            result = {
+                                "success": False, "cancelled": True, "enabled": False, "path": "",
+                            }
+                    except Exception as error:
+                        safe_exception(self.logger, "异步选择游戏路径失败")
+                        result = {"success": False, "error": str(error)}
+                    LocalRequestHandler._pending_imports[task_id] = {"status": "done", **result}
+
+                app_state.run_on_main_thread(do_select)
+                return self._json_response(200, {"status": "pending", "task_id": task_id})
+
+            if app is None:
+                app = QApplication(sys.argv)
+            result = select_and_save()
+            if result is None:
+                return self._json_response(200, {"success": False, "error": "用户取消选择游戏路径"})
+            return self._json_response(200, result)
         except Exception as e:
             safe_exception(self.logger, f"设置游戏 {args.get('game_id', '')} 的自动启动状态失败")
             return self._json_response(200, {"success": False, "error": str(e)})
