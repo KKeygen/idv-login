@@ -2268,30 +2268,40 @@ class LocalRequestHandler:
     def _hotfix_apply(self, args, body, method):
         if method != "POST":
             return self._json_response(405, {"success": False, "error": "Method not allowed"})
-        from hotfixmgr import apply_pending_hotfixes, manual_hotfix_unavailable
+        from hotfixmgr import apply_pending_hotfixes, manual_hotfix_unavailable, restart_self
         from nativebridge import NativeTaskRegistry
 
+        ids = body.get("ids") if isinstance(body, dict) else None
+        if (not isinstance(ids, list) or not ids
+                or any(not isinstance(hid, str) or not 1 <= len(hid) <= 256 for hid in ids)):
+            return self._json_response(400, {"success": False, "error": "请选择至少一项热更新"})
+        ids = list(dict.fromkeys(ids))
         cloudres = app_state.cloud_res
         reason = manual_hotfix_unavailable(cloudres)
         if reason:
             return self._json_response(409, {"success": False, "error": reason})
         with LocalRequestHandler._hotfix_task_lock:
             running = NativeTaskRegistry.get(LocalRequestHandler._hotfix_task_id)
-            if running and running.get("status") == "pending":
-                return self._json_response(202, {"success": True, "task_id": running["task_id"]})
+            if running and (running["status"] == "pending" or running.get("restarting")):
+                if running.get("ids") == ids:
+                    return self._json_response(202, {"success": True, "task_id": running["task_id"]})
+                return self._json_response(409, {"success": False, "error": "正在安装热更新"})
             task_id = NativeTaskRegistry.create("hotfix-apply")
+            NativeTaskRegistry.update(task_id, ids=ids)
             LocalRequestHandler._hotfix_task_id = task_id
 
         def apply():
             try:
-                result = apply_pending_hotfixes(cloudres)
+                result = apply_pending_hotfixes(cloudres, ids)
+                NativeTaskRegistry.finish(task_id, restarting=result["success"], **result)
+                if result["success"]:
+                    # Let an existing browser poll read the result before relaunch.
+                    time.sleep(0.8)
+                    restart_self("安装已选热更新", finish_hotfix=True)
             except Exception:
                 safe_exception(self.logger, "手动热更新任务失败")
-                result = {"success": False, "results": [], "restart_required": False,
-                          "error": "热更新应用失败，请查看本地日志"}
-            NativeTaskRegistry.finish(
-                task_id, phase="finished" if result["success"] else "failed", **result
-            )
+                NativeTaskRegistry.finish(task_id, success=False, restarting=False,
+                                          error="无法安装热更新，请查看本地日志")
 
         threading.Thread(target=apply, name="hotfix-apply", daemon=True).start()
         return self._json_response(202, {"success": True, "task_id": task_id})

@@ -37,6 +37,7 @@ def parse_command_line_args():
     arg_parser.add_argument('--download', type=str, default="", help='下载任务文件绝对路径')
     arg_parser.add_argument('--uri', type=str, default="", help='处理 idvlogin:// URI Scheme 调用')
     arg_parser.add_argument('--open-ui', action='store_true', help='启动后直接打开渠道服管理界面')
+    arg_parser.add_argument("--finish-hotfix", action="store_true", help=argparse.SUPPRESS)
     arg_parser.add_argument('--proxy-port', type=int, default=10717, help='mitmproxy 监听端口 (默认 10717)')
     arg_parser.add_argument('--debug', action='store_true', help='开发调试：使用 mitmweb 打开 Web 代理界面 (默认 http://127.0.0.1:8081/)')
     arg_parser.add_argument('--mock-version', default=None, help='源码调试时向前端模拟工具版本（默认 v6.3.3-beta，不影响更新策略）')
@@ -1704,7 +1705,10 @@ def main(cli_args=None):
 
         # hotfix: apply if needed (may restart process)
         if can_run_hotfix:
-            hotfixmgr.handle_if_needed(m_cloudres)
+            hotfixmgr.handle_if_needed(m_cloudres, finish_hotfix=cli_args.finish_hotfix)
+        # The argument follows the startup relaunch, then clears on normal entry.
+        if cli_args.finish_hotfix:
+            sys.argv[:] = [arg for arg in sys.argv if arg != "--finish-hotfix"]
 
         welcome()
         handle_update()

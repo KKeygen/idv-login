@@ -383,7 +383,7 @@ def _restart_debug_args(args, debug_mode):
     return result
 
 
-def restart_self(reason: str = "", *, debug_mode=None):
+def restart_self(reason: str = "", *, debug_mode=None, finish_hotfix=False):
     try:
         if reason:
             logger.info(f"【热更新】即将重启: {reason}")
@@ -412,6 +412,8 @@ def restart_self(reason: str = "", *, debug_mode=None):
         args = [sys.executable] + sys.argv
 
     args = _restart_debug_args(args, debug_mode)
+    if finish_hotfix and "--finish-hotfix" not in args:
+        args.append("--finish-hotfix")
 
     cwd = genv.get("SCRIPT_DIR") or os.getcwd()
     if _is_macos_pyinstaller():
@@ -810,6 +812,8 @@ def _stage_hotfix(item):
     hid = _make_id(item)
     module = item["target_module"]
     commit = item["target_commit"]
+    if _read_verified_staged_source(item) is not None:
+        return True, ""
     url, fallbacks = _build_remote_source_info(module, commit)
     ok, source, error = _get_verified_hotfix(item, url, fallbacks, True)
     if not ok:
@@ -819,14 +823,7 @@ def _stage_hotfix(item):
         compile(source, f"{module}.py", "exec")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         write_file_restricted(path, source)
-        _record_update(hid, {
-            "status": "pending_restart", "target_module": module, "target_commit": commit,
-        }, require_saved=True)
     except Exception as error:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
         return False, f"保存待应用热更新失败: {error}"
     return True, ""
 
@@ -842,7 +839,7 @@ def _public_hotfix(item, status, record):
     entry = {
         "id": _make_id(item), "module": module, "commit": commit,
         "note": note[:1000] if isinstance(note, str) else "", "status": status,
-        "applyable": status in ("pending", "skipped"),
+        "applyable": status in ("pending", "skipped", "restart_required"),
     }
     if status in ("applied", "pending_validation"):
         applied_at = record.get("applied_at")
@@ -880,7 +877,7 @@ def _manual_hotfix_entries(cloudres, version):
         elif (stored == "pending_restart" and _make_id(record) == hid
               and _read_verified_staged_source(item) is not None):
             state = "restart_required"
-            message = "已校验并准备，重启后应用"
+            message = "下载已保存，可重新安装"
         elif hid in skipped or stored in ("skipped", "rolled_back"):
             if stored != "rolled_back" and record.get("skip_reason") == "user_exit_during_countdown":
                 state = "skipped"
@@ -913,51 +910,48 @@ def manual_hotfix_status(cloudres):
     return {
         "success": True, "version": version, "available": not reason,
         "available_reason": reason,
-        "restart_required": any(item["status"] == "restart_required" for item in items),
-        "applyable_count": sum(item["applyable"] for item in items),
+        "install_and_restart": True,
         "items": items,
     }
 
 
-def apply_pending_hotfixes(cloudres):
+def apply_pending_hotfixes(cloudres, ids):
     reason = manual_hotfix_unavailable(cloudres)
     if reason:
-        return {"success": False, "results": [], "restart_required": False, "error": reason}
-    entries = _manual_hotfix_entries(cloudres, str(genv.get("VERSION") or ""))
-    restart_required = any(item["status"] == "restart_required" for _, item in entries)
-    if any(item["applyable"] for _, item in entries) and not probe_cache_write_once():
-        return {"success": False, "results": [], "restart_required": restart_required,
-                "error": "无法保存热更新状态，请检查配置目录写入权限"}
+        return {"success": False, "error": reason}
 
-    failed = False
-    results = []
-    for item, public in entries:
-        result = {key: public[key] for key in ("id", "module", "commit")}
-        if public["status"] in ("blocked", "superseded"):
-            result.update(status="skipped", message=public.get("message") or "已有较新的热更新")
-        elif public["applyable"]:
-            try:
-                ok, detail = _stage_hotfix(item)
-            except Exception:
-                from logutil import safe_exception
-                safe_exception(logger, "手动应用热更新出错")
-                ok, detail = False, "应用过程异常"
-            if ok:
-                restart_required = True
-                result.update(status="staged", message="已校验并准备，重启后应用")
-            else:
-                failed = True
-                logger.warning("【热更新】%s: %s", public["id"], detail)
-                if public["status"] != "skipped":
-                    _record_update(public["id"], {"status": "apply_failed"})
-                result.update(status="failed", message="热更新准备失败，请查看本地日志")
-        else:
-            continue
-        results.append(result)
-    return {"success": not failed, "results": results, "restart_required": restart_required}
+    version = str(genv.get("VERSION") or "")
+    entries = _manual_hotfix_entries(cloudres, version)
+    available = {public["id"]: item for item, public in entries if public["applyable"]}
+    if not ids or any(hid not in available for hid in ids):
+        return {"success": False, "error": "热更新清单已变化，请重新读取后再安装"}
+    if not probe_cache_write_once():
+        return {"success": False, "error": "无法保存热更新状态，请检查配置目录写入权限"}
+
+    for hid in ids:
+        ok, detail = _stage_hotfix(available[hid])
+        if not ok:
+            logger.warning("【热更新】%s: %s", hid, detail)
+            return {"success": False, "error": f"{available[hid]['target_module']} 下载或校验失败，请重试"}
+
+    # Publish a single batch only after all selected files are verified.
+    records = {
+        hid: record for hid, record in _get_records().items()
+        if not (hid.startswith(f"{version}|") and isinstance(record, dict)
+                and record.get("status") == "pending_restart")
+    }
+    for hid in ids:
+        item = available[hid]
+        records[hid] = {
+            "status": "pending_restart",
+            "target_module": item["target_module"],
+            "target_commit": item["target_commit"],
+        }
+    _set_records(records, require_saved=True)
+    return {"success": True}
 
 
-def handle_if_needed(cloudres):
+def handle_if_needed(cloudres, *, finish_hotfix=False):
     """根据 CloudRes 下发配置，提示并应用热更新（必要时重启）。
 
     Parameters
@@ -998,7 +992,7 @@ def handle_if_needed(cloudres):
 
     if staged and _apply_startup_hotfixes(staged, required):
         return
-    if not candidates:
+    if finish_hotfix or not candidates:
         return
 
     # prompt user, allow quitting within 5 seconds to skip permanently
