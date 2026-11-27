@@ -1790,14 +1790,34 @@ def _installation_change_locked(method):
     return locked
 
 
+def _running_process_ids():
+    """EnumProcesses returns IDs only; it does not open any process handle."""
+    if sys.platform != 'win32':
+        return set()
+    enum = ctypes.WinDLL('psapi', use_last_error=True).EnumProcesses
+    dword = ctypes.c_uint32
+    enum.argtypes = [ctypes.POINTER(dword), dword, ctypes.POINTER(dword)]
+    enum.restype = ctypes.c_int
+    size = 1024
+    while True:
+        buffer = (dword * size)()
+        needed = dword()
+        if not enum(buffer, ctypes.sizeof(buffer), ctypes.byref(needed)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if needed.value < ctypes.sizeof(buffer):
+            return set(buffer[:needed.value // ctypes.sizeof(dword)])
+        size *= 2
+
+
+
 class GameManager:
     GAMES_CACHE_KEY = "game_settings"
     INSTALLATIONS_CACHE_KEY = "game_installation_settings_v1"
     
     def __init__(self):
         self.logger = setup_logger()
-        from active_games import ActiveGames
-        self._active_games = ActiveGames(self.logger)
+        self._sdk_processes = {}
+        self._sdk_process_lock = threading.Lock()
         self.games: Dict[str, Game] = {}
         self._save_lock = threading.RLock()
         self._fever_import_thread = None
@@ -1948,15 +1968,37 @@ class GameManager:
         return Game(game_id=game_id)
 
     def note_sdk_process(self, game_id, process_id):
-        """Bind SDK-reported identity to the title, not a particular installation."""
+        """Track the PID reported by the SDK against the shared game title."""
         short = getShortGameId(game_id)
-        if self._active_games.note_native_request(short, process_id):
-            game = self.get_existing_game(short)
-            if game is not None:
-                game.is_running = True
+        try:
+            pid = int(process_id)
+        except (TypeError, ValueError):
+            return
+        if not short or pid <= 0 or pid == os.getpid():
+            return
+        with self._sdk_process_lock:
+            self._sdk_processes[pid] = short
+        game = self.get_existing_game(short)
+        if game is not None:
+            game.is_running = True
 
     def update_running_state(self):
-        running = self._active_games.running_game_ids()
+        with self._sdk_process_lock:
+            observed = dict(self._sdk_processes)
+        running = set()
+        if observed:
+            try:
+                alive = _running_process_ids()
+            except Exception as error:
+                self.logger.debug(
+                    '无法确认原生游戏是否仍在运行，本轮不刷新其凭据: {}', type(error).__name__)
+            else:
+                with self._sdk_process_lock:
+                    for pid, title in observed.items():
+                        if pid in alive:
+                            running.add(title)
+                        elif self._sdk_processes.get(pid) == title:
+                            self._sdk_processes.pop(pid, None)
         if app_state.fever_bridge is not None:
             running.update(app_state.fever_bridge.running_game_ids())
         with self._save_lock:

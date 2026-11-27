@@ -1,7 +1,6 @@
 """Offline liveness tests: fabricated requests and PID lists, no game access."""
 import ast
 import ctypes
-import importlib.util
 import os
 from pathlib import Path
 import sys
@@ -11,66 +10,94 @@ import unittest
 from unittest.mock import Mock, patch
 
 SRC = Path(__file__).resolve().parents[1] / 'src'
-spec = importlib.util.spec_from_file_location('active_games', SRC / 'active_games.py')
-active_games = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(active_games)
+def load_game_manager():
+    tree = ast.parse((SRC / 'gamemgr.py').read_text())
+    process_ids = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                       and node.name == '_running_process_ids')
+    manager = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                   and node.name == 'GameManager')
+    manager.body = [method for method in manager.body if isinstance(method, ast.FunctionDef)
+                    and method.name in ('note_sdk_process', 'update_running_state')]
+    namespace = dict(ctypes=ctypes, os=os, sys=sys,
+                     app_state=types.SimpleNamespace(fever_bridge=None),
+                     getShortGameId=lambda game: game)
+    exec(compile(ast.Module(body=[process_ids, manager], type_ignores=[]), 'gamemgr.py', 'exec'), namespace)
+    return namespace
 
 
 class ActiveGamesTests(unittest.TestCase):
     def setUp(self):
-        self.active = active_games.ActiveGames(Mock())
+        self.scope = load_game_manager()
+        self.manager = self.scope['GameManager']()
+        self.manager.logger = Mock()
+        self.manager._save_lock = threading.RLock()
+        self.manager._sdk_process_lock = threading.Lock()
+        self.manager._sdk_processes = {}
+        self.manager.games = {title: types.SimpleNamespace(game_id=title, is_running=False)
+                              for title in ('h55', 'g37')}
+        self.manager.get_existing_game = self.manager.games.get
+
+    def running_titles(self):
+        self.manager.update_running_state()
+        return {title for title, game in self.manager.games.items() if game.is_running}
+
+    def process_query(self, **kwargs):
+        query = Mock(**kwargs)
+        return patch.dict(self.scope, _running_process_ids=query), query
 
     def test_no_request_means_no_game_and_no_system_query(self):
-        with patch.object(active_games, 'running_process_ids') as query:
-            self.assertEqual(self.active.running_game_ids(), set())
+        patch_query, query = self.process_query()
+        with patch_query:
+            self.assertEqual(self.running_titles(), set())
             query.assert_not_called()
 
     def test_sdk_reported_pid_presence_is_the_running_oracle(self):
-        self.active.note_native_request('h55', '123')
-        with patch.object(active_games, 'running_process_ids', return_value={123}) as query:
-            self.assertEqual(self.active.running_game_ids(), {'h55'})
+        self.manager.note_sdk_process('h55', '123')
+        patch_query, query = self.process_query(return_value={123})
+        with patch_query:
+            self.assertEqual(self.running_titles(), {'h55'})
             query.assert_called_once_with()
 
     def test_closed_pid_is_removed(self):
-        self.active.note_native_request('h55', 123)
-        with patch.object(active_games, 'running_process_ids', return_value=set()):
-            self.assertEqual(self.active.running_game_ids(), set())
-            self.assertEqual(self.active._native, {})
+        self.manager.note_sdk_process('h55', 123)
+        with patch.dict(self.scope, _running_process_ids=Mock(return_value=set())):
+            self.assertEqual(self.running_titles(), set())
+            self.assertEqual(self.manager._sdk_processes, {})
 
     def test_multiopen_survives_until_last_known_instance_exits(self):
         for pid in (123, 124):
-            self.active.note_native_request('h55', pid)
-        with patch.object(active_games, 'running_process_ids', return_value={124}):
-            self.assertEqual(self.active.running_game_ids(), {'h55'})
-        with patch.object(active_games, 'running_process_ids', return_value=set()):
-            self.assertEqual(self.active.running_game_ids(), set())
+            self.manager.note_sdk_process('h55', pid)
+        with patch.dict(self.scope, _running_process_ids=Mock(return_value={124})):
+            self.assertEqual(self.running_titles(), {'h55'})
+        with patch.dict(self.scope, _running_process_ids=Mock(return_value=set())):
+            self.assertEqual(self.running_titles(), set())
 
     def test_query_failure_does_not_assume_alive_or_forget_for_next_retry(self):
-        self.active.note_native_request('h55', 123)
-        with patch.object(active_games, 'running_process_ids', side_effect=OSError):
-            self.assertEqual(self.active.running_game_ids(), set())
-        with patch.object(active_games, 'running_process_ids', return_value={123}):
-            self.assertEqual(self.active.running_game_ids(), {'h55'})
+        self.manager.note_sdk_process('h55', 123)
+        with patch.dict(self.scope, _running_process_ids=Mock(side_effect=OSError)):
+            self.assertEqual(self.running_titles(), set())
+        with patch.dict(self.scope, _running_process_ids=Mock(return_value={123})):
+            self.assertEqual(self.running_titles(), {'h55'})
 
     def test_latest_sdk_report_controls_game_association(self):
-        self.active.note_native_request('h55', 123)
-        self.active.note_native_request('g37', 123)
-        with patch.object(active_games, 'running_process_ids', return_value={123}):
-            self.assertEqual(self.active.running_game_ids(), {'g37'})
+        self.manager.note_sdk_process('h55', 123)
+        self.manager.note_sdk_process('g37', 123)
+        with patch.dict(self.scope, _running_process_ids=Mock(return_value={123})):
+            self.assertEqual(self.running_titles(), {'g37'})
 
     def test_own_hosted_pid_and_missing_identity_are_ignored(self):
         for game, pid in (('h55', os.getpid()), ('h55', ''), ('h55', 0), ('', 123)):
-            self.active.note_native_request(game, pid)
-        self.assertEqual(self.active._native, {})
+            self.manager.note_sdk_process(game, pid)
+        self.assertEqual(self.manager._sdk_processes, {})
 
     def test_new_game_request_arriving_during_query_is_not_deleted(self):
-        self.active.note_native_request('h55', 123)
+        self.manager.note_sdk_process('h55', 123)
         def snapshot():
-            self.active.note_native_request('g37', 123)
+            self.manager.note_sdk_process('g37', 123)
             return set()
-        with patch.object(active_games, 'running_process_ids', side_effect=snapshot):
-            self.assertEqual(self.active.running_game_ids(), set())
-        self.assertEqual(self.active._native[123], 'g37')
+        with patch.dict(self.scope, _running_process_ids=Mock(side_effect=snapshot)):
+            self.assertEqual(self.running_titles(), set())
+        self.assertEqual(self.manager._sdk_processes[123], 'g37')
 
     def test_enum_processes_only_returns_ids_and_grows_a_full_buffer(self):
         def enum(buffer, size, needed):
@@ -83,19 +110,19 @@ class ActiveGamesTests(unittest.TestCase):
             return 1
         function = Mock(side_effect=enum)
         loader = Mock(return_value=types.SimpleNamespace(EnumProcesses=function))
-        with patch.object(active_games.ctypes, 'WinDLL', loader, create=True), patch.object(active_games.sys, 'platform', 'win32'):
-            self.assertEqual(active_games.running_process_ids(), {123, 124})
+        with patch.object(ctypes, 'WinDLL', loader, create=True), patch.object(sys, 'platform', 'win32'):
+            self.assertEqual(self.scope['_running_process_ids'](), {123, 124})
         loader.assert_called_once_with('psapi', use_last_error=True)
         self.assertEqual(function.call_count, 2)
 
     def test_enum_failure_raises_without_opening_a_process(self):
         loader = Mock(return_value=types.SimpleNamespace(EnumProcesses=Mock(return_value=0)))
-        with patch.object(active_games.ctypes, 'WinDLL', loader, create=True), \
-                patch.object(active_games.ctypes, 'WinError', return_value=OSError(), create=True), \
-                patch.object(active_games.ctypes, 'get_last_error', return_value=5, create=True), \
-                patch.object(active_games.sys, 'platform', 'win32'):
+        with patch.object(ctypes, 'WinDLL', loader, create=True), \
+                patch.object(ctypes, 'WinError', return_value=OSError(), create=True), \
+                patch.object(ctypes, 'get_last_error', return_value=5, create=True), \
+                patch.object(sys, 'platform', 'win32'):
             with self.assertRaises(OSError):
-                active_games.running_process_ids()
+                self.scope['_running_process_ids']()
 
     def test_fever_uses_live_active_and_consumed_sessions_not_launch_intent(self):
         tree = ast.parse((SRC / 'fever_bridge.py').read_text())

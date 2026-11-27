@@ -71,7 +71,6 @@ xxhash.xxh64 = lambda: None
 sys.modules["xxhash"] = xxhash
 
 from gamemgr import Game, GameInstallation, GameManager
-from active_games import ActiveGames
 
 
 class GameInstallationModelTests(unittest.TestCase):
@@ -81,7 +80,8 @@ class GameInstallationModelTests(unittest.TestCase):
         manager._save_lock = threading.RLock()
         manager._save_games = lambda: None
         manager.logger = getattr(game, "logger", None)
-        manager._active_games = ActiveGames(logging.getLogger('game-installation-tests'))
+        manager._sdk_processes = {}
+        manager._sdk_process_lock = threading.Lock()
         return manager
 
     def _shortcut_game(self):
@@ -204,13 +204,13 @@ class GameInstallationModelTests(unittest.TestCase):
         manager.note_sdk_process('h55', 123)
         manager.note_sdk_process('fixture-g-h55', 124)
         self.assertTrue(game.is_running)
-        with mock.patch('active_games.running_process_ids', return_value={124}):
+        with mock.patch('gamemgr._running_process_ids', return_value={124}):
             rows = manager.list_games()
         self.assertTrue(rows[0]['is_running'])
         self.assertEqual(len(rows[0]['installations']), 2)
         self.assertNotIn('is_running', game.to_dict())
         self.assertTrue(all('is_running' not in item for item in game.to_installation_state()['installations'].values()))
-        with mock.patch('active_games.running_process_ids', return_value=set()):
+        with mock.patch('gamemgr._running_process_ids', return_value=set()):
             manager.update_running_state()
         self.assertFalse(game.is_running)
 
