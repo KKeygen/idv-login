@@ -1075,68 +1075,39 @@ def setup_network_proxy(proxy_port):
     global m_proxy, _dns_policy_mgr, _dns_server
 
     from gamemgr import GameManager
-    from channelHandler.channelUtils import getShortGameId
     from cloudRes import CloudRes
 
     game_helper = GameManager()
     app_state.channels_helper.game_helper = game_helper
-    ui_logger = logger
+    login_style = 2 if sys.platform == "darwin" else 1
+    qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
+    allowed_login_keys = frozenset({
+        "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
+        "app_type", "app_mode", "_cloud_extra_base64", "sc",
+    })
 
-    # Platform-specific defaults
-    if sys.platform == "darwin":
-        cv = "a5.10.0"
-        login_style = 2
-        app_channel_default = "netease.wyzymnqsd_cps_dev"
-        use_login_mapping_always = False
-
-        qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
-
-        _CREATE_LOGIN_WHITELIST = frozenset({
-            "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
-            "app_type", "app_mode", "_cloud_extra_base64", "sc",
-        })
-
-        def _create_login_query_hook(query, game_id):
-            config = CloudRes().get_qrcode_login_config(game_id)
-            if config:
-                for k, v in config.items():
-                    if k in _CREATE_LOGIN_WHITELIST:
-                        query[k] = str(v)
-    else:
-        cv = "a5.10.0"
-        login_style = 1
-        app_channel_default = "netease.wyzymnqsd_cps_dev"
-        use_login_mapping_always = False
-
-        qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
-
-        _CREATE_LOGIN_WHITELIST = frozenset({
-            "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
-            "app_type", "app_mode", "_cloud_extra_base64", "sc",
-        })
-
-        def _create_login_query_hook(query, game_id):
-            config = CloudRes().get_qrcode_login_config(game_id)
-            if config:
-                for k, v in config.items():
-                    if k in _CREATE_LOGIN_WHITELIST:
-                        query[k] = str(v)
+    def _create_login_query_hook(query, game_id):
+        config = CloudRes().get_qrcode_login_config(game_id)
+        if config:
+            for key, value in config.items():
+                if key in allowed_login_keys:
+                    query[key] = str(value)
 
     # Create the UI manager for the Qt window
     from uimgr import UIManager
-    ui_mgr = UIManager(game_helper=game_helper, ui_logger=ui_logger)
+    ui_mgr = UIManager(game_helper=game_helper, ui_logger=logger)
     app_state.ui_mgr = ui_mgr
     # Create the mitmproxy addon
     from mitm_addon import IDVLoginAddon
     addon = IDVLoginAddon(
-        cv=cv,
+        cv="a5.10.0",
         login_style=login_style,
         game_helper=game_helper,
         logger=logger,
-        app_channel_default=app_channel_default,
+        app_channel_default="netease.wyzymnqsd_cps_dev",
         qrcode_app_channel_provider=qrcode_app_channel_provider,
         create_login_query_hook=_create_login_query_hook,
-        use_login_mapping_always=use_login_mapping_always,
+        use_login_mapping_always=False,
         ui_manager=ui_mgr,
     )
 
@@ -1180,13 +1151,8 @@ def setup_network_proxy(proxy_port):
             clear_custom_dns()
             # 回退到常规模式（不持久化，下次启动仍尝试兼容模式）
             proxy_mode = "process" if auto_games else "global"
-            from mitm_proxy import MitmProxyManager
-            proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
-            proxy_mgr.start()
-            m_proxy = proxy_mgr
-            app_state.proxy_mgr = proxy_mgr
-    else:
-        # 常规代理模式（global 或 process）
+    if proxy_mode != "compat":
+        # 常规代理模式（global、process 或兼容模式回退）
         from mitm_proxy import MitmProxyManager
         proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
         proxy_mgr.start()
@@ -1216,6 +1182,16 @@ def setup_network_proxy(proxy_port):
     from uri_scheme import register_uri_scheme, start_uri_listener
     register_uri_scheme()
 
+    def _start_uri_game(game_id, installation_id, *, from_signal=False):
+        game = game_helper.get_game(game_id)
+        if not game:
+            missing = "信号指定的游戏未找到" if from_signal else "未找到游戏"
+            logger.warning(f"{missing}: {game_id}")
+            return
+        via = "信号" if from_signal else "快捷方式"
+        logger.info(f"通过{via}启动游戏: {game.get_installation_display_name(installation_id)}")
+        game.start(installation_id)
+
     # Start the URI listener so that new --uri invocations signal this instance
     def _on_uri_signal(
         action: str,
@@ -1234,12 +1210,7 @@ def setup_network_proxy(proxy_port):
             )
             ui_mgr.open_for_game(target_game_id, "accounts")
         elif action == "start" and game_id:
-            game = game_helper.get_game(game_id)
-            if game:
-                logger.info(f"通过信号启动游戏: {game.get_installation_display_name(installation_id)}")
-                game.start(installation_id)
-            else:
-                logger.warning(f"信号指定的游戏未找到: {game_id}")
+            _start_uri_game(game_id, installation_id, from_signal=True)
         else:
             ui_mgr.open_for_game(game_id, initial_view)
 
@@ -1257,64 +1228,34 @@ def setup_network_proxy(proxy_port):
 
     from logutil import user_notice
 
-    # 根据模式执行不同的启动逻辑
     if proxy_mode == "compat":
-        # 兼容模式：无需设置代理环境变量，DNS 劫持会自动生效
         user_notice("提示：当前使用兼容模式，通过 DNS 劫持拦截游戏流量。")
-        if uri_action == "start" and uri_game_id:
-            game = game_helper.get_game(uri_game_id)
-            if game:
-                logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
-                game.start(uri_installation_id)
-            else:
-                logger.warning(f"未找到游戏: {uri_game_id}")
-            genv.set("URI_STARTUP_ACTION", "")
-            genv.set("URI_STARTUP_GAME_ID", "")
-            genv.set("URI_STARTUP_INSTALLATION_ID", "")
-            genv.set("URI_STARTUP_VIEW", "")
-        elif auto_games:
-            names = ", ".join(g.name for g in auto_games)
-            logger.info(f"同时启动自启游戏: {names}")
-            for g in auto_games:
-                installation = g.get_auto_start_installation()
-                g.start(installation.installation_id if installation else "")
-    elif uri_action == "start" and uri_game_id:
-        # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
-        game = game_helper.get_game(uri_game_id)
-        if game:
-            logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
-            game.start(uri_installation_id)
-        else:
-            logger.warning(f"未找到游戏: {uri_game_id}")
-        # 清理启动参数
-        genv.set("URI_STARTUP_ACTION", "")
-        genv.set("URI_STARTUP_GAME_ID", "")
-        genv.set("URI_STARTUP_INSTALLATION_ID", "")
-        genv.set("URI_STARTUP_VIEW", "")
-    elif proxy_mode == "global":
-        # 次优先级：全局模式 → 设置系统/用户级代理
-        _set_proxy(app_state.proxy_mgr.port)
-        user_notice("提示：当前使用全局代理模式，会处理本机所有网络连接。")
-        if auto_games:
-            # 全局模式下也启动自启游戏（它们会继承代理环境变量）
-            names = ", ".join(g.name for g in auto_games)
-            logger.info(f"同时启动自启游戏: {names}")
-            for g in auto_games:
-                installation = g.get_auto_start_installation()
-                g.start(installation.installation_id if installation else "")
-        else:
-            user_notice("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
-    elif auto_games:
-        # 第三优先级：进程模式但有自启游戏 → 启动自启游戏（进程级代理）
-        names = ", ".join(g.name for g in auto_games)
-        logger.info(f"进程代理模式，启动自启游戏: {names}")
-        for g in auto_games:
-            installation = g.get_auto_start_installation()
-            g.start(installation.installation_id if installation else "")
+
+    # 快捷方式启动优先，只启动所选安装，不为它设置全局代理。
+    if uri_action == "start" and uri_game_id:
+        _start_uri_game(uri_game_id, uri_installation_id)
+        for key in ("URI_STARTUP_ACTION", "URI_STARTUP_GAME_ID",
+                    "URI_STARTUP_INSTALLATION_ID", "URI_STARTUP_VIEW"):
+            genv.set(key, "")
     else:
-        # 进程代理模式且没有自启游戏
-        user_notice("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
-        user_notice("如需设置全局代理，可在管理页面切换为全局模式。")
+        if proxy_mode == "global":
+            _set_proxy(app_state.proxy_mgr.port)
+            user_notice("提示：当前使用全局代理模式，会处理本机所有网络连接。")
+
+        if auto_games:
+            names = ", ".join(game.name for game in auto_games)
+            if proxy_mode in ("compat", "global"):
+                logger.info(f"同时启动自启游戏: {names}")
+            else:
+                logger.info(f"进程代理模式，启动自启游戏: {names}")
+            for game in auto_games:
+                installation = game.get_auto_start_installation()
+                game.start(installation.installation_id if installation else "")
+        elif proxy_mode == "global":
+            user_notice("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
+        elif proxy_mode != "compat":
+            user_notice("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
+            user_notice("如需设置全局代理，可在管理页面切换为全局模式。")
 
     if proxy_mode == "compat":
         logger.info("兼容模式已就绪！DNS 劫持和反向代理已启动。")

@@ -158,9 +158,9 @@ class GameInstallationModelTests(unittest.TestCase):
     def test_cold_and_warm_launch_logs_use_the_selected_installation(self):
         tree = ast.parse((REPO_ROOT / "src/main.py").read_text(encoding="utf-8"))
         setup = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "setup_network_proxy")
-        cold = next(n for n in setup.body if isinstance(n, ast.If)
-                    and ast.unparse(n.test) == "proxy_mode == 'compat'"
-                    and any(isinstance(x, ast.If) and "uri_action" in ast.unparse(x.test) for x in n.body))
+        shared_start = next(n for n in setup.body if isinstance(n, ast.FunctionDef) and n.name == "_start_uri_game")
+        launch = next(n for n in setup.body if isinstance(n, ast.If)
+                      and ast.unparse(n.test) == "uri_action == 'start' and uri_game_id")
         warm = next(n for n in setup.body if isinstance(n, ast.FunctionDef) and n.name == "_on_uri_signal")
         game = self._shortcut_game()
         cache = {"cn:73": {"display_name": "第五人格"},
@@ -184,8 +184,8 @@ class GameInstallationModelTests(unittest.TestCase):
                                  "uri_installation_id": iid, "auto_games": [], "logger": logger,
                                  "game_helper": types.SimpleNamespace(get_game=lambda gid: game),
                                  "user_notice": lambda *a, **k: None, "genv": envmgr.genv}
-                        node = warm if mode == "signal" else cold
-                        exec(compile(ast.Module(body=[node], type_ignores=[]), "launch-test", "exec"), scope)
+                        node = warm if mode == "signal" else launch
+                        exec(compile(ast.Module(body=[shared_start, node], type_ignores=[]), "launch-test", "exec"), scope)
                         if mode == "signal":
                             scope["_on_uri_signal"]("start", "h55", iid)
                         prefix = "通过信号启动游戏: " if mode == "signal" else "通过快捷方式启动游戏: "
