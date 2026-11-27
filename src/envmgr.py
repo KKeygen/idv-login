@@ -56,7 +56,7 @@ class genv:
                     data.pop(key, None)
                 from secure_write import write_json_restricted
                 try:
-                    write_json_restricted(_cachePath, data)
+                    write_json_restricted(_cachePath, data, verify_fallback=True)
                 except (OSError, ValueError, TypeError) as error:
                     logging.getLogger(__name__).warning("保存配置失败（%s）", type(error).__name__)
                     return False
