@@ -30,6 +30,7 @@ class InstalledHashTests(unittest.TestCase):
         self.env.get.side_effect = lambda key, default=None: copy.deepcopy(self.data.get(key, default))
         self.env.get_from_file.side_effect = self.env.get.side_effect
         self.env.set.side_effect = self.save
+        self.env.update_cached.side_effect = lambda values: self.data.update(copy.deepcopy(values))
         self.stack.enter_context(patch.object(hotfixmgr, 'genv', self.env))
         self.stack.enter_context(patch.object(hotfixmgr, '_is_macos_pyinstaller', return_value=False))
         self.resolve = self.stack.enter_context(patch.object(hotfixmgr, '_resolve_module_target_path',

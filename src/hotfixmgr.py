@@ -641,7 +641,6 @@ def _rollback_one(hotfix_id: str) -> Tuple[bool, str]:
         try:
             if target_path and os.path.exists(target_path):
                 os.remove(target_path)
-            _record_update(hotfix_id, {"status": "rolled_back", "rolled_back_at": int(time.time())})
             return True, "已禁用外置热更新"
         except Exception as e:
             return False, f"禁用外置热更新失败: {e}"
@@ -656,7 +655,6 @@ def _rollback_one(hotfix_id: str) -> Tuple[bool, str]:
         if str(target_path).endswith(".py"):
             _delete_pyc_for_source(target_path)
             _compile_source(target_path)
-        _record_update(hotfix_id, {"status": "rolled_back", "rolled_back_at": int(time.time())})
         return True, "已回滚"
     except Exception as e:
         return False, f"回滚失败: {e}"
@@ -689,13 +687,25 @@ def pre_start_check_and_rollback_if_needed():
 
     # 若上次运行崩溃，则回滚所有待验证 hotfix，并标记为永久跳过
     if prev_state == "crash":
-        for hid in list(pending_ids):
+        records = dict(_get_records())
+        for hid in pending_ids:
             ok, msg = _rollback_one(hid)
             print(f"【热更新】检测到上次热更新后崩溃，回滚 {hid}: {msg}")
-            _record_update(hid, {"status": "skipped", "skip_reason": "rollback_after_crash"})
-        _add_skipped(pending_ids)
-        _set_pending_ids([])
-        # 回滚完毕后，重启。
+            record = records.get(hid)
+            record = dict(record) if isinstance(record, dict) else {}
+            record.update(status="skipped", skip_reason="rollback_after_crash")
+            if ok:
+                record["rolled_back_at"] = int(time.time())
+            records[hid] = record
+        try:
+            genv.update_cached({
+                "hotfix_records": records,
+                "hotfix_skipped": sorted(set(_get_skipped_ids()) | set(pending_ids)),
+                "hotfix_pending_validate": [],
+            })
+        except OSError:
+            print("【热更新】回滚状态无法保存，本次继续运行。")
+            return
         restart_self("已回滚所有待验证热更新")
         return
 
