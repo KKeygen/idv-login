@@ -480,9 +480,6 @@ class CloudRes:
                 logger.warning(f"云端页面字段无效，尝试兼容回退: {key}")
         return ""
     
-    def get_shortcuts(self):
-        return self.local_data.get('shortcuts', [])
-    
     def is_update_critical(self):
         return self.local_data.get('critical_update', False)
     

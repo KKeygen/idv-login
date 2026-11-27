@@ -576,10 +576,6 @@ def initialize():
         #except Exception as e:
         #    logger.error(f"首次使用创建快捷方式失败: {e}")
             
-    try:
-        setup_shortcuts()
-    except:
-        logger.error("创建快捷方式失败")
     from run_once import run_once
     try:
         run_once()
@@ -1052,12 +1048,6 @@ def generate_certificates_if_needed():
     if need_regen:
         logger.info("证书初始化成功!")
 
-
-def setup_shortcuts():
-    """设置快捷方式"""
-    from shortcutmgr import ShortcutMgr
-    shortcutMgr_instance = ShortcutMgr()
-    shortcutMgr_instance.handle_shortcuts()
 
 def setup_network_proxy(proxy_port):
     """Set up the mitmproxy-based network proxy.
