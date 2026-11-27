@@ -1873,10 +1873,12 @@ class GameManager:
                     game_id: game.to_installation_state()
                     for game_id, game in self.games.items()
                 }
-                genv.update_cached({
+                saved = genv.update_cached({
                     self.GAMES_CACHE_KEY: game_settings,
                     self.INSTALLATIONS_CACHE_KEY: installation_settings,
                 })
+                if saved is False and require_saved:
+                    raise OSError("无法保存游戏配置")
             except Exception:
                 if require_saved:
                     raise
@@ -1891,10 +1893,11 @@ class GameManager:
                 short = getShortGameId(game_id)
                 if short in choices:
                     data['account_switching'] = choices[short]
-            genv.update_cached({
+            if genv.update_cached({
                 'account_switching_settings': settings,
                 self.GAMES_CACHE_KEY: game_settings,
-            }, remove=('account_switching_active_installations',))
+            }, remove=('account_switching_active_installations',)) is False:
+                raise OSError("无法保存游戏账号切换设置")
             for game_id, game in games:
                 game.account_switching = dict(game_settings[game_id]['account_switching'])
 

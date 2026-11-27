@@ -2144,9 +2144,7 @@ class LocalRequestHandler:
             return self._json_response(400, {'success': False, 'error': 'enabled must be boolean'})
         enabled = body['enabled']
         # A settings change must be durable before any restart is scheduled.
-        try:
-            genv.set(SETTING, enabled, True, require_saved=True)
-        except Exception:
+        if genv.set(SETTING, enabled, True, require_saved=True) is False:
             return self._json_response(500, {'success': False, 'error': '无法保存调试设置'})
         if not enabled:
             from telemetry import stop_telemetry

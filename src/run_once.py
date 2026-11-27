@@ -85,13 +85,10 @@ def _probe_proxy_mode(logger):
                 logger.warning("443 端口被占用，暂不迁移到兼容模式")
                 return
 
-            try:
-                genv.update_cached({
-                    "proxy_mode": "compat",
-                    "proxy_mode_compat_prompted_0420": True,
-                })
-            except OSError:
-                logger.warning("无法保存代理迁移设置，继续使用当前代理模式")
+            if genv.update_cached({
+                "proxy_mode": "compat",
+                "proxy_mode_compat_prompted_0420": True,
+            }) is False:
                 return
 
             # 清理上次崩溃可能残留的代理注册表项
@@ -183,28 +180,15 @@ def migrate_channel_records():
         return
 
     # auto-* 保存的是 UUID。昵称、远端渠道名以及旧 channels.json 均不修改。
-    config_path = os.path.join(genv.get("FP_WORKDIR"), "config.json")
-    try:
-        with open(config_path, "r", encoding="utf-8") as file:
-            config = json.load(file)
-        if not isinstance(config, dict):
-            raise ValueError("配置文件顶层必须是 JSON 对象")
-    except FileNotFoundError:
-        config = {}
-    except (OSError, ValueError) as error:
-        # The accounts have already been migrated. Keep the original config and
-        # retry its UUID remap once the user restores it; it must not stop startup.
-        setup_logger().error("file=config.json stage=records.migrate.preferences 读取失败；保留原配置，跳过自动登录偏好迁移 [{}]", type(error).__name__)
+    config = genv.read_cached()
+    if config is None:
         return
     updates = {
         key: renamed[value] for key, value in config.items()
         if key.startswith("auto-") and isinstance(value, str) and value in renamed
     }
     updates["channel_records_v2_migrated"] = True
-    try:
-        genv.update_cached(updates)
-    except OSError as error:
-        setup_logger().error("stage=records.migrate.preferences 保存失败；保留原配置，下次可重试 [{}]", type(error).__name__)
+    genv.update_cached(updates)
 
 
 def run_once():

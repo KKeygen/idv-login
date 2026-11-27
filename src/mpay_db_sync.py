@@ -200,7 +200,8 @@ class MpayDBSync:
             saved.pop(key)
         else:
             saved[key] = value
-        genv.set('mpay_account_heads', saved, cached=True, require_saved=True)
+        if genv.set('mpay_account_heads', saved, cached=True, require_saved=True) is False:
+            raise OSError('无法保存游戏账号列表顺序')
 
     def _track_head(self, path, game):
         try:

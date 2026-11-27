@@ -55,18 +55,10 @@ class _HotfixOverlayFinder(importlib.abc.MetaPathFinder):
 # ------------------------------------------------------------------
 
 def probe_cache_write_once() -> bool:
-    """探测 genv.set(cached=True) 是否真的写入成功。
-
-    由于 genv.set 在写入失败时只打印错误并吞掉异常，我们用 get_from_file 直接读文件校验。
-    若探测失败，则必须跳过所有 hotfix 相关逻辑，以避免"写入失败导致状态无法落盘 -> 无限重启"。
-
-    注意：此探测只应在"决定是否进入 hotfix 逻辑前"执行一次。
-    """
-    try:
-        genv.set("hotfix_probed", True, True, require_saved=True)
-        return bool(genv.get_from_file("hotfix_probed", False))
-    except Exception:
+    """热更新前先确认设置确实能保存，避免重复重启。"""
+    if genv.set("hotfix_probed", True, True, require_saved=True) is False:
         return False
+    return bool(genv.get_from_file("hotfix_probed", False))
 
 
 def _make_id(item: dict) -> str:
@@ -84,7 +76,7 @@ def _get_records() -> dict:
 def _set_records(records: dict, *, require_saved=False):
     if not isinstance(records, dict):
         records = {}
-    genv.set("hotfix_records", records, True, require_saved=require_saved)
+    return genv.set("hotfix_records", records, True, require_saved=require_saved)
 
 
 def _record_update(hotfix_id: str, patch: dict, *, require_saved=False):
@@ -94,7 +86,7 @@ def _record_update(hotfix_id: str, patch: dict, *, require_saved=False):
         rec = {}
     rec = dict(rec, **(patch or {}))
     records[hotfix_id] = rec
-    _set_records(records, require_saved=require_saved)
+    return _set_records(records, require_saved=require_saved)
 
 
 def _file_sha256(path):
@@ -119,8 +111,9 @@ def _installed_file_matches(record):
 def _save_installed_record(hotfix_id, record):
     try:
         record['installed_sha256'] = _file_sha256(record['target_path'])
-        _record_update(hotfix_id, record, require_saved=True)
-    except Exception as error:
+        if _record_update(hotfix_id, record, require_saved=True) is False:
+            return False, "保存热更新状态失败"
+    except OSError as error:
         return False, f"保存热更新状态失败: {error}"
     return True, ''
 
@@ -679,7 +672,8 @@ def pre_start_check_and_rollback_if_needed():
                and not _installed_file_matches(records[hid])]
     if changed:
         for hid in changed:
-            _record_update(hid, {'status': 'needs_reapply'}, require_saved=True)
+            if _record_update(hid, {'status': 'needs_reapply'}, require_saved=True) is False:
+                return
         pending_ids = [hid for hid in pending_ids if hid not in changed]
         _set_pending_ids(pending_ids)
     if not pending_ids:
@@ -697,14 +691,11 @@ def pre_start_check_and_rollback_if_needed():
             if ok:
                 record["rolled_back_at"] = int(time.time())
             records[hid] = record
-        try:
-            genv.update_cached({
-                "hotfix_records": records,
-                "hotfix_skipped": sorted(set(_get_skipped_ids()) | set(pending_ids)),
-                "hotfix_pending_validate": [],
-            })
-        except OSError:
-            print("【热更新】回滚状态无法保存，本次继续运行。")
+        if genv.update_cached({
+            "hotfix_records": records,
+            "hotfix_skipped": sorted(set(_get_skipped_ids()) | set(pending_ids)),
+            "hotfix_pending_validate": [],
+        }) is False:
             return
         restart_self("已回滚所有待验证热更新")
         return

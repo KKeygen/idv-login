@@ -263,12 +263,13 @@ def _commit_import(manager, task_id, changes, results):
             all_games[gid] = prepared
             pending.append((gid, live, prepared, previous_name, installations, patches))
 
-        genv.update_cached({
+        if genv.update_cached({
             manager.GAMES_CACHE_KEY: {gid: game.to_dict() for gid, game in all_games.items()},
             manager.INSTALLATIONS_CACHE_KEY: {
                 gid: game.to_installation_state() for gid, game in all_games.items()
             },
-        })
+        }) is False:
+            raise OSError("无法保存导入的游戏配置")
 
         for gid, live, prepared, previous_name, installations, patches in pending:
             if live is None:

@@ -141,12 +141,14 @@ class InstalledHashTests(unittest.TestCase):
 
     def test_stale_true_probe_cannot_hide_write_failure(self):
         self.data['hotfix_probed'] = True
-        self.env.set.side_effect = OSError('fixture read-only configuration')
+        self.env.set.side_effect = None
+        self.env.set.return_value = False
         self.assertFalse(hotfixmgr.probe_cache_write_once())
         self.env.set.assert_called_once_with('hotfix_probed', True, True, require_saved=True)
 
     def test_hash_persistence_failure_does_not_report_application_success(self):
-        self.env.set.side_effect = OSError('fixture read-only configuration')
+        self.env.set.side_effect = None
+        self.env.set.return_value = False
         ok, error = hotfixmgr._apply_one(self.item, require_hashes=True)
         self.assertFalse(ok)
         self.assertIn('保存热更新状态失败', error)

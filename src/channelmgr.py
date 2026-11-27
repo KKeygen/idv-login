@@ -506,11 +506,8 @@ class ChannelManager:
         self._credential_thread = None
         self._credential_lock = threading.RLock()
         self._scan_relogins = set()
-        try:
-            genv.discard_cached('native_channel_accounts', 'mpay_db_helpers',
-                                'mpay_db_bindings', 'mpay_db_writes')
-        except (OSError, ValueError, TypeError) as error:
-            self.logger.error('旧账号映射配置无法读取 [{}]；保留原配置文件', type(error).__name__)
+        genv.discard_cached('native_channel_accounts', 'mpay_db_helpers',
+                            'mpay_db_bindings', 'mpay_db_writes')
         self.channels = []
         self.db_sync = None
         self._pending_login_channel = None  # 异步登录期间保持对 channel 的引用，防止 GC
