@@ -1328,7 +1328,69 @@ class ChannelManager:
             channel_data = error
         return _do_confirm(channel_data)
 
+    def refresh_saved_account(self, uuid: str | channel, game_id: str, on_complete=None, on_error=None):
+        """Refresh a saved account and project it without starting a QR login."""
+        record = self.query_channel(uuid) if isinstance(uuid, str) else uuid
+        if record is None:
+            genv.set("CHANNEL_ACCOUNT_SELECTED", "")
+            if on_complete:
+                on_complete(None)
+            return None
+
+        def _ready(packet):
+            if isinstance(packet, Exception):
+                self._credential_failure(record, game_id, 'refresh.credentials', packet, on_error)
+                result = False
+            elif packet is False:
+                self._credential_failure(record, game_id, 'refresh.credentials', None, on_error)
+                result = False
+            elif packet is None:
+                result = None
+            else:
+                # Save the tool account before touching any native game list:
+                # a native write can fail or cover only some installations.
+                stage = 'refresh.save'
+                message = '登录已刷新，但账号未保存，请检查账号配置文件及目录权限后重试'
+                try:
+                    self.save_records()
+                    if self.db_sync:
+                        stage = 'refresh.database'
+                        message = '登录已刷新，但游戏账号库未全部更新，请关闭游戏后重试'
+                        self.db_sync.refresh_record(record, game_id)
+                except Exception as error:
+                    record.report_login_failure(game_id, stage, message, error, notify=True, on_error=on_error)
+                    result = False
+                else:
+                    result = True
+            if not result:
+                genv.set("CHANNEL_ACCOUNT_SELECTED", "")
+            if on_complete:
+                on_complete(result)
+            return result
+
+        try:
+            if on_complete is not None and record.record_source == "manual":
+                record.request_unisdk(game_id, on_complete=_ready)
+                return None
+            try:
+                packet = record.request_unisdk(game_id)
+            except Exception as error:
+                packet = error
+            return _ready(packet)
+        except Exception as error:
+            # The original local switch route uses this failure status for
+            # dispatch failures, including errors before the callback runs.
+            record.report_login_failure(game_id, 'switch.scan',
+                '游戏扫码请求失败，请重新扫码；仍失败时反馈日志', error, notify=True, on_error=on_error)
+            genv.set("CHANNEL_ACCOUNT_SELECTED", "")
+            if on_complete:
+                on_complete(False)
+            return False
+
     def simulate_scan(self, uuid: str | channel, scanner_uuid: str, game_id: str, on_complete=None, on_error=None):
+        if scanner_uuid == "Kinich":
+            # Keep the old direct refresh marker compatible.
+            return self.refresh_saved_account(uuid, game_id, on_complete=on_complete, on_error=on_error)
         # A hosted MPay callback can supply credentials without a tool record.
         records = self.channels if isinstance(uuid, str) else (uuid,)
         for channel in records:
@@ -1344,41 +1406,6 @@ class ChannelManager:
                     "cv": "a1.5.0",
                 }
                 try:
-                    if scanner_uuid=="Kinich":
-                        def _ready(channel_data):
-                            if isinstance(channel_data, Exception):
-                                self._credential_failure(channel, game_id, 'refresh.credentials', channel_data, on_error)
-                                result = False
-                            else:
-                                result = channel_data if channel_data is None or channel_data is False else True
-                                if result is False:
-                                    self._credential_failure(channel, game_id, 'refresh.credentials', None, on_error)
-                            if result:
-                                saved = False
-                                try:
-                                    self.save_records()
-                                    saved = True
-                                    if self.db_sync:
-                                        self.db_sync.refresh_record(channel, game_id)
-                                except Exception as error:
-                                    channel.report_login_failure(game_id, 'refresh.database' if saved else 'refresh.save',
-                                        '登录已刷新，但游戏账号库未全部更新，请关闭游戏后重试' if saved else
-                                        '登录已刷新，但账号未保存，请检查账号配置文件及目录权限后重试', error, notify=True, on_error=on_error)
-                                    result = False
-                            if not result:
-                                genv.set("CHANNEL_ACCOUNT_SELECTED", "")
-                            if on_complete:
-                                on_complete(result)
-                            return result
-
-                        if on_complete is not None and channel.record_source == "manual":
-                            channel.request_unisdk(game_id, on_complete=_ready)
-                            return None
-                        try:
-                            result = channel.request_unisdk(game_id)
-                        except Exception as error:
-                            result = error
-                        return _ready(result)
                     r = requests.get(
                         "https://service.mkey.163.com/mpay/api/qrcode/scan",
                         params=data,

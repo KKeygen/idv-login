@@ -462,11 +462,19 @@ class LocalRequestHandler:
         except Exception:
             app = None
 
-        scanner_uuid = data["uuid"] if data else "Kinich"
+        scanner_uuid = data["uuid"] if data else None
         record = app_state.channels_helper.query_channel(uuid)
         scan_game_id = data["game_id"] if data else game_id or (record.game_id if record else '')
         if not scan_game_id:
             return self._json_response(400, {'success': False, 'error': '缺少目标游戏'})
+
+        def request_switch(on_complete=None, on_error=None):
+            manager = app_state.channels_helper
+            if data:
+                return manager.simulate_scan(uuid, scanner_uuid, scan_game_id,
+                    on_complete=on_complete, on_error=on_error)
+            return manager.refresh_saved_account(uuid, scan_game_id,
+                on_complete=on_complete, on_error=on_error)
 
         if app and app.property("_main_loop_running"):
             # 异步模式
@@ -482,8 +490,7 @@ class LocalRequestHandler:
                     })
 
                 try:
-                    app_state.channels_helper.simulate_scan(
-                        uuid, scanner_uuid, scan_game_id, on_complete=on_done,
+                    request_switch(on_complete=on_done,
                         on_error=lambda message: LocalRequestHandler._pending_switch[task_id].update(error=message),
                     )
                 except Exception as error:
@@ -498,8 +505,7 @@ class LocalRequestHandler:
         else:
             # 同步模式
             failure = {}
-            result = app_state.channels_helper.simulate_scan(uuid, scanner_uuid, scan_game_id,
-                on_error=lambda message: failure.update(error=message))
+            result = request_switch(on_error=lambda message: failure.update(error=message))
             if result is None or result is False:
                 return self._json_response(200, {'success': False, 'cancelled': result is None, **failure})
             return self._json_response(200, {"current": genv.get("CHANNEL_ACCOUNT_SELECTED")})
