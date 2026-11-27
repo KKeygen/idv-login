@@ -228,11 +228,13 @@ class AccountListPolicy:
                     seen.add(identity)
         return result
 
-    def canonical_uuid(self, record, game):
+    def canonical_uuid(self, record, game, *, candidates=None):
         if record is None:
             return None
         identity = self.identity(record, game)
-        for candidate in self._candidates(game):
+        if candidates is None:
+            candidates = self._candidates(game)
+        for candidate in candidates:
             if candidate is record or (identity is not None and self.identity(candidate, game) == identity):
                 return candidate.uuid
         return None
@@ -251,8 +253,10 @@ class AccountListPolicy:
             if not config.get('enabled', False):
                 continue
             candidates = self._candidates(game)
-            chosen = {self.canonical_uuid(self.manager.query_channel(uid), game)
-                      for uid in config.get('account_uuids', [])}
+            chosen = {
+                self.canonical_uuid(self.manager.query_channel(uid), game, candidates=candidates)
+                for uid in config.get('account_uuids', [])
+            }
             records = [record for record in candidates if record.uuid in chosen]
             records.sort(key=lambda record: (-record.last_login_time, record.uuid))
             if settings['limit_enabled']:
