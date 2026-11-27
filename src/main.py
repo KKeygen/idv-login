@@ -758,11 +758,10 @@ def handle_download_task(task_file_path):
     setup_work_directory()
     from logutil import setup_logger, safe_exception
     logger_local = setup_logger()
-    task_data = None
     try:
         with open(task_file_path, "r", encoding="utf-8") as f:
             task_data = json.load(f)
-    except Exception as e:
+    except Exception:
         safe_exception(logger_local, '读取下载任务文件失败')
         return False
     download_root = task_data.get("download_root", "")
@@ -777,38 +776,34 @@ def handle_download_task(task_file_path):
     progress_file = task_data.get("progress_file", "")
     control_file = task_data.get("control_file", "")
     start_args = task_data.get("start_args", "")
+    is_update = task_data.get("is_update", False)
     result = False
     post_update_actions = None
-    ui_server_process = None
     ui_server_thread = None
-    stop_event = None
-    download_process = None
-    use_download_ipc = bool(content_id) and distribution_id != -1 and download_root
-    core_error = {"value": ""}
+    core_error = ""
     _write_download_status(progress_file, {
         "status": "pending",
         "phase": "preparing",
         "progress_percent": 0,
     })
     try:
-        if use_download_ipc:
-            from download_binary import ensure_binary, allocate_ipc_ports
-            import download_binary
-            import threading
-            if not ensure_binary():
-                result = False
-            else:
+        if content_id and distribution_id != -1 and download_root:
+            from download_binary import allocate_ipc_ports, ensure_binary, main_ui_server
+
+            if ensure_binary():
                 heartbeat_port, progress_port = allocate_ipc_ports()
                 stop_event = threading.Event()
-                topic_bytes = str(content_id).encode("utf-8") if content_id else b""
+                topic_bytes = str(content_id).encode("utf-8")
 
                 def publish_progress(event):
+                    nonlocal core_error
                     if event.get("success") is False:
-                        core_error["value"] = str(event.get("error") or "下载失败")
+                        core_error = str(event.get("error") or "下载失败")
                     _write_download_status(progress_file, event)
 
                 ui_server_thread = threading.Thread(
-                    target=download_binary.main_ui_server,
+                    target=main_ui_server,
+                    daemon=True,
                     kwargs={
                         "topic": topic_bytes,
                         "sub_port": heartbeat_port,
@@ -818,15 +813,12 @@ def handle_download_task(task_file_path):
                         "control_file": control_file,
                     }
                 )
-                ui_server_thread.daemon = True
                 ui_server_thread.start()
-                #等待几秒钟，确保UI服务器启动完成
-                import time
+                # 给 IPC 监听留出原有的启动时间。
                 time.sleep(5)
-                encoded_path = _encode_download_path(download_root)
                 if repair_list_path:
                     scene = 3
-                elif task_data.get("is_update"):
+                elif is_update:
                     scene = 2
                 else:
                     scene = 1
@@ -844,16 +836,13 @@ def handle_download_task(task_file_path):
                     f"--contentid:{content_id}",
                     f"--subport:{heartbeat_port}",
                     f"--pubport:{progress_port}",
-                    f"--path:{encoded_path}",
+                    f"--path:{_encode_download_path(download_root)}",
                 ]
                 if repair_list_path:
                     download_cmd.append(f"--repairListPath:{_encode_repair_list_path(repair_list_path)}")
                 if version_code:
                     download_cmd.append(f"--targetVersion:{version_code}")
-                if original_version:
-                    download_cmd.append(f"--originVersion:{original_version}")
-                else:
-                    download_cmd.append(f"--originVersion:")
+                download_cmd.append(f"--originVersion:{original_version or ''}")
                 core_log_path = _download_core_log_path(game_id, installation_id)
                 _write_download_status(progress_file, {
                     "core_log_path": core_log_path,
@@ -873,93 +862,83 @@ def handle_download_task(task_file_path):
                         creationflags=creationflags,
                     )
                     exit_code = download_process.wait()
-                result = exit_code == 0 and not core_error["value"]
+                result = exit_code == 0 and not core_error
+
         if result and game_id and version_code:
             from gamemgr import GameManager
+
             game_mgr = GameManager()
             game = game_mgr.get_game(game_id)
             installation = game.get_installation(installation_id) if game else None
-            if game and installation:
-                if installation.distribution_id not in (-1, distribution_id):
-                    logger_local.error(
-                        "下载结果与安装记录分发不匹配，拒绝回写: "
-                        f"installation={installation.distribution_id}, task={distribution_id}"
-                    )
-                    result = False
-                elif os.path.normcase(
-                    os.path.realpath(game.get_root_path(installation_id))
-                ) != os.path.normcase(os.path.realpath(download_root)):
-                    logger_local.error("下载期间安装根目录已变更，拒绝执行收尾和回写")
-                    core_error["value"] = "安装根目录已变更，请重新发起更新"
-                    result = False
-                else:
-                    if task_data.get("is_update", False):
-                        from install_actions import apply_post_update_actions
-                        post_update_actions = apply_post_update_actions(
-                            download_root, task_data.get("install_script"), logger_local
-                        )
-                    installation.installed_version = version_code
-                    installation.distribution_id = distribution_id
-                    installation.content_id = content_id
-                    installation.source = "download"
-                    installation.startup_args = start_args or installation.startup_args
-                    installation.updated_at = int(time.time())
-                    if not installation.write_marker(game_id):
-                        logger_local.warning("下载完成，但写入安装标记文件失败")
-                    game.should_auto_start = True
-                    game_mgr._save_games()
-                    print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")
-                    game.create_tool_launch_shortcut(
-                        installation.path, installation.installation_id
-                    )
-            else:
+            result = False
+            if installation is None:
                 logger_local.error(
                     f"下载完成但安装记录不存在，拒绝覆盖其他安装: {installation_id}"
                 )
-                result = False
+            elif installation.distribution_id not in (-1, distribution_id):
+                logger_local.error(
+                    "下载结果与安装记录分发不匹配，拒绝回写: "
+                    f"installation={installation.distribution_id}, task={distribution_id}"
+                )
+            elif os.path.normcase(
+                os.path.realpath(game.get_root_path(installation_id))
+            ) != os.path.normcase(os.path.realpath(download_root)):
+                logger_local.error("下载期间安装根目录已变更，拒绝执行收尾和回写")
+                core_error = "安装根目录已变更，请重新发起更新"
+            else:
+                if is_update:
+                    from install_actions import apply_post_update_actions
 
-                
-        if ui_server_process:
-            try:
-                ui_server_process.terminate()
-                ui_server_process.wait(timeout=5)
-            except Exception:
-                pass
-        if stop_event:
+                    post_update_actions = apply_post_update_actions(
+                        download_root, task_data.get("install_script"), logger_local
+                    )
+                installation.installed_version = version_code
+                installation.distribution_id = distribution_id
+                installation.content_id = content_id
+                installation.source = "download"
+                installation.startup_args = start_args or installation.startup_args
+                installation.updated_at = int(time.time())
+                if not installation.write_marker(game_id):
+                    logger_local.warning("下载完成，但写入安装标记文件失败")
+                game.should_auto_start = True
+                game_mgr._save_games()
+                print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")
+                game.create_tool_launch_shortcut(
+                    installation.path, installation.installation_id
+                )
+                result = True
+
+        if ui_server_thread is not None:
             stop_event.set()
-        if ui_server_thread:
             ui_server_thread.join(timeout=2)
-        try:
-            os.remove(task_file_path)
-        except Exception as e:
-            safe_exception(logger_local, '删除下载任务文件失败')
-        if control_file:
+        for path, kind, allow_missing in (
+            (task_file_path, "任务", False),
+            (control_file, "控制", True),
+        ):
+            if not path:
+                continue
             try:
-                os.remove(control_file)
-            except FileNotFoundError:
-                pass
-            except Exception as e:
-                safe_exception(logger_local, '删除下载控制文件失败')
-        try:#尝试用explorer打开下载完成的目录
+                os.remove(path)
+            except Exception as error:
+                if not (allow_missing and isinstance(error, FileNotFoundError)):
+                    safe_exception(logger_local, f"删除下载{kind}文件失败")
+        try:
             if download_root and os.path.exists(download_root):
-                #使用正斜杠避免路径问题
                 download_root = os.path.abspath(download_root)
-                
+                opener = {"darwin": "open", "linux": "xdg-open"}.get(sys.platform)
                 if sys.platform == "win32" and not result:
                     logger_local.info(f"下载任务失败，请检查日志。如需重新下载，请重新发起下载任务。下载目录: {download_root}")
-                    subprocess.Popen(["explorer", download_root])
-                elif sys.platform == "darwin":
-                    subprocess.Popen(["open", download_root])
-                elif sys.platform == "linux":
-                    subprocess.Popen(["xdg-open", download_root])
-        except Exception as e:
+                    opener = "explorer"
+                if opener:
+                    subprocess.Popen([opener, download_root])
+        except Exception:
             safe_exception(logger_local, '打开下载目录失败')
         _write_download_status(progress_file, {
             "status": "done",
             "success": bool(result),
             "phase": "finished" if result else "failed",
             "progress_percent": 100 if result else 0,
-            "error": "" if result else (core_error["value"] or "下载核心异常退出"),
+            "error": "" if result else (core_error or "下载核心异常退出"),
             "game_id": game_id,
             "installation_id": installation_id,
             "distribution_id": distribution_id,
@@ -976,9 +955,6 @@ def handle_download_task(task_file_path):
             "phase": "failed",
             "error": str(e),
         })
-    finally:
-        from gamemgr import Game
-        game=Game(game_id=game_id,path=os.path.join(download_root,"dummy.exe"))
 
 def cleanup_expired_certificates():
     """清理过期的证书文件"""
