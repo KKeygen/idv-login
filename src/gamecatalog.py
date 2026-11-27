@@ -262,7 +262,6 @@ class DynamicGameCatalog:
     def _normalize_homepage_apps(
         payload: dict, catalog_source: str = "cn", default_app_type=None
     ) -> List[dict]:
-        ordered_apps = []
         apps_by_id = {}
 
         def visit(value):
@@ -292,11 +291,10 @@ class DynamicGameCatalog:
                                 app_data.get("goods_image") or ""
                             ).strip(),
                         }
-                        if app_id not in apps_by_id:
+                        existing = apps_by_id.get(app_id)
+                        if existing is None:
                             apps_by_id[app_id] = normalized
-                            ordered_apps.append(normalized)
                         else:
-                            existing = apps_by_id[app_id]
                             for key, item_value in normalized.items():
                                 if not existing.get(key) and item_value:
                                     existing[key] = item_value
@@ -307,7 +305,7 @@ class DynamicGameCatalog:
                     visit(child)
 
         visit(payload.get("data", {}))
-        return ordered_apps
+        return list(apps_by_id.values())
 
     @staticmethod
     def _normalize_app_detail(payload: dict, expected_app_id: int) -> Optional[dict]:
@@ -330,7 +328,6 @@ class DynamicGameCatalog:
         homepage_apps: List[dict], app_details: Dict[str, dict], configs: Dict[str, dict],
         pay_configs: Optional[Dict[str, dict]] = None,
     ) -> List[dict]:
-        games = []
         games_by_short_id = {}
         for app in homepage_apps:
             app_id = app.get("app_id")
@@ -351,7 +348,6 @@ class DynamicGameCatalog:
             if existing:
                 if app_id not in existing["download_distributions"]:
                     existing["download_distributions"].append(app_id)
-                if app_id not in existing["catalog_app_ids"]:
                     existing["catalog_app_ids"].append(app_id)
                 if catalog_source not in existing["catalog_sources"]:
                     existing["catalog_sources"].append(catalog_source)
@@ -359,7 +355,7 @@ class DynamicGameCatalog:
                     str(app_id), catalog_source
                 )
                 continue
-            record = {
+            games_by_short_id[short_id] = {
                 "game_id": cloud_game_id or short_id,
                 "short_game_id": short_id,
                 "cloud_game_id": cloud_game_id,
@@ -386,8 +382,6 @@ class DynamicGameCatalog:
                 "distribution_sources": {str(app_id): catalog_source},
                 "launcher": dict(detail),
             }
-            games.append(record)
-            games_by_short_id[short_id] = record
         pay_configs = pay_configs or {}
         for short_id in dict.fromkeys(list(configs) + list(pay_configs)):
             # a53 is the 手游宝 payment wallet, not a launchable game.
@@ -407,7 +401,7 @@ class DynamicGameCatalog:
                 (["game_config"] if config else [])
                 + (["pay_homepage"] if pay_config else [])
             )
-            games.append({
+            games_by_short_id[short_id] = {
                 # Keep the directory ID: payment and SDK suffixes can differ.
                 "game_id": short_id,
                 "short_game_id": short_id,
@@ -426,8 +420,8 @@ class DynamicGameCatalog:
                     "main_image": main_image,
                     "background_image": main_image,
                 },
-            })
-        return games
+            }
+        return list(games_by_short_id.values())
 
     def _cache_is_fresh(self) -> bool:
         checked_at = self._cache.get("checked_at", 0)
@@ -449,65 +443,42 @@ class DynamicGameCatalog:
 
             changed = False
             sources = dict(self._cache.get("sources", {}))
-            config_status, config_payload, config_meta = self._request_json(
-                "game_config", self.GAME_CONFIG_URL, {"X-Game": "base"}
+            sources_ok = True
+            # Keep request order and source-specific parsing explicit.
+            source_requests = (
+                (
+                    "game_config", self.GAME_CONFIG_URL, {"X-Game": "base"},
+                    "game_configs", {}, self._normalize_game_configs,
+                ),
+                (
+                    "pay_homepage", self.PAY_HOMEPAGE_URL, None,
+                    "pay_configs", {}, self._normalize_pay_configs,
+                ),
+                (
+                    "homepage_info", self.HOMEPAGE_URL, None,
+                    "homepage_apps_cn", [], self._normalize_homepage_apps,
+                ),
+                (
+                    "oversea_recommend", self.OVERSEA_RECOMMEND_URL, None,
+                    "homepage_apps_oversea", [],
+                    lambda payload: self._normalize_homepage_apps(
+                        payload, catalog_source="oversea", default_app_type=1
+                    ),
+                ),
             )
-            sources["game_config"] = config_meta
-            if config_status == self._MODIFIED or not self._cache.get("game_configs"):
-                if config_payload is not None:
-                    normalized_configs = self._normalize_game_configs(
-                        config_payload
-                    )
-                    if normalized_configs != self._cache.get("game_configs", {}):
-                        self._cache["game_configs"] = normalized_configs
-                        changed = True
-
-            pay_status, pay_payload, pay_meta = self._request_json(
-                "pay_homepage", self.PAY_HOMEPAGE_URL
-            )
-            sources["pay_homepage"] = pay_meta
-            if pay_status == self._MODIFIED or not self._cache.get("pay_configs"):
-                if pay_payload is not None:
-                    normalized_pay = self._normalize_pay_configs(pay_payload)
-                    if normalized_pay != self._cache.get("pay_configs", {}):
-                        self._cache["pay_configs"] = normalized_pay
-                        changed = True
-
-            homepage_status, homepage_payload, homepage_meta = self._request_json(
-                "homepage_info", self.HOMEPAGE_URL
-            )
-            sources["homepage_info"] = homepage_meta
-            if (
-                homepage_status == self._MODIFIED
-                or not self._cache.get("homepage_apps_cn")
-            ):
-                if homepage_payload is not None:
-                    normalized_apps = self._normalize_homepage_apps(
-                        homepage_payload, catalog_source="cn"
-                    )
-                    if normalized_apps != self._cache.get("homepage_apps_cn", []):
-                        self._cache["homepage_apps_cn"] = normalized_apps
-                        changed = True
-
-            oversea_status, oversea_payload, oversea_meta = self._request_json(
-                "oversea_recommend", self.OVERSEA_RECOMMEND_URL
-            )
-            sources["oversea_recommend"] = oversea_meta
-            if (
-                oversea_status == self._MODIFIED
-                or not self._cache.get("homepage_apps_oversea")
-            ):
-                if oversea_payload is not None:
-                    normalized_apps = self._normalize_homepage_apps(
-                        oversea_payload,
-                        catalog_source="oversea",
-                        default_app_type=1,
-                    )
-                    if normalized_apps != self._cache.get(
-                        "homepage_apps_oversea", []
-                    ):
-                        self._cache["homepage_apps_oversea"] = normalized_apps
-                        changed = True
+            for source, url, headers, cache_key, empty, normalize in source_requests:
+                status, payload, sources[source] = self._request_json(
+                    source, url, headers
+                )
+                if status == self._ERROR:
+                    sources_ok = False
+                cached = self._cache.get(cache_key, empty)
+                if payload is None or (status != self._MODIFIED and cached):
+                    continue
+                normalized = normalize(payload)
+                if normalized != cached:
+                    self._cache[cache_key] = normalized
+                    changed = True
 
             homepage_apps = (
                 list(self._cache.get("homepage_apps_cn", []))
@@ -559,12 +530,7 @@ class DynamicGameCatalog:
                 changed = True
             self._cache["sources"] = sources
             self._cache["app_details"] = app_details
-            if (
-                config_status != self._ERROR
-                and pay_status != self._ERROR
-                and homepage_status != self._ERROR
-                and oversea_status != self._ERROR
-            ):
+            if sources_ok:
                 self._cache["checked_at"] = int(time.time())
             self._cache["schema_version"] = self.CACHE_SCHEMA_VERSION
             write_json_restricted(self.cache_file, self._cache)
