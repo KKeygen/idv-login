@@ -929,144 +929,110 @@ class Game:
             ) or {}
             start_args = str(launcher_data.get("startup_params") or "")
             start_args = _append_dx_startup_params(start_args, launcher_data)
+        elif not use_fever_bridge and has_manual_feature:
+            # Even an empty manual cloud entry takes precedence over arguments
+            # imported from Fever, which could claim the platform is present.
+            start_args = str(cloud_res.get_start_argument(short_game_id) or "")
         elif not use_fever_bridge:
-            if has_manual_feature:
-                # A manually maintained cloud entry is authoritative even when
-                # it deliberately specifies an empty argument string.  Falling
-                # back to imported Fever arguments would make a normal launch
-                # falsely claim that the platform is present.
-                start_args = str(
-                    cloud_res.get_start_argument(short_game_id) or ""
-                )
-            else:
-                # Games outside both the manual cloud configuration and the
-                # Fever PC catalog keep the original standalone behavior.
-                start_args = installation.startup_args if installation else ""
-        if sys.platform == "win32":
-            # 规范化路径
-            game_path = os.path.normpath(game_path)
-            game_dir = os.path.dirname(game_path)
-            if use_fever_bridge:
-                # 模拟发烧平台托管启动：默认以安装目录作为工作目录；
-                # 仅 cloudRes.should_start_from_exe_path 名单内的游戏沿用
-                # 现有逻辑（exe 所在目录）。
-                if not cloud_res.is_should_start_from_exe_path(short_game_id):
-                    install_dir = self._root_from_executable(
-                        game_path,
-                        installation.startup_path if installation else "",
-                    )
-                    if install_dir:
-                        game_dir = install_dir
-            
-            # 设置进程的工作目录为游戏所在目录
-            startupinfo = subprocess.STARTUPINFO()
-            # 隐藏命令行窗口
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = 1  # SW_SHOWNORMAL
-            
-            # 设置环境变量，模拟资源管理器启动
-            env = os.environ.copy()
-            env['COMSPEC'] = os.environ.get('COMSPEC', '%SystemRoot%\\system32\\cmd.exe')
-            env['SYSTEMROOT'] = os.environ.get('SYSTEMROOT', '%SystemRoot%')
-            
-            # 注入代理环境变量（mitmproxy 代理模式）
-            proxy_mgr = app_state.proxy_mgr
-            if proxy_mgr:
-                proxy_env = proxy_mgr.get_proxy_env()
-                env.update(proxy_env)
-            
-            try:
-                # 使用 cmd.exe /c start 彻底脱离父子进程关系，同时保留环境变量的独立引入
-                cmd_line = f'cmd.exe /s /c "start "" /d "{game_dir}" "{game_path}"'
-                if start_args:
-                    cmd_line += f" {start_args}"
-                cmd_line += '"' 
-                
-                # 设置创建标志：DETACHED_PROCESS (0x00000008) 和 CREATE_NEW_PROCESS_GROUP (0x00000200)
-                creationflags = 0x00000008 | 0x00000200
-                
-                subprocess.Popen(
-                    cmd_line,
-                    cwd=game_dir,
-                    env=env,
-                    shell=False,
-                    startupinfo=startupinfo,
-                    creationflags=creationflags
-                )
-                self.logger.info(f"成功使用 cmd start 启动游戏: {game_path}")
-            except Exception as e:
-                safe_exception(self.logger, "cmd start启动失败，尝试使用ShellExecuteEx作为备选方案1")
-                try:
-                    # 备用方案1: ShellExecuteExW
-                    proxy_env = proxy_mgr.get_proxy_env() if proxy_mgr else {}
-                    original_env = {}
-                    try:
-                        for k, v in proxy_env.items():
-                            original_env[k] = os.environ.get(k)
-                            os.environ[k] = v
+            start_args = installation.startup_args
 
-                        import ctypes
-                        SEE_MASK_NOASYNC = 0x00000100
-                        
-                        class SHELLEXECUTEINFO(ctypes.Structure):
-                            _fields_ = [
-                                ("cbSize", ctypes.c_uint32),
-                                ("fMask", ctypes.c_ulong),
-                                ("hwnd", ctypes.c_void_p),
-                                ("lpVerb", ctypes.c_wchar_p),
-                                ("lpFile", ctypes.c_wchar_p),
-                                ("lpParameters", ctypes.c_wchar_p),
-                                ("lpDirectory", ctypes.c_wchar_p),
-                                ("nShow", ctypes.c_int),
-                                ("hInstApp", ctypes.c_void_p),
-                                ("lpIDList", ctypes.c_void_p),
-                                ("lpClass", ctypes.c_wchar_p),
-                                ("hkeyClass", ctypes.c_void_p),
-                                ("dwHotKey", ctypes.c_uint32),
-                                ("hIcon", ctypes.c_void_p),
-                                ("hProcess", ctypes.c_void_p)
-                            ]
-
-                        shell_info = SHELLEXECUTEINFO()
-                        shell_info.cbSize = ctypes.sizeof(shell_info)
-                        shell_info.fMask = SEE_MASK_NOASYNC
-                        shell_info.lpVerb = "open"
-                        shell_info.lpFile = game_path
-                        shell_info.lpDirectory = game_dir
-                        shell_info.lpParameters = start_args if start_args else None
-                        shell_info.nShow = 1  # SW_SHOWNORMAL
-                        
-                        shell32 = ctypes.WinDLL('shell32.dll')
-                        result = shell32.ShellExecuteExW(ctypes.byref(shell_info))
-                        
-                        if not result:
-                            raise Exception("ShellExecuteExW返回失败")
-                        self.logger.info(f"成功使用ShellExecuteEx启动游戏: {game_path}")
-                    finally:
-                        for k, v in original_env.items():
-                            if v is None:
-                                os.environ.pop(k, None)
-                            else:
-                                os.environ[k] = v
-                except Exception as e2:
-                    safe_exception(self.logger, "ShellExecuteEx启动失败，使用普通 Popen 备选启动2")
-                    cmd = [game_path] + (shlex.split(start_args) if start_args else [])
-                    subprocess.Popen(
-                        cmd,
-                        cwd=game_dir,
-                        env=env,
-                        shell=False,
-                        startupinfo=startupinfo,
-                        creationflags=0x00000008 | 0x00000200
-                    )
-        else:
+        proxy_mgr = app_state.proxy_mgr
+        if sys.platform != "win32":
             env = os.environ.copy()
-            proxy_mgr = app_state.proxy_mgr
             if proxy_mgr:
-                proxy_env = proxy_mgr.get_proxy_env()
-                env.update(proxy_env)
+                env.update(proxy_mgr.get_proxy_env())
             cmd = [game_path] + (shlex.split(start_args) if start_args else [])
             subprocess.Popen(cmd, env=env, shell=False)
+            return True
+
+        game_path = os.path.normpath(game_path)
+        game_dir = os.path.dirname(game_path)
+        if use_fever_bridge and not cloud_res.is_should_start_from_exe_path(short_game_id):
+            game_dir = self._root_from_executable(game_path, installation.startup_path) or game_dir
+
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 1  # SW_SHOWNORMAL
+
+        env = os.environ.copy()
+        env['COMSPEC'] = os.environ.get('COMSPEC', '%SystemRoot%\\system32\\cmd.exe')
+        env['SYSTEMROOT'] = os.environ.get('SYSTEMROOT', '%SystemRoot%')
+        if proxy_mgr:
+            env.update(proxy_mgr.get_proxy_env())
+        launch_options = {
+            "cwd": game_dir, "env": env, "shell": False, "startupinfo": startupinfo,
+            "creationflags": 0x00000008 | 0x00000200,  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        }
+
+        try:
+            cmd_line = f'cmd.exe /s /c "start "" /d "{game_dir}" "{game_path}"'
+            if start_args:
+                cmd_line += f" {start_args}"
+            subprocess.Popen(cmd_line + '"', **launch_options)
+        except Exception:
+            safe_exception(self.logger, "cmd start启动失败，尝试使用ShellExecuteEx作为备选方案1")
+        else:
+            self.logger.info(f"成功使用 cmd start 启动游戏: {game_path}")
+            return True
+
+        try:
+            proxy_env = proxy_mgr.get_proxy_env() if proxy_mgr else {}
+            original_env = {}
+            try:
+                for key, value in proxy_env.items():
+                    original_env[key] = os.environ.get(key)
+                    os.environ[key] = value
+
+                import ctypes
+                SEE_MASK_NOASYNC = 0x00000100
+
+                class SHELLEXECUTEINFO(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", ctypes.c_uint32),
+                        ("fMask", ctypes.c_ulong),
+                        ("hwnd", ctypes.c_void_p),
+                        ("lpVerb", ctypes.c_wchar_p),
+                        ("lpFile", ctypes.c_wchar_p),
+                        ("lpParameters", ctypes.c_wchar_p),
+                        ("lpDirectory", ctypes.c_wchar_p),
+                        ("nShow", ctypes.c_int),
+                        ("hInstApp", ctypes.c_void_p),
+                        ("lpIDList", ctypes.c_void_p),
+                        ("lpClass", ctypes.c_wchar_p),
+                        ("hkeyClass", ctypes.c_void_p),
+                        ("dwHotKey", ctypes.c_uint32),
+                        ("hIcon", ctypes.c_void_p),
+                        ("hProcess", ctypes.c_void_p)
+                    ]
+
+                shell_info = SHELLEXECUTEINFO()
+                shell_info.cbSize = ctypes.sizeof(shell_info)
+                shell_info.fMask = SEE_MASK_NOASYNC
+                shell_info.lpVerb = "open"
+                shell_info.lpFile = game_path
+                shell_info.lpDirectory = game_dir
+                shell_info.lpParameters = start_args if start_args else None
+                shell_info.nShow = 1  # SW_SHOWNORMAL
+
+                shell32 = ctypes.WinDLL('shell32.dll')
+                result = shell32.ShellExecuteExW(ctypes.byref(shell_info))
+
+                if not result:
+                    raise Exception("ShellExecuteExW返回失败")
+                self.logger.info(f"成功使用ShellExecuteEx启动游戏: {game_path}")
+            finally:
+                for key, value in original_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+        except Exception:
+            safe_exception(self.logger, "ShellExecuteEx启动失败，使用普通 Popen 备选启动2")
+        else:
+            return True
+
+        cmd = [game_path] + (shlex.split(start_args) if start_args else [])
+        subprocess.Popen(cmd, **launch_options)
         return True
 
     def _build_unique_shortcut_path(self, shortcut_dir: str, base_name: str) -> str:
@@ -1261,74 +1227,55 @@ class Game:
             return installation.distribution_id
 
         candidates = []
-        seen = set()
-        for index, option in enumerate(distribution_options or []):
-            dist_ids = self._normalize_distribution_ids([option])
-            if not dist_ids or dist_ids[0] in seen:
-                continue
-            dist_id = dist_ids[0]
-            seen.add(dist_id)
+        for dist_id in ordered_distribution_ids:
             file_info = file_info_by_distribution.get(dist_id)
             files = file_info.get("files", []) if isinstance(file_info, dict) else []
             if not isinstance(files, list):
                 continue
-            files = [item for item in files if isinstance(item, dict) and item.get("op", 1) == 1]
-            if not files:
-                continue
-            candidates.append({
-                "distribution_id": dist_id,
-                "files": files,
-                "index": index,
-            })
+            relevant_files = [item for item in files if isinstance(item, dict) and item.get("op", 1) == 1]
+            if relevant_files:
+                candidates.append((dist_id, relevant_files))
+
         launcher_data_by_distribution = launcher_data_by_distribution or {}
-        selected_distribution_id = ordered_distribution_ids[0]
+        first_distribution_id = ordered_distribution_ids[0]
+        selected_distribution_id = first_distribution_id
         mismatch_count = None
         hash_cache = {}
-        scored = []
-        total_files = sum(len(item["files"]) for item in candidates)
+        total_files = sum(len(files) for _, files in candidates)
         checked_files = 0
 
         def report_file():
             nonlocal checked_files
             checked_files += 1
-            if progress_callback:
-                progress_callback(checked_files, total_files)
+            progress_callback(checked_files, total_files)
 
         try:
-            for candidate in candidates:
-                launcher_data = launcher_data_by_distribution.get(
-                    candidate["distribution_id"], {}
-                )
+            for dist_id, files in candidates:
+                launcher_data = launcher_data_by_distribution.get(dist_id, {})
                 startup_path = str(
                     launcher_data.get("startup_path")
                     or installation.startup_path
                     or os.path.basename(installation.path)
                 )
                 _, mismatched = self.version_check(
-                    candidate["files"],
+                    files,
                     installation.installation_id,
                     hash_cache,
-                    root_path=self._root_from_executable(
-                        installation.path, startup_path
-                    ),
+                    root_path=self._root_from_executable(installation.path, startup_path),
                     progress_callback=report_file if progress_callback else None,
                     cancel_check=cancel_check,
                 )
-                scored.append((
-                    len(mismatched),
-                    candidate["index"],
-                    candidate["distribution_id"],
-                ))
+                # Strictly smaller scores win; equal scores keep cloud order.
+                count = len(mismatched)
+                if mismatch_count is None or count < mismatch_count:
+                    mismatch_count = count
+                    selected_distribution_id = dist_id
         except InterruptedError:
             raise
-        except OSError as exc:
+        except OSError:
             safe_exception(self.logger, "识别游戏分发时读取文件失败")
-            scored = []
-
-        if scored:
-            mismatch_count, _, selected_distribution_id = min(
-                scored, key=lambda item: (item[0], item[1])
-            )
+            selected_distribution_id = first_distribution_id
+            mismatch_count = None
 
         selected_file_info = file_info_by_distribution.get(
             selected_distribution_id, {}
