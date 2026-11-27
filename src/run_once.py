@@ -85,11 +85,17 @@ def _probe_proxy_mode(logger):
                 logger.warning("443 端口被占用，暂不迁移到兼容模式")
                 return
 
+            try:
+                genv.update_cached({
+                    "proxy_mode": "compat",
+                    "proxy_mode_compat_prompted_0420": True,
+                })
+            except OSError:
+                logger.warning("无法保存代理迁移设置，继续使用当前代理模式")
+                return
+
             # 清理上次崩溃可能残留的代理注册表项
             _cleanup_residual_proxy_registry(logger)
-
-            genv.set("proxy_mode", "compat", True)
-            genv.set("proxy_mode_compat_prompted_0420", True, True)
             logger.info("将已有的代理模式自动变更为兼容模式，即将重启...")
 
 
