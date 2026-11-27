@@ -16,6 +16,7 @@
  along with this program. If not, see <https://www.gnu.org/licenses/>.
 """
 import json
+import sys
 import time
 import base64
 import channelmgr
@@ -24,8 +25,12 @@ from cloudRes import CloudRes
 from envmgr import genv
 import app_state
 from logutil import setup_logger
-from channelHandler.miLogin.miChannel import MiLogin
 from channelHandler.channelUtils import getShortGameId
+
+if sys.platform == "win32":
+    from channelHandler.miLogin.miChannel_windows import MiLogin
+else:
+    from channelHandler.miLogin.miChannel_legacy import MiLogin
 
 
 class miChannel(channelmgr.channel):

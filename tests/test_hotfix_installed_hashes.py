@@ -30,6 +30,7 @@ class InstalledHashTests(unittest.TestCase):
         self.env.get.side_effect = lambda key, default=None: copy.deepcopy(self.data.get(key, default))
         self.env.get_from_file.side_effect = self.env.get.side_effect
         self.env.set.side_effect = self.save
+        self.env.update_cached.side_effect = lambda values: self.data.update(copy.deepcopy(values))
         self.stack.enter_context(patch.object(hotfixmgr, 'genv', self.env))
         self.stack.enter_context(patch.object(hotfixmgr, '_is_macos_pyinstaller', return_value=False))
         self.resolve = self.stack.enter_context(patch.object(hotfixmgr, '_resolve_module_target_path',
@@ -140,12 +141,14 @@ class InstalledHashTests(unittest.TestCase):
 
     def test_stale_true_probe_cannot_hide_write_failure(self):
         self.data['hotfix_probed'] = True
-        self.env.set.side_effect = OSError('fixture read-only configuration')
+        self.env.set.side_effect = None
+        self.env.set.return_value = False
         self.assertFalse(hotfixmgr.probe_cache_write_once())
         self.env.set.assert_called_once_with('hotfix_probed', True, True, require_saved=True)
 
     def test_hash_persistence_failure_does_not_report_application_success(self):
-        self.env.set.side_effect = OSError('fixture read-only configuration')
+        self.env.set.side_effect = None
+        self.env.set.return_value = False
         ok, error = hotfixmgr._apply_one(self.item, require_hashes=True)
         self.assertFalse(ok)
         self.assertIn('保存热更新状态失败', error)

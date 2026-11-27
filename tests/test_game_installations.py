@@ -32,7 +32,9 @@ def _genv_set(key, value, cached=False):
     _genv_store[key] = value
 
 
-envmgr.genv = types.SimpleNamespace(get=_genv_get, set=_genv_set)
+envmgr.genv = types.SimpleNamespace(
+    get=_genv_get, set=_genv_set, update_cached=_genv_store.update,
+)
 sys.modules["envmgr"] = envmgr
 
 logutil = types.ModuleType("logutil")
@@ -69,7 +71,6 @@ xxhash.xxh64 = lambda: None
 sys.modules["xxhash"] = xxhash
 
 from gamemgr import Game, GameInstallation, GameManager
-from active_games import ActiveGames
 
 
 class GameInstallationModelTests(unittest.TestCase):
@@ -79,7 +80,8 @@ class GameInstallationModelTests(unittest.TestCase):
         manager._save_lock = threading.RLock()
         manager._save_games = lambda: None
         manager.logger = getattr(game, "logger", None)
-        manager._active_games = ActiveGames(logging.getLogger('game-installation-tests'))
+        manager._sdk_processes = {}
+        manager._sdk_process_lock = threading.Lock()
         return manager
 
     def _shortcut_game(self):
@@ -156,9 +158,9 @@ class GameInstallationModelTests(unittest.TestCase):
     def test_cold_and_warm_launch_logs_use_the_selected_installation(self):
         tree = ast.parse((REPO_ROOT / "src/main.py").read_text(encoding="utf-8"))
         setup = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "setup_network_proxy")
-        cold = next(n for n in setup.body if isinstance(n, ast.If)
-                    and ast.unparse(n.test) == "proxy_mode == 'compat'"
-                    and any(isinstance(x, ast.If) and "uri_action" in ast.unparse(x.test) for x in n.body))
+        shared_start = next(n for n in setup.body if isinstance(n, ast.FunctionDef) and n.name == "_start_uri_game")
+        launch = next(n for n in setup.body if isinstance(n, ast.If)
+                      and ast.unparse(n.test) == "uri_action == 'start' and uri_game_id")
         warm = next(n for n in setup.body if isinstance(n, ast.FunctionDef) and n.name == "_on_uri_signal")
         game = self._shortcut_game()
         cache = {"cn:73": {"display_name": "第五人格"},
@@ -182,8 +184,8 @@ class GameInstallationModelTests(unittest.TestCase):
                                  "uri_installation_id": iid, "auto_games": [], "logger": logger,
                                  "game_helper": types.SimpleNamespace(get_game=lambda gid: game),
                                  "user_notice": lambda *a, **k: None, "genv": envmgr.genv}
-                        node = warm if mode == "signal" else cold
-                        exec(compile(ast.Module(body=[node], type_ignores=[]), "launch-test", "exec"), scope)
+                        node = warm if mode == "signal" else launch
+                        exec(compile(ast.Module(body=[shared_start, node], type_ignores=[]), "launch-test", "exec"), scope)
                         if mode == "signal":
                             scope["_on_uri_signal"]("start", "h55", iid)
                         prefix = "通过信号启动游戏: " if mode == "signal" else "通过快捷方式启动游戏: "
@@ -202,13 +204,13 @@ class GameInstallationModelTests(unittest.TestCase):
         manager.note_sdk_process('h55', 123)
         manager.note_sdk_process('fixture-g-h55', 124)
         self.assertTrue(game.is_running)
-        with mock.patch('active_games.running_process_ids', return_value={124}):
+        with mock.patch('gamemgr._running_process_ids', return_value={124}):
             rows = manager.list_games()
         self.assertTrue(rows[0]['is_running'])
         self.assertEqual(len(rows[0]['installations']), 2)
         self.assertNotIn('is_running', game.to_dict())
         self.assertTrue(all('is_running' not in item for item in game.to_installation_state()['installations'].values()))
-        with mock.patch('active_games.running_process_ids', return_value=set()):
+        with mock.patch('gamemgr._running_process_ids', return_value=set()):
             manager.update_running_state()
         self.assertFalse(game.is_running)
 

@@ -521,31 +521,22 @@ def download_file(filename):
         #删除压缩包
         os.remove(filename)
     return True
+
 def ensure_binary():
-    r"""
-    确保二进制文件存在：binaries\downloadIPC.exe,binaries\OrbitSDK.dll
-    """
-    #https://gitee.com/opguess/idv-login/raw/main/binaries/aria2c.exe
-    #https://gitee.com/opguess/idv-login/raw/main/binaries/downloadIPC.exe
-    #https://gitee.com/opguess/idv-login/raw/main/binaries/OrbitSDK.dll
-    #直接下载的工作目录
-    #fallback:https://cdn.jsdelivr.net/gh/KKeygen/idv-login@main/
+    """Ensure the download core and its companion files are available."""
     print("正在检查并下载依赖...")
-    if os.path.exists("downloadIPC.exe") and os.path.exists("OrbitSDK.dll") and os.path.exists("aria2c.exe"):
-        return True
-    if not os.path.exists("downloadIPC.exe"):
-        res=download_file("downloadIPC.zip")
-        if not res:
-            return False
-    if not os.path.exists("OrbitSDK.dll"):
-        res=download_file("OrbitSDK.dll")
-        if not res:
-            return False
-    if not os.path.exists("aria2c.exe"):
-        res=download_file("aria2c.exe")
-        if not res:
+    dependencies = (
+        ("downloadIPC.exe", "downloadIPC.zip"),
+        ("OrbitSDK.dll", "OrbitSDK.dll"),
+        ("aria2c.exe", "aria2c.exe"),
+    )
+    for installed_name, download_name in dependencies:
+        if os.path.exists(installed_name):
+            continue
+        if not download_file(download_name):
             return False
     return True
+
 
 def _parse_args():
     parser = argparse.ArgumentParser()

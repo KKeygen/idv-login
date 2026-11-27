@@ -758,11 +758,10 @@ def handle_download_task(task_file_path):
     setup_work_directory()
     from logutil import setup_logger, safe_exception
     logger_local = setup_logger()
-    task_data = None
     try:
         with open(task_file_path, "r", encoding="utf-8") as f:
             task_data = json.load(f)
-    except Exception as e:
+    except Exception:
         safe_exception(logger_local, '读取下载任务文件失败')
         return False
     download_root = task_data.get("download_root", "")
@@ -777,38 +776,34 @@ def handle_download_task(task_file_path):
     progress_file = task_data.get("progress_file", "")
     control_file = task_data.get("control_file", "")
     start_args = task_data.get("start_args", "")
+    is_update = task_data.get("is_update", False)
     result = False
     post_update_actions = None
-    ui_server_process = None
     ui_server_thread = None
-    stop_event = None
-    download_process = None
-    use_download_ipc = bool(content_id) and distribution_id != -1 and download_root
-    core_error = {"value": ""}
+    core_error = ""
     _write_download_status(progress_file, {
         "status": "pending",
         "phase": "preparing",
         "progress_percent": 0,
     })
     try:
-        if use_download_ipc:
-            from download_binary import ensure_binary, allocate_ipc_ports
-            import download_binary
-            import threading
-            if not ensure_binary():
-                result = False
-            else:
+        if content_id and distribution_id != -1 and download_root:
+            from download_binary import allocate_ipc_ports, ensure_binary, main_ui_server
+
+            if ensure_binary():
                 heartbeat_port, progress_port = allocate_ipc_ports()
                 stop_event = threading.Event()
-                topic_bytes = str(content_id).encode("utf-8") if content_id else b""
+                topic_bytes = str(content_id).encode("utf-8")
 
                 def publish_progress(event):
+                    nonlocal core_error
                     if event.get("success") is False:
-                        core_error["value"] = str(event.get("error") or "下载失败")
+                        core_error = str(event.get("error") or "下载失败")
                     _write_download_status(progress_file, event)
 
                 ui_server_thread = threading.Thread(
-                    target=download_binary.main_ui_server,
+                    target=main_ui_server,
+                    daemon=True,
                     kwargs={
                         "topic": topic_bytes,
                         "sub_port": heartbeat_port,
@@ -818,15 +813,12 @@ def handle_download_task(task_file_path):
                         "control_file": control_file,
                     }
                 )
-                ui_server_thread.daemon = True
                 ui_server_thread.start()
-                #等待几秒钟，确保UI服务器启动完成
-                import time
+                # 给 IPC 监听留出原有的启动时间。
                 time.sleep(5)
-                encoded_path = _encode_download_path(download_root)
                 if repair_list_path:
                     scene = 3
-                elif task_data.get("is_update"):
+                elif is_update:
                     scene = 2
                 else:
                     scene = 1
@@ -844,16 +836,13 @@ def handle_download_task(task_file_path):
                     f"--contentid:{content_id}",
                     f"--subport:{heartbeat_port}",
                     f"--pubport:{progress_port}",
-                    f"--path:{encoded_path}",
+                    f"--path:{_encode_download_path(download_root)}",
                 ]
                 if repair_list_path:
                     download_cmd.append(f"--repairListPath:{_encode_repair_list_path(repair_list_path)}")
                 if version_code:
                     download_cmd.append(f"--targetVersion:{version_code}")
-                if original_version:
-                    download_cmd.append(f"--originVersion:{original_version}")
-                else:
-                    download_cmd.append(f"--originVersion:")
+                download_cmd.append(f"--originVersion:{original_version or ''}")
                 core_log_path = _download_core_log_path(game_id, installation_id)
                 _write_download_status(progress_file, {
                     "core_log_path": core_log_path,
@@ -873,93 +862,83 @@ def handle_download_task(task_file_path):
                         creationflags=creationflags,
                     )
                     exit_code = download_process.wait()
-                result = exit_code == 0 and not core_error["value"]
+                result = exit_code == 0 and not core_error
+
         if result and game_id and version_code:
             from gamemgr import GameManager
+
             game_mgr = GameManager()
             game = game_mgr.get_game(game_id)
             installation = game.get_installation(installation_id) if game else None
-            if game and installation:
-                if installation.distribution_id not in (-1, distribution_id):
-                    logger_local.error(
-                        "下载结果与安装记录分发不匹配，拒绝回写: "
-                        f"installation={installation.distribution_id}, task={distribution_id}"
-                    )
-                    result = False
-                elif os.path.normcase(
-                    os.path.realpath(game.get_root_path(installation_id))
-                ) != os.path.normcase(os.path.realpath(download_root)):
-                    logger_local.error("下载期间安装根目录已变更，拒绝执行收尾和回写")
-                    core_error["value"] = "安装根目录已变更，请重新发起更新"
-                    result = False
-                else:
-                    if task_data.get("is_update", False):
-                        from install_actions import apply_post_update_actions
-                        post_update_actions = apply_post_update_actions(
-                            download_root, task_data.get("install_script"), logger_local
-                        )
-                    installation.installed_version = version_code
-                    installation.distribution_id = distribution_id
-                    installation.content_id = content_id
-                    installation.source = "download"
-                    installation.startup_args = start_args or installation.startup_args
-                    installation.updated_at = int(time.time())
-                    if not installation.write_marker(game_id):
-                        logger_local.warning("下载完成，但写入安装标记文件失败")
-                    game.should_auto_start = True
-                    game_mgr._save_games()
-                    print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")
-                    game.create_tool_launch_shortcut(
-                        installation.path, installation.installation_id
-                    )
-            else:
+            result = False
+            if installation is None:
                 logger_local.error(
                     f"下载完成但安装记录不存在，拒绝覆盖其他安装: {installation_id}"
                 )
-                result = False
+            elif installation.distribution_id not in (-1, distribution_id):
+                logger_local.error(
+                    "下载结果与安装记录分发不匹配，拒绝回写: "
+                    f"installation={installation.distribution_id}, task={distribution_id}"
+                )
+            elif os.path.normcase(
+                os.path.realpath(game.get_root_path(installation_id))
+            ) != os.path.normcase(os.path.realpath(download_root)):
+                logger_local.error("下载期间安装根目录已变更，拒绝执行收尾和回写")
+                core_error = "安装根目录已变更，请重新发起更新"
+            else:
+                if is_update:
+                    from install_actions import apply_post_update_actions
 
-                
-        if ui_server_process:
-            try:
-                ui_server_process.terminate()
-                ui_server_process.wait(timeout=5)
-            except Exception:
-                pass
-        if stop_event:
+                    post_update_actions = apply_post_update_actions(
+                        download_root, task_data.get("install_script"), logger_local
+                    )
+                installation.installed_version = version_code
+                installation.distribution_id = distribution_id
+                installation.content_id = content_id
+                installation.source = "download"
+                installation.startup_args = start_args or installation.startup_args
+                installation.updated_at = int(time.time())
+                if not installation.write_marker(game_id):
+                    logger_local.warning("下载完成，但写入安装标记文件失败")
+                game.should_auto_start = True
+                game_mgr._save_games()
+                print(f"下载任务完成，准备创建游戏启动快捷方式，启动参数: {start_args}")
+                game.create_tool_launch_shortcut(
+                    installation.path, installation.installation_id
+                )
+                result = True
+
+        if ui_server_thread is not None:
             stop_event.set()
-        if ui_server_thread:
             ui_server_thread.join(timeout=2)
-        try:
-            os.remove(task_file_path)
-        except Exception as e:
-            safe_exception(logger_local, '删除下载任务文件失败')
-        if control_file:
+        for path, kind, allow_missing in (
+            (task_file_path, "任务", False),
+            (control_file, "控制", True),
+        ):
+            if not path:
+                continue
             try:
-                os.remove(control_file)
-            except FileNotFoundError:
-                pass
-            except Exception as e:
-                safe_exception(logger_local, '删除下载控制文件失败')
-        try:#尝试用explorer打开下载完成的目录
+                os.remove(path)
+            except Exception as error:
+                if not (allow_missing and isinstance(error, FileNotFoundError)):
+                    safe_exception(logger_local, f"删除下载{kind}文件失败")
+        try:
             if download_root and os.path.exists(download_root):
-                #使用正斜杠避免路径问题
                 download_root = os.path.abspath(download_root)
-                
+                opener = {"darwin": "open", "linux": "xdg-open"}.get(sys.platform)
                 if sys.platform == "win32" and not result:
                     logger_local.info(f"下载任务失败，请检查日志。如需重新下载，请重新发起下载任务。下载目录: {download_root}")
-                    subprocess.Popen(["explorer", download_root])
-                elif sys.platform == "darwin":
-                    subprocess.Popen(["open", download_root])
-                elif sys.platform == "linux":
-                    subprocess.Popen(["xdg-open", download_root])
-        except Exception as e:
+                    opener = "explorer"
+                if opener:
+                    subprocess.Popen([opener, download_root])
+        except Exception:
             safe_exception(logger_local, '打开下载目录失败')
         _write_download_status(progress_file, {
             "status": "done",
             "success": bool(result),
             "phase": "finished" if result else "failed",
             "progress_percent": 100 if result else 0,
-            "error": "" if result else (core_error["value"] or "下载核心异常退出"),
+            "error": "" if result else (core_error or "下载核心异常退出"),
             "game_id": game_id,
             "installation_id": installation_id,
             "distribution_id": distribution_id,
@@ -976,9 +955,6 @@ def handle_download_task(task_file_path):
             "phase": "failed",
             "error": str(e),
         })
-    finally:
-        from gamemgr import Game
-        game=Game(game_id=game_id,path=os.path.join(download_root,"dummy.exe"))
 
 def cleanup_expired_certificates():
     """清理过期的证书文件"""
@@ -1099,68 +1075,39 @@ def setup_network_proxy(proxy_port):
     global m_proxy, _dns_policy_mgr, _dns_server
 
     from gamemgr import GameManager
-    from channelHandler.channelUtils import getShortGameId
     from cloudRes import CloudRes
 
     game_helper = GameManager()
     app_state.channels_helper.game_helper = game_helper
-    ui_logger = logger
+    login_style = 2 if sys.platform == "darwin" else 1
+    qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
+    allowed_login_keys = frozenset({
+        "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
+        "app_type", "app_mode", "_cloud_extra_base64", "sc",
+    })
 
-    # Platform-specific defaults
-    if sys.platform == "darwin":
-        cv = "a5.10.0"
-        login_style = 2
-        app_channel_default = "netease.wyzymnqsd_cps_dev"
-        use_login_mapping_always = False
-
-        qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
-
-        _CREATE_LOGIN_WHITELIST = frozenset({
-            "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
-            "app_type", "app_mode", "_cloud_extra_base64", "sc",
-        })
-
-        def _create_login_query_hook(query, game_id):
-            config = CloudRes().get_qrcode_login_config(game_id)
-            if config:
-                for k, v in config.items():
-                    if k in _CREATE_LOGIN_WHITELIST:
-                        query[k] = str(v)
-    else:
-        cv = "a5.10.0"
-        login_style = 1
-        app_channel_default = "netease.wyzymnqsd_cps_dev"
-        use_login_mapping_always = False
-
-        qrcode_app_channel_provider = CloudRes().get_qrcode_app_channel
-
-        _CREATE_LOGIN_WHITELIST = frozenset({
-            "app_channel", "qrcode_channel_type", "gv", "gvn", "cv", "sv",
-            "app_type", "app_mode", "_cloud_extra_base64", "sc",
-        })
-
-        def _create_login_query_hook(query, game_id):
-            config = CloudRes().get_qrcode_login_config(game_id)
-            if config:
-                for k, v in config.items():
-                    if k in _CREATE_LOGIN_WHITELIST:
-                        query[k] = str(v)
+    def _create_login_query_hook(query, game_id):
+        config = CloudRes().get_qrcode_login_config(game_id)
+        if config:
+            for key, value in config.items():
+                if key in allowed_login_keys:
+                    query[key] = str(value)
 
     # Create the UI manager for the Qt window
     from uimgr import UIManager
-    ui_mgr = UIManager(game_helper=game_helper, ui_logger=ui_logger)
+    ui_mgr = UIManager(game_helper=game_helper, ui_logger=logger)
     app_state.ui_mgr = ui_mgr
     # Create the mitmproxy addon
     from mitm_addon import IDVLoginAddon
     addon = IDVLoginAddon(
-        cv=cv,
+        cv="a5.10.0",
         login_style=login_style,
         game_helper=game_helper,
         logger=logger,
-        app_channel_default=app_channel_default,
+        app_channel_default="netease.wyzymnqsd_cps_dev",
         qrcode_app_channel_provider=qrcode_app_channel_provider,
         create_login_query_hook=_create_login_query_hook,
-        use_login_mapping_always=use_login_mapping_always,
+        use_login_mapping_always=False,
         ui_manager=ui_mgr,
     )
 
@@ -1204,18 +1151,23 @@ def setup_network_proxy(proxy_port):
             clear_custom_dns()
             # 回退到常规模式（不持久化，下次启动仍尝试兼容模式）
             proxy_mode = "process" if auto_games else "global"
-            from mitm_proxy import MitmProxyManager
-            proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
-            proxy_mgr.start()
-            m_proxy = proxy_mgr
-            app_state.proxy_mgr = proxy_mgr
-    else:
-        # 常规代理模式（global 或 process）
+    if proxy_mode != "compat":
+        # 常规代理模式（global、process 或兼容模式回退）
         from mitm_proxy import MitmProxyManager
         proxy_mgr = MitmProxyManager(addon=addon, port=proxy_port, mode="regular", debug=bool(CLI_ARGS.debug))
         proxy_mgr.start()
         m_proxy = proxy_mgr
         app_state.proxy_mgr = proxy_mgr
+
+    shortcut_start = uri_action == "start" and uri_game_id
+    if shortcut_start:
+        shortcut_game = game_helper.get_game(uri_game_id)
+        launch_plan = [(shortcut_game, uri_installation_id)] if shortcut_game else []
+    else:
+        launch_plan = []
+        for game in auto_games:
+            installation = game.get_auto_start_installation()
+            launch_plan.append((game, installation.installation_id if installation else ""))
 
     if sys.platform == "win32":
         from pathlib import Path
@@ -1229,7 +1181,13 @@ def setup_network_proxy(proxy_port):
             app_state.channels_helper.db_sync = db_sync
             # DNS overrides must exist before any automatic game launch.
             try:
-                db_sync.refresh_startup()
+                # Each valid planned launch already syncs through Game.start.
+                launch_games = []
+                for game, installation_id in launch_plan:
+                    installation = game.get_installation(installation_id)
+                    if installation and installation.path and os.path.exists(installation.path):
+                        launch_games.append(game.game_id)
+                db_sync.refresh_startup(exclude_games=launch_games)
             except Exception as error:
                 from mpay_db_sync import log_failure
                 log_failure(logger, "游戏内账号列表启动更新未完成；保留退出清理和原登录功能", error)
@@ -1239,6 +1197,16 @@ def setup_network_proxy(proxy_port):
     # Register the URI scheme so QR code redirects open our Qt window
     from uri_scheme import register_uri_scheme, start_uri_listener
     register_uri_scheme()
+
+    def _start_uri_game(game_id, installation_id, *, from_signal=False):
+        game = game_helper.get_game(game_id)
+        if not game:
+            missing = "信号指定的游戏未找到" if from_signal else "未找到游戏"
+            logger.warning(f"{missing}: {game_id}")
+            return
+        via = "信号" if from_signal else "快捷方式"
+        logger.info(f"通过{via}启动游戏: {game.get_installation_display_name(installation_id)}")
+        game.start(installation_id)
 
     # Start the URI listener so that new --uri invocations signal this instance
     def _on_uri_signal(
@@ -1258,12 +1226,7 @@ def setup_network_proxy(proxy_port):
             )
             ui_mgr.open_for_game(target_game_id, "accounts")
         elif action == "start" and game_id:
-            game = game_helper.get_game(game_id)
-            if game:
-                logger.info(f"通过信号启动游戏: {game.get_installation_display_name(installation_id)}")
-                game.start(installation_id)
-            else:
-                logger.warning(f"信号指定的游戏未找到: {game_id}")
+            _start_uri_game(game_id, installation_id, from_signal=True)
         else:
             ui_mgr.open_for_game(game_id, initial_view)
 
@@ -1281,64 +1244,33 @@ def setup_network_proxy(proxy_port):
 
     from logutil import user_notice
 
-    # 根据模式执行不同的启动逻辑
     if proxy_mode == "compat":
-        # 兼容模式：无需设置代理环境变量，DNS 劫持会自动生效
         user_notice("提示：当前使用兼容模式，通过 DNS 劫持拦截游戏流量。")
-        if uri_action == "start" and uri_game_id:
-            game = game_helper.get_game(uri_game_id)
-            if game:
-                logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
-                game.start(uri_installation_id)
-            else:
-                logger.warning(f"未找到游戏: {uri_game_id}")
-            genv.set("URI_STARTUP_ACTION", "")
-            genv.set("URI_STARTUP_GAME_ID", "")
-            genv.set("URI_STARTUP_INSTALLATION_ID", "")
-            genv.set("URI_STARTUP_VIEW", "")
-        elif auto_games:
-            names = ", ".join(g.name for g in auto_games)
-            logger.info(f"同时启动自启游戏: {names}")
-            for g in auto_games:
-                installation = g.get_auto_start_installation()
-                g.start(installation.installation_id if installation else "")
-    elif uri_action == "start" and uri_game_id:
-        # 最高优先级：快捷方式启动（进程级代理），仅启动指定游戏
-        game = game_helper.get_game(uri_game_id)
-        if game:
-            logger.info(f"通过快捷方式启动游戏: {game.get_installation_display_name(uri_installation_id)}")
-            game.start(uri_installation_id)
-        else:
-            logger.warning(f"未找到游戏: {uri_game_id}")
-        # 清理启动参数
-        genv.set("URI_STARTUP_ACTION", "")
-        genv.set("URI_STARTUP_GAME_ID", "")
-        genv.set("URI_STARTUP_INSTALLATION_ID", "")
-        genv.set("URI_STARTUP_VIEW", "")
-    elif proxy_mode == "global":
-        # 次优先级：全局模式 → 设置系统/用户级代理
-        _set_proxy(app_state.proxy_mgr.port)
-        user_notice("提示：当前使用全局代理模式，会处理本机所有网络连接。")
-        if auto_games:
-            # 全局模式下也启动自启游戏（它们会继承代理环境变量）
-            names = ", ".join(g.name for g in auto_games)
-            logger.info(f"同时启动自启游戏: {names}")
-            for g in auto_games:
-                installation = g.get_auto_start_installation()
-                g.start(installation.installation_id if installation else "")
-        else:
-            user_notice("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
-    elif auto_games:
-        # 第三优先级：进程模式但有自启游戏 → 启动自启游戏（进程级代理）
-        names = ", ".join(g.name for g in auto_games)
-        logger.info(f"进程代理模式，启动自启游戏: {names}")
-        for g in auto_games:
-            installation = g.get_auto_start_installation()
-            g.start(installation.installation_id if installation else "")
+
+    # 快捷方式启动优先，只启动所选安装，不为它设置全局代理。
+    if uri_action == "start" and uri_game_id:
+        _start_uri_game(uri_game_id, uri_installation_id)
+        for key in ("URI_STARTUP_ACTION", "URI_STARTUP_GAME_ID",
+                    "URI_STARTUP_INSTALLATION_ID", "URI_STARTUP_VIEW"):
+            genv.set(key, "")
     else:
-        # 进程代理模式且没有自启游戏
-        user_notice("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
-        user_notice("如需设置全局代理，可在管理页面切换为全局模式。")
+        if proxy_mode == "global":
+            _set_proxy(app_state.proxy_mgr.port)
+            user_notice("提示：当前使用全局代理模式，会处理本机所有网络连接。")
+
+        if auto_games:
+            names = ", ".join(game.name for game in auto_games)
+            if proxy_mode in ("compat", "global"):
+                logger.info(f"同时启动自启游戏: {names}")
+            else:
+                logger.info(f"进程代理模式，启动自启游戏: {names}")
+            for game, installation_id in launch_plan:
+                game.start(installation_id)
+        elif proxy_mode == "global":
+            user_notice("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
+        elif proxy_mode != "compat":
+            user_notice("当前使用进程代理模式，请通过桌面快捷方式启动游戏。")
+            user_notice("如需设置全局代理，可在管理页面切换为全局模式。")
 
     if proxy_mode == "compat":
         logger.info("兼容模式已就绪！DNS 劫持和反向代理已启动。")

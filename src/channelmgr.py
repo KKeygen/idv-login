@@ -68,6 +68,55 @@ def legacy_record_source(data: dict) -> str:
     raise ValueError("旧账号记录无法确定手动或扫码来源")
 
 
+def _manual_adapter(name):
+    """Return the adapter and UUID prefix for a manual channel entry."""
+    # Channel adapters import this module and load their own platform dependencies.
+    match name:
+        case "xiaomi_app":
+            from channelHandler.miChannelHandler import miChannel
+            return miChannel, ""
+        case "huawei":
+            from channelHandler.huaChannelHandler import huaweiChannel
+            return huaweiChannel, ""
+        case "nearme_vivo":
+            from channelHandler.vivoChannelHandler import vivoChannel
+            return vivoChannel, ""
+        case "myapp":
+            from channelHandler.wechatChannelHandler import wechatChannel
+            return wechatChannel, "wx-"
+        case "myapp_qq":
+            from channelHandler.qqChannelHandler import qqChannel
+            return qqChannel, "qq-"
+        case "oppo":
+            from channelHandler.oppoChannelHandler import oppoChannel
+            return oppoChannel, "phone-"
+        case "bilibili_sdk":
+            from channelHandler.bilibiliChannelHandler import bilibiliChannel
+            return bilibiliChannel, "bili-"
+        case "honor_sdk":
+            from channelHandler.honorChannelHandler import honorChannel
+            return honorChannel, "honor-"
+        case "uc_platform":
+            from channelHandler.ucChannelHandler import ucChannel
+            return ucChannel, "uc-"
+        case "4399com":
+            from channelHandler.m4399ChannelHandler import m4399Channel
+            return m4399Channel, "4399-"
+        case "baidu":
+            from channelHandler.baiduChannelHandler import baiduChannel
+            return baiduChannel, "baidu-"
+        case "lenovo_open":
+            from channelHandler.lenovoChannelHandler import lenovoChannel
+            return lenovoChannel, "lenovo-"
+        case "guopan":
+            from channelHandler.guopanChannelHandler import guopanChannel
+            return guopanChannel, "guopan-"
+        case "360_assistant":
+            from channelHandler.qihooChannelHandler import qihooChannel
+            return qihooChannel, "360-"
+    return None, ""
+
+
 class channel:
     def __init__(
         self,
@@ -457,21 +506,15 @@ class ChannelManager:
         self._credential_thread = None
         self._credential_lock = threading.RLock()
         self._scan_relogins = set()
-        try:
-            genv.discard_cached('native_channel_accounts', 'mpay_db_helpers',
-                                'mpay_db_bindings', 'mpay_db_writes')
-        except (OSError, ValueError, TypeError) as error:
-            self.logger.error('旧账号映射配置无法读取 [{}]；保留原配置文件', type(error).__name__)
+        genv.discard_cached('native_channel_accounts', 'mpay_db_helpers',
+                            'mpay_db_bindings', 'mpay_db_writes')
         self.channels = []
         self.db_sync = None
         self._pending_login_channel = None  # 异步登录期间保持对 channel 的引用，防止 GC
-        from channelHandler.miChannelHandler import miChannel
-        from channelHandler.huaChannelHandler import huaweiChannel
-        from channelHandler.vivoChannelHandler import vivoChannel
-        from channelHandler.wechatChannelHandler import wechatChannel
-        from channelHandler.oppoChannelHandler import oppoChannel
-        from channelHandler.bilibiliChannelHandler import bilibiliChannel
-
+        # Preserve the startup check for required adapters. A missing
+        # dependency must not look like a corrupt row that can be skipped.
+        for name in ("xiaomi_app", "huawei", "nearme_vivo", "myapp", "oppo", "bilibili_sdk"):
+            _manual_adapter(name)
         path = genv.get("FP_CHANNEL_RECORD")
         if genv.get('CHANNEL_RECORDS_LOAD_FAILED', False):
             return  # A failed migration must not create an empty replacement file.
@@ -487,74 +530,29 @@ class ChannelManager:
                                   os.path.basename(path), exception_summary(error))
                 return
             for index, item in enumerate(data, 1):
-                before = len(self.channels)
                 try:
-                    source = legacy_record_source(item)
-                    if source == "scan":
+                    if legacy_record_source(item) == "scan":
                         self.channels.append(channel.from_dict(item))
                         continue
                     channel_name = item["login_info"]["login_channel"]
-                    if channel_name == "xiaomi_app":
-
-                        tmpChannel: miChannel = miChannel.from_dict(item)
-                        # if tmpChannel.is_token_valid():
-                        self.channels.append(tmpChannel)
-                        # else:
-                        #    self.logger.error(f"渠道服登录信息失效: {tmpChannel.name}")
-                    elif channel_name == "huawei":
-                        tmpChannel: huaweiChannel = huaweiChannel.from_dict(item)
-                        # if tmpChannel.is_token_valid():
-                        self.channels.append(tmpChannel)
-                        # else:
-                        #    self.logger.error(f"渠道服登录信息失效: {tmpChannel.name}")
-                    elif channel_name =="nearme_vivo":
-                        tmpChannel: vivoChannel = vivoChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "myapp" and item["uuid"].removeprefix("idv-").startswith("wx-"):
-                        tmpChannel:wechatChannel=wechatChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "myapp" and item["uuid"].removeprefix("idv-").startswith("qq-"):
-                        from channelHandler.qqChannelHandler import qqChannel
-                        tmpChannel: qqChannel = qqChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "oppo" and item["uuid"].removeprefix("idv-").startswith("phone-"):
-                        tmpChannel: oppoChannel = oppoChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "bilibili_sdk" and item["uuid"].removeprefix("idv-").startswith("bili-"):
-                        tmpChannel: bilibiliChannel = bilibiliChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "honor_sdk" and item["uuid"].removeprefix("idv-").startswith("honor-"):
-                        from channelHandler.honorChannelHandler import honorChannel
-                        tmpChannel: honorChannel = honorChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "uc_platform" and item["uuid"].removeprefix("idv-").startswith("uc-"):
-                        from channelHandler.ucChannelHandler import ucChannel
-                        tmpChannel: ucChannel = ucChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "4399com" and item["uuid"].removeprefix("idv-").startswith("4399-"):
-                        from channelHandler.m4399ChannelHandler import m4399Channel
-                        tmpChannel: m4399Channel = m4399Channel.from_dict(item)
-                        self.channels.append(tmpChannel)
-                    elif channel_name == "baidu" and item["uuid"].removeprefix("idv-").startswith("baidu-"):
-                        from channelHandler.baiduChannelHandler import baiduChannel
-                        self.channels.append(baiduChannel.from_dict(item))
-                    elif channel_name == "lenovo_open":
-                        from channelHandler.lenovoChannelHandler import lenovoChannel
-                        self.channels.append(lenovoChannel.from_dict(item))
-                    elif channel_name == "guopan" and item["uuid"].removeprefix("idv-").startswith("guopan-"):
-                        from channelHandler.guopanChannelHandler import guopanChannel
-                        self.channels.append(guopanChannel.from_dict(item))
-                    elif channel_name == "360_assistant" and item["uuid"].removeprefix("idv-").startswith("360-"):
-                        from channelHandler.qihooChannelHandler import qihooChannel
-                        tmpChannel: qihooChannel = qihooChannel.from_dict(item)
-                        self.channels.append(tmpChannel)
+                    # QQ and WeChat persist the same login_channel. The UUID
+                    # distinguishes them; "myapp_qq" is only an import choice.
+                    if channel_name == "myapp_qq":
+                        adapter, prefix = None, ""
                     else:
+                        adapter_name = channel_name
+                        if channel_name == "myapp" and item["uuid"].removeprefix("idv-").startswith("qq-"):
+                            adapter_name = "myapp_qq"
+                        adapter, prefix = _manual_adapter(adapter_name)
+                    # Old Lenovo records without the import prefix still load.
+                    if adapter is None or (prefix and channel_name != "lenovo_open"
+                            and not item["uuid"].removeprefix("idv-").startswith(prefix)):
                         self.logger.error(f"跳过第 {index} 条不支持的渠道账号记录：不支持的手动渠道账号类型")
                         continue
-                    # 适配器构造完成后统一恢复公共缓存和旧记录标识。
-                    self.channels[-1].restore_common(item)
+                    restored = adapter.from_dict(item)
+                    restored.restore_common(item)
+                    self.channels.append(restored)
                 except Exception as error:
-                    del self.channels[before:]
                     self.logger.error('file={} record_index={} stage=records.restore 加载失败；跳过此条，继续其余账号\n{}',
                                       os.path.basename(path), index, exception_summary(error))
         else:
@@ -564,20 +562,17 @@ class ChannelManager:
     def save_records(self):
         if genv.get('CHANNEL_RECORDS_LOAD_FAILED', False):
             raise ValueError('现有账号文件未能完整读取；保留原文件，修复后再保存')
-        for i in self.channels:
-            i.before_save()
-        oldData = [channel.__dict__.copy() for channel in self.channels]
-        data = oldData.copy()
-        for channel_data in data:
-            to_be_deleted = []
-            for key in channel_data.keys():
-                mini_data = {"data": channel_data[key]}
+        for record in self.channels:
+            record.before_save()
+        # Persist adapter fields as before, excluding live objects such as Qt
+        # dialogs and HTTP sessions. Never remove fields from the live record.
+        data = [vars(record).copy() for record in self.channels]
+        for saved in data:
+            for field in tuple(saved):
                 try:
-                    json.dumps(mini_data)
-                except:
-                    to_be_deleted.append(key)
-            for key in to_be_deleted:
-                del channel_data[key]
+                    json.dumps(saved[field])
+                except Exception:
+                    del saved[field]
         from secure_write import write_json_restricted
         write_json_restricted(genv.get("FP_CHANNEL_RECORD"), data, atomic_required=True)
         self.logger.debug("渠道服登录信息已更新")
@@ -603,32 +598,31 @@ class ChannelManager:
     def _prepare_game_credential(self, record, game_id, *, force=False):
         from prefetch_context import prefetch_scope
         game = getShortGameId(game_id)
+        issue_error = None
+        packet = None
         try:
-            # Use the live adapter: rebuilding it discards still-valid upstream
-            # state (Huawei accessToken / vivo selected subaccount).
+            # Rebuilding the adapter discards still-valid upstream state
+            # (Huawei accessToken / vivo selected subaccount).
             with prefetch_scope():
                 packet = record.request_unisdk(game, interactive=False, force=force)
             if not isinstance(packet, dict):
                 raise ValueError('field=game_credential: issuance failed')
         except Exception as error:
-            if self._credential_stop.is_set() or record not in self.channels:
-                return None
-            record.expire_unisdk(game)
-            try:
-                self.save_records()
-            except Exception as save_error:
-                record.report_login_failure(game, 'credentials.save', '过期状态未能保存', save_error)
-            record.report_login_failure(game, 'credentials.issue',
-                '账号登录已过期，请重新登录。',
-                error)
-            return None
+            issue_error = error
+
         if self._credential_stop.is_set() or record not in self.channels:
             return None
+        if issue_error is not None:
+            record.expire_unisdk(game)
         try:
             self.save_records()
         except Exception as error:
-            record.report_login_failure(game, 'credentials.save',
-                '游戏凭据已获取，但未能保存，请重试。', error)
+            message = ('过期状态未能保存' if issue_error is not None
+                       else '游戏凭据已获取，但未能保存，请重试。')
+            record.report_login_failure(game, 'credentials.save', message, error)
+            packet = None
+        if issue_error is not None:
+            record.report_login_failure(game, 'credentials.issue', '账号登录已过期，请重新登录。', issue_error)
             return None
         return packet
 
@@ -781,70 +775,19 @@ class ChannelManager:
             "src_client_country_code": "CN",
         }
         try:
-            if channle_name == "xiaomi_app":
-                from channelHandler.miChannelHandler import miChannel
-
-                tmp_channel: miChannel = miChannel(tmpData,game_id=game_id)
-            elif channle_name == "huawei":
-                from channelHandler.huaChannelHandler import huaweiChannel
-
-                tmp_channel: huaweiChannel = huaweiChannel(tmpData,game_id=game_id)
-            elif channle_name == "nearme_vivo":
-                from channelHandler.vivoChannelHandler import vivoChannel
-
-                tmp_channel: vivoChannel = vivoChannel(tmpData,game_id=game_id)
-            elif channle_name == "myapp":
-                from channelHandler.wechatChannelHandler import wechatChannel
-                tmp_channel: wechatChannel = wechatChannel(tmpData,game_id=game_id)
-                tmp_channel.uuid=f"wx-{tmp_channel.uuid}"
-            elif channle_name == "myapp_qq":
-                from channelHandler.qqChannelHandler import qqChannel
-                tmpData["login_channel"] = "myapp"
-                tmp_channel: qqChannel = qqChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"qq-{tmp_channel.uuid}"
-            elif channle_name == "oppo":
-                from channelHandler.oppoChannelHandler import oppoChannel
-                tmp_channel: oppoChannel = oppoChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid=f"phone-{tmp_channel.uuid}"
-            elif channle_name == "bilibili_sdk":
-                from channelHandler.bilibiliChannelHandler import bilibiliChannel
-                tmp_channel: bilibiliChannel = bilibiliChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"bili-{tmp_channel.uuid}"
-            elif channle_name == "honor_sdk":
-                from channelHandler.honorChannelHandler import honorChannel
-                tmp_channel: honorChannel = honorChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"honor-{tmp_channel.uuid}"
-            elif channle_name == "uc_platform":
-                from channelHandler.ucChannelHandler import ucChannel
-                tmp_channel: ucChannel = ucChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"uc-{tmp_channel.uuid}"
-            elif channle_name == "4399com":
-                from channelHandler.m4399ChannelHandler import m4399Channel
-                tmp_channel: m4399Channel = m4399Channel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"4399-{tmp_channel.uuid}"
-            elif channle_name == "baidu":
-                from channelHandler.baiduChannelHandler import baiduChannel
-                tmp_channel = baiduChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"baidu-{tmp_channel.uuid}"
-            elif channle_name == "lenovo_open":
-                from channelHandler.lenovoChannelHandler import lenovoChannel
-                tmp_channel = lenovoChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"lenovo-{tmp_channel.uuid}"
-            elif channle_name == "guopan":
-                from channelHandler.guopanChannelHandler import guopanChannel
-                tmp_channel = guopanChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"guopan-{tmp_channel.uuid}"
-            elif channle_name == "360_assistant":
-                from channelHandler.qihooChannelHandler import qihooChannel
-                tmp_channel: qihooChannel = qihooChannel(tmpData, game_id=game_id)
-                tmp_channel.uuid = f"360-{tmp_channel.uuid}"
-            else:
+            adapter, prefix = _manual_adapter(channle_name)
+            if adapter is None:
                 self.logger.error('game={} channel={} stage=import.create 不支持的渠道', game_id, channle_name)
                 if on_error:
                     on_error('此渠道暂不支持手动导入，请通过游戏原有登录入口登录；若此渠道出现在可选列表中，请反馈游戏名、渠道名和工具版本')
                 if on_complete:
                     on_complete(False)
                 return False
+            if channle_name == "myapp_qq":
+                tmpData["login_channel"] = "myapp"
+            tmp_channel = adapter(tmpData, game_id=game_id)
+            if prefix:
+                tmp_channel.uuid = prefix + tmp_channel.uuid
         except Exception as error:
             self.logger.error('game={} channel={} stage=import.create 创建渠道登录实例失败\n{}',
                               game_id, channle_name, exception_summary(error))
@@ -917,65 +860,40 @@ class ChannelManager:
         if on_complete is not None:
             self._pending_login_channel = tmp_channel
             try:
+                options = {}
+                worker_log = None
                 if channle_name == "myapp":
-                    # 微信登录不使用浏览器，在后台线程运行避免阻塞主线程
-                    import threading
+                    worker_log = ("微信登录", "开始 request_user_login")
+                elif channle_name in ("bilibili_sdk", "huawei"):
+                    if not login_method or login_method == "qr":
+                        options["login_method"] = "qr"
+                        if channle_name == "bilibili_sdk":
+                            worker_log = ("B站登录", "开始 QR 扫码登录")
+                        else:
+                            worker_log = ("华为登录", "开始扫码登录")
+                    else:
+                        options["login_method"] = "web"
+                elif channle_name == "honor_sdk":
+                    # The adapter already runs QR polling in a worker and
+                    # dispatches the OAuth fallback to the main thread.
+                    options["login_method"] = login_method or "qr"
+
+                if worker_log is None:
+                    tmp_channel.request_user_login(on_complete=_login_finished, **options)
+                else:
                     import app_state
-                    def _run_sync():
+
+                    def request_login_in_background():
+                        label, start_message = worker_log
                         try:
-                            self.logger.info("微信登录：开始 request_user_login")
-                            success = tmp_channel.request_user_login()
-                            self.logger.info(f"微信登录：request_user_login success={success is True}")
+                            self.logger.info(f"{label}：{start_message}")
+                            success = tmp_channel.request_user_login(**options)
+                            self.logger.info(f"{label}：request_user_login success={success is True}")
                         except Exception as error:
                             success = error
-                        # 必须在主线程收尾，因为后续可能涉及 Qt 操作
                         app_state.run_on_main_thread(lambda: _login_finished(success))
-                    threading.Thread(target=_run_sync, daemon=True).start()
-                elif channle_name == "bilibili_sdk":
-                    # B站登录：QR 模式在后台线程阻塞轮询，Web 模式走 Qt 主线程
-                    bili_method = login_method if login_method else "qr"
-                    if bili_method == "qr":
-                        import threading
-                        import app_state
-                        def _run_bili_qr():
-                            try:
-                                self.logger.info("B站登录：开始 QR 扫码登录")
-                                success = tmp_channel.request_user_login(login_method="qr")
-                                self.logger.info(f"B站登录：request_user_login success={success is True}")
-                            except Exception as error:
-                                success = error
-                            app_state.run_on_main_thread(lambda: _login_finished(success))
-                        threading.Thread(target=_run_bili_qr, daemon=True).start()
-                    else:
-                        tmp_channel.request_user_login(
-                            on_complete=_login_finished, login_method="web"
-                        )
-                elif channle_name == "huawei":
-                    # 华为登录：QR 扫码在后台线程阻塞轮询，Web 浏览器走 Qt 主线程
-                    hua_method = login_method if login_method else "qr"
-                    if hua_method == "qr":
-                        import threading
-                        import app_state
-                        def _run_huawei_qr():
-                            try:
-                                self.logger.info("华为登录：开始扫码登录")
-                                success = tmp_channel.request_user_login(login_method="qr")
-                                self.logger.info(f"华为登录：request_user_login success={success is True}")
-                            except Exception as error:
-                                success = error
-                            app_state.run_on_main_thread(lambda: _login_finished(success))
-                        threading.Thread(target=_run_huawei_qr, daemon=True).start()
-                    else:
-                        tmp_channel.request_user_login(
-                            on_complete=_login_finished, login_method="web"
-                        )
-                elif channle_name == "honor_sdk":
-                    # 荣耀复用通用二维码 UI；账号模块自行在线程中轮询，OAuth 回退回主线程。
-                    tmp_channel.request_user_login(
-                        on_complete=_login_finished, login_method=login_method or "qr"
-                    )
-                else:
-                    tmp_channel.request_user_login(on_complete=_login_finished)
+
+                    threading.Thread(target=request_login_in_background, daemon=True).start()
             except Exception as error:
                 _finish_import(error)
             return
@@ -1407,7 +1325,69 @@ class ChannelManager:
             channel_data = error
         return _do_confirm(channel_data)
 
+    def refresh_saved_account(self, uuid: str | channel, game_id: str, on_complete=None, on_error=None):
+        """Refresh a saved account and project it without starting a QR login."""
+        record = self.query_channel(uuid) if isinstance(uuid, str) else uuid
+        if record is None:
+            genv.set("CHANNEL_ACCOUNT_SELECTED", "")
+            if on_complete:
+                on_complete(None)
+            return None
+
+        def _ready(packet):
+            if isinstance(packet, Exception):
+                self._credential_failure(record, game_id, 'refresh.credentials', packet, on_error)
+                result = False
+            elif packet is False:
+                self._credential_failure(record, game_id, 'refresh.credentials', None, on_error)
+                result = False
+            elif packet is None:
+                result = None
+            else:
+                # Save the tool account before touching any native game list:
+                # a native write can fail or cover only some installations.
+                stage = 'refresh.save'
+                message = '登录已刷新，但账号未保存，请检查账号配置文件及目录权限后重试'
+                try:
+                    self.save_records()
+                    if self.db_sync:
+                        stage = 'refresh.database'
+                        message = '登录已刷新，但游戏账号库未全部更新，请关闭游戏后重试'
+                        self.db_sync.refresh_record(record, game_id)
+                except Exception as error:
+                    record.report_login_failure(game_id, stage, message, error, notify=True, on_error=on_error)
+                    result = False
+                else:
+                    result = True
+            if not result:
+                genv.set("CHANNEL_ACCOUNT_SELECTED", "")
+            if on_complete:
+                on_complete(result)
+            return result
+
+        try:
+            if on_complete is not None and record.record_source == "manual":
+                record.request_unisdk(game_id, on_complete=_ready)
+                return None
+            try:
+                packet = record.request_unisdk(game_id)
+            except Exception as error:
+                packet = error
+            return _ready(packet)
+        except Exception as error:
+            # The original local switch route uses this failure status for
+            # dispatch failures, including errors before the callback runs.
+            record.report_login_failure(game_id, 'switch.scan',
+                '游戏扫码请求失败，请重新扫码；仍失败时反馈日志', error, notify=True, on_error=on_error)
+            genv.set("CHANNEL_ACCOUNT_SELECTED", "")
+            if on_complete:
+                on_complete(False)
+            return False
+
     def simulate_scan(self, uuid: str | channel, scanner_uuid: str, game_id: str, on_complete=None, on_error=None):
+        if scanner_uuid == "Kinich":
+            # Keep the old direct refresh marker compatible.
+            return self.refresh_saved_account(uuid, game_id, on_complete=on_complete, on_error=on_error)
         # A hosted MPay callback can supply credentials without a tool record.
         records = self.channels if isinstance(uuid, str) else (uuid,)
         for channel in records:
@@ -1423,41 +1403,6 @@ class ChannelManager:
                     "cv": "a1.5.0",
                 }
                 try:
-                    if scanner_uuid=="Kinich":
-                        def _ready(channel_data):
-                            if isinstance(channel_data, Exception):
-                                self._credential_failure(channel, game_id, 'refresh.credentials', channel_data, on_error)
-                                result = False
-                            else:
-                                result = channel_data if channel_data is None or channel_data is False else True
-                                if result is False:
-                                    self._credential_failure(channel, game_id, 'refresh.credentials', None, on_error)
-                            if result:
-                                saved = False
-                                try:
-                                    self.save_records()
-                                    saved = True
-                                    if self.db_sync:
-                                        self.db_sync.refresh_record(channel, game_id)
-                                except Exception as error:
-                                    channel.report_login_failure(game_id, 'refresh.database' if saved else 'refresh.save',
-                                        '登录已刷新，但游戏账号库未全部更新，请关闭游戏后重试' if saved else
-                                        '登录已刷新，但账号未保存，请检查账号配置文件及目录权限后重试', error, notify=True, on_error=on_error)
-                                    result = False
-                            if not result:
-                                genv.set("CHANNEL_ACCOUNT_SELECTED", "")
-                            if on_complete:
-                                on_complete(result)
-                            return result
-
-                        if on_complete is not None and channel.record_source == "manual":
-                            channel.request_unisdk(game_id, on_complete=_ready)
-                            return None
-                        try:
-                            result = channel.request_unisdk(game_id)
-                        except Exception as error:
-                            result = error
-                        return _ready(result)
                     r = requests.get(
                         "https://service.mkey.163.com/mpay/api/qrcode/scan",
                         params=data,

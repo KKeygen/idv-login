@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -24,7 +25,11 @@ from cloudRes import CloudRes
 from envmgr import genv
 from logutil import setup_logger, safe_exception
 from channelHandler.channelUtils import buildSAUTH, getShortGameId, postSignedData
-from channelHandler.m4399Login.m4399Channel import M4399Login
+
+if sys.platform == "win32":
+    from channelHandler.m4399Login.m4399Channel_windows import M4399Login
+else:
+    from channelHandler.m4399Login.m4399Channel_legacy import M4399Login
 
 
 class m4399Channel(channelmgr.channel):

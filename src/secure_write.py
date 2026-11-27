@@ -93,8 +93,8 @@ def write_file_restricted(filepath: str, data: bytes):
             pass
 
 
-def write_json_restricted(filepath: str, obj, *, atomic_required=False):
-    """Write JSON; strict callers never fall back to truncating the live file."""
+def write_json_restricted(filepath: str, obj, *, atomic_required=False, verify_fallback=False):
+    """Write JSON, optionally checking a direct write before reporting success."""
     text = json.dumps(obj, ensure_ascii=False)
     data = text.encode("utf-8")
     lock = _get_lock(filepath)
@@ -106,8 +106,19 @@ def write_json_restricted(filepath: str, obj, *, atomic_required=False):
     except Exception:
         if atomic_required:
             raise
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False)
+        file = open(filepath, "w", encoding="utf-8")
+        try:
+            with file:
+                file.write(text)
+        finally:
+            if verify_fallback:
+                try:
+                    with open(filepath, "r", encoding="utf-8") as file:
+                        json.load(file)
+                except ValueError as error:
+                    with open(filepath, "w", encoding="utf-8") as file:
+                        file.write("{}")
+                    raise OSError("直接写入的配置无法解析，已清空") from error
     finally:
         if acquired:
             lock.release()
