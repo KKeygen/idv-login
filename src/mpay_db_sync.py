@@ -352,12 +352,14 @@ class MpayDBSync:
 
     def refresh_startup(self):
         from account_list_policy import AccountListPolicy
-        self.reconcile_game_changes()
+        failed_games = self.reconcile_game_changes()
         selected = AccountListPolicy(self.manager).select()
         for game in self.game_ids():
-            if game not in selected:
+            if game not in selected and game not in failed_games:
                 self._clear_projection(game)
         for game, records in selected.items():
+            if game in failed_games:
+                continue
             try:
                 self._prepare_selected({game: records})
                 self._project_game(game, records)
@@ -460,7 +462,8 @@ class MpayDBSync:
         from account_list_policy import AccountListPolicy
         game = getShortGameId(game_id)
         policy = AccountListPolicy(self.manager)
-        self.reconcile_game_changes()
+        if game in self.reconcile_game_changes():
+            return
         selected = policy.select([game])
         if game not in selected:
             self._clear_projection(game)
@@ -632,8 +635,9 @@ class MpayDBSync:
         attempt.start()
 
     def reconcile_game_changes(self):
+        """Reconcile native deletions and return games with unsaved deletions."""
         with self.lock:
-            missing = set()
+            missing = {}
             for path in {path for path, _, _ in self.projected}:
                 if not path.exists():
                     continue
@@ -642,7 +646,8 @@ class MpayDBSync:
                     rows = {self._key(item) for item in response['accounts']}
                     blocked = {self._key(error) for error in response['errors']
                                if error['reason'] == 'duplicate_sdk_identity'}
-                    for _, key, _ in tuple(item for item in self.projected if item[0] == path):
+                    for projection in tuple(item for item in self.projected if item[0] == path):
+                        _, key, _ = projection
                         if self._menu_role(key) or key in blocked or key in self._unremembered_accounts:
                             continue
                         for record in self.manager.channels:
@@ -653,16 +658,29 @@ class MpayDBSync:
                                 self._record_error(record, key[0], error, stage='reconcile.identity')
                                 continue
                             if key not in rows:
-                                missing.add(record.uuid)
-                                self.projected = {(p, k, c) for p, k, c in self.projected if (p, k) != (path, key)}
+                                missing.setdefault(record.uuid, set()).add(projection)
+                                # The row is already absent; delete() only needs
+                                # to remove it from any other tracked databases.
+                                self.projected.discard(projection)
                 except Exception as error:
                     log_failure(self.logger, f'[mpay-db] path={path.name} stage=reconcile.read 无法检查游戏删除', error)
-            for uuid in missing:
+            retries = {}
+            for uuid, observations in missing.items():
                 if self.manager.query_channel(uuid) is not None:
+                    before_delete = self.projected.copy()
                     try:
                         self.manager.delete(uuid)
                     except Exception as error:
+                        # Other database rows may already be gone even if save
+                        # fails. Keep those observations for the next refresh too.
+                        retries[uuid] = observations | (before_delete - self.projected)
                         log_failure(self.logger, f'[mpay-db] account={uuid} stage=reconcile.delete 单个账号删除同步失败，继续其余账号', error)
+            failed_games = set()
+            for uuid, observations in retries.items():
+                if self.manager.query_channel(uuid) is not None:
+                    self.projected.update(observations)
+                    failed_games.update(key[0] for _, key, _ in observations)
+            return failed_games
 
     def related_uuids(self, uuid):
         source = self.manager.query_channel(uuid)
