@@ -72,7 +72,7 @@ Name: "{autodesktop}\IDV Login(传统模式)"; Filename: "{app}\点我启动工�
 Name: "{autodesktop}\IDV Login"; Filename: "{app}\点我启动工具.bat"; Parameters: "--open-ui"; Tasks: desktopiconmgr; IconFilename: "{app}\icon.ico"; AfterInstall: MarkShortcutRunAsAdmin(ExpandConstant('{autodesktop}\IDV Login.lnk'))
 
 [Run]
-Filename: "{app}\点我启动工具.bat"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent; Check: CanLaunchApplication
+Filename: "{app}\点我启动工具.bat"; Parameters: "--open-ui"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent; Check: CanLaunchApplication
 Filename: "https://kkeygenn.feishu.cn/wiki/J0V4wbm3Bi5LOVkEN7wcvwSEn0e"; Description: "查看教程"; Flags: postinstall shellexec runasoriginaluser
 
 [Code]
