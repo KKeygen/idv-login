@@ -49,6 +49,8 @@ class LocalRequestHandler:
     _pending_imports = {}  # {task_id: {"status": "pending"|"done", "success": bool}}
     _reset_lock = threading.Lock()
     _reset_started = False
+    _hotfix_task_lock = threading.Lock()
+    _hotfix_task_id = ""
 
     def __init__(self, *, game_helper, logger):
         self.game_helper = game_helper
@@ -153,6 +155,8 @@ class LocalRequestHandler:
             "/_idv-login/index": self._serve_index,
             "/_idv-login/export-logs": self._export_logs,
             "/_idv-login/restart": self._restart_tool,
+            "/_idv-login/hotfix-status": self._hotfix_status,
+            "/_idv-login/hotfix-apply": self._hotfix_apply,
             "/_idv-login/diagnostics/terminal": self._diagnostics_terminal,
             "/_idv-login/debug-mode": self._debug_mode,
             "/_idv-login/diagnostics/reset-state": self._diagnostics_reset_state,
@@ -2254,12 +2258,60 @@ class LocalRequestHandler:
             result['restarting'] = False
         return self._json_response(200, result)
 
+    def _hotfix_status(self, args, body, method):
+        if method != "GET":
+            return self._json_response(405, {"success": False, "error": "Method not allowed"})
+        from hotfixmgr import manual_hotfix_status
+
+        return self._json_response(200, manual_hotfix_status(app_state.cloud_res))
+
+    def _hotfix_apply(self, args, body, method):
+        if method != "POST":
+            return self._json_response(405, {"success": False, "error": "Method not allowed"})
+        from hotfixmgr import apply_pending_hotfixes, manual_hotfix_unavailable, restart_self
+        from nativebridge import NativeTaskRegistry
+
+        ids = body.get("ids") if isinstance(body, dict) else None
+        if (not isinstance(ids, list) or not ids
+                or any(not isinstance(hid, str) or not 1 <= len(hid) <= 256 for hid in ids)):
+            return self._json_response(400, {"success": False, "error": "请选择至少一项热更新"})
+        ids = list(dict.fromkeys(ids))
+        cloudres = app_state.cloud_res
+        reason = manual_hotfix_unavailable(cloudres)
+        if reason:
+            return self._json_response(409, {"success": False, "error": reason})
+        with LocalRequestHandler._hotfix_task_lock:
+            running = NativeTaskRegistry.get(LocalRequestHandler._hotfix_task_id)
+            if running and (running["status"] == "pending" or running.get("restarting")):
+                if running.get("ids") == ids:
+                    return self._json_response(202, {"success": True, "task_id": running["task_id"]})
+                return self._json_response(409, {"success": False, "error": "正在安装热更新"})
+            task_id = NativeTaskRegistry.create("hotfix-apply")
+            NativeTaskRegistry.update(task_id, ids=ids)
+            LocalRequestHandler._hotfix_task_id = task_id
+
+        def apply():
+            try:
+                result = apply_pending_hotfixes(cloudres, ids)
+                NativeTaskRegistry.finish(task_id, restarting=result["success"], **result)
+                if result["success"]:
+                    # Let an existing browser poll read the result before relaunch.
+                    time.sleep(0.8)
+                    restart_self("安装已选热更新", finish_hotfix=True)
+            except Exception:
+                safe_exception(self.logger, "手动热更新任务失败")
+                NativeTaskRegistry.finish(task_id, success=False, restarting=False,
+                                          error="无法安装热更新，请查看本地日志")
+
+        threading.Thread(target=apply, name="hotfix-apply", daemon=True).start()
+        return self._json_response(202, {"success": True, "task_id": task_id})
+
     def _restart_tool(self, args, body, method):
         if method != 'POST':
             return self._json_response(405, {'success': False, 'error': 'Method not allowed'})
         import hotfixmgr
         # Reuse the existing cleanup + relaunch procedure after the reply is sent.
-        restart = threading.Timer(0.5, hotfixmgr.restart_self, args=('应用账号切换设置',))
+        restart = threading.Timer(0.5, hotfixmgr.restart_self, args=('应用待生效的更改',))
         restart.daemon = True
         restart.start()
         return self._json_response(202, {'success': True, 'restarting': True})
