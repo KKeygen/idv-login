@@ -2,14 +2,26 @@
 from urllib.parse import parse_qs, urlsplit
 
 
-def valid_redirect(url, expected_state, redirect_uri):
+def valid_redirect(url, expected_state, redirect_uri, *, logger=None, stage="browser"):
     parsed, expected = urlsplit(url), urlsplit(redirect_uri)
+    if parsed.scheme != expected.scheme:
+        return False
+    matches_host = parsed.netloc == expected.netloc
+    # 浏览器可能把空路径写成一个根斜杠，其他路径仍按原样比较。
+    matches_path = (parsed.path or "/") == (expected.path or "/")
     params = parse_qs(parsed.query, keep_blank_values=True)
     codes = params.get("code", [])
-    return (bool(expected_state) and parsed.scheme == expected.scheme
-            and parsed.netloc == expected.netloc and parsed.path == expected.path
-            and len(codes) == 1 and bool(codes[0]) and "error" not in params
-            and params.get("state") == [expected_state])
+    states = params.get("state", [])
+    has_code = len(codes) == 1 and bool(codes[0])
+    matches_state = bool(expected_state) and states == [expected_state]
+    has_error = "error" in params
+    valid = matches_host and matches_path and has_code and matches_state and not has_error
+    if logger is not None:
+        logger.debug("荣耀 OAuth 回调校验 stage={} host_ok={} path_ok={} root_slash={} "
+                     "code_count={} code_ok={} state_count={} state_ok={} error_present={} accepted={}",
+                     stage, matches_host, matches_path, parsed.path == "/", len(codes), has_code,
+                     len(states), matches_state, has_error, valid)
+    return valid
 
 
 class HonorSessionError(ValueError):

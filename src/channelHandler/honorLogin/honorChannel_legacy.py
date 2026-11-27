@@ -53,7 +53,7 @@ class HonorBrowser(WebBrowser):
         self.profile.installUrlSchemeHandler(b"honorid", self.scheme_handler)
 
     def verify(self, url):
-        return valid_redirect(url, self.expected_state, HONOR_REDIRECT_URI)
+        return valid_redirect(url, self.expected_state, HONOR_REDIRECT_URI, logger=self.logger, stage="browser")
 
     def parseReslt(self, url):
         self.result = url
@@ -146,7 +146,8 @@ class HonorLogin(HonorAccountLogin):
 
     def _handle_redirect(self, url: str):
         """从 honorid://redirect_url?code=XXX 提取 code，直接传给 Game Center login。"""
-        if not valid_redirect(url, getattr(self, "_expected_state", None), HONOR_REDIRECT_URI):
+        if not valid_redirect(url, getattr(self, "_expected_state", None), HONOR_REDIRECT_URI,
+                              logger=self.logger, stage="exchange"):
             self.logger.warning("荣耀 OAuth 回调校验失败")
             return False
         self._expected_state = None
