@@ -38,6 +38,7 @@ from channelHandler.channelUtils import getShortGameId, cmp_game_id
 
 _FEVER_GAMES_CACHE_KEY = "_fever_games_registry_cache_v1"
 _FEVER_GAMES_CACHE_LOCK = threading.RLock()
+_FEVER_APP_STATE_DIRECTORY = Path(".dlstorage") / "downloading"
 
 
 # D3D_FEATURE_LEVEL
@@ -1350,7 +1351,7 @@ class Game:
         if not root or not content_id:
             return ""
         versions = set()
-        for state in (Path(root) / ".dlstorage" / "downloading").glob("*_app.state"):
+        for state in (Path(root) / _FEVER_APP_STATE_DIRECTORY).glob("*_app.state"):
             try:
                 with state.open(encoding="utf-8-sig") as handle:
                     version = json.load(handle).get("installed_contents", {}).get(str(content_id), {}).get("Version")

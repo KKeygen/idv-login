@@ -3,7 +3,7 @@ import os
 import sys
 import threading
 import time
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 
 from nativebridge import NativeTaskRegistry
 from logutil import safe_exception
@@ -51,7 +51,7 @@ def start_import(manager, *, source, game_id="", path="", distribution_id=-1, af
 
 def _plan_download(game, path, requested_id, records, *, from_fever):
     from channelHandler.channelUtils import cmp_game_id
-    from gamemgr import GameInstallation
+    from gamemgr import GameInstallation, _FEVER_APP_STATE_DIRECTORY
 
     if not path.lower().endswith(".exe"):
         return None, "已登记所选路径，只有游戏 EXE 可以验证和修复", None
@@ -109,6 +109,7 @@ def _plan_download(game, path, requested_id, records, *, from_fever):
 
     dist_id = selected["distribution_id"] if selected else requested_id
     marker = None
+    state_startup = ""
     if selected is None:
         saved = GameInstallation.read_marker(path)
         if (saved and cmp_game_id(str(saved.get("game_id") or ""), game.game_id)
@@ -118,6 +119,27 @@ def _plan_download(game, path, requested_id, records, *, from_fever):
             if matches_content(target(marked_dist), saved["content_id"]):
                 dist_id = marked_dist
                 marker = saved
+
+        # Migrated Fever installs may keep their APP state without a registry
+        # record. Use it to identify the distribution, not to certify the files.
+        state_roots = {_path_key(root) for root in Path(path).parents
+                       if (root / _FEVER_APP_STATE_DIRECTORY).is_dir()}
+        if state_roots:
+            matches = []
+            for candidate_id in distributions:
+                startup = matching_startup(launcher_for(candidate_id).get("startup_path"))
+                if not startup or _path_key(startup[1]) not in state_roots:
+                    continue
+                info = target(candidate_id)
+                if info and game.read_fever_version(startup[1], info["app_content_id"]):
+                    matches.append((candidate_id, startup[0]))
+                    if len(matches) > 1:
+                        break
+            if len(matches) == 1:
+                state_distribution, state_startup = matches[0]
+                if state_distribution != dist_id:
+                    marker = None
+                dist_id = state_distribution
 
         if dist_id == -1:
             candidates = distributions
@@ -131,7 +153,7 @@ def _plan_download(game, path, requested_id, records, *, from_fever):
     if not info:
         return None, "无法确定该安装的可下载分发，只登记了路径", None
     launcher = launcher_for(dist_id)
-    startup_paths = [(selected or {}).get("startup_path"), (marker or {}).get("startup_path"),
+    startup_paths = [state_startup, (selected or {}).get("startup_path"), (marker or {}).get("startup_path"),
                      launcher.get("startup_path")]
     install_root = (selected or {}).get("install_root")
     if install_root:
