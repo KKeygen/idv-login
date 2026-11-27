@@ -2,6 +2,8 @@ import copy
 import os
 import sys
 import threading
+import time
+from pathlib import PureWindowsPath
 
 from nativebridge import NativeTaskRegistry
 from logutil import safe_exception
@@ -14,28 +16,126 @@ def _path_key(path):
     return os.path.normcase(os.path.normpath(str(path or "")))
 
 
-def start_import(manager, *, source, game_id="", path="", distribution_id=-1, after_import=None):
+def start_import(manager, *, source, game_id="", path="", distribution_id=-1, after_import=None, wait=False):
     if source not in ("manual", "fever", "startup"):
         raise ValueError("不支持的导入来源")
     if source != "startup" and not game_id:
         raise ValueError("缺少游戏信息")
+    extensions = (".exe", ".lnk") if wait else (".exe",)
     if source == "manual" and (
-        not os.path.isfile(path) or not str(path).lower().endswith(".exe")
+        not os.path.isfile(path) or not str(path).lower().endswith(extensions)
     ):
         raise ValueError("请选择现有的游戏 EXE 文件")
     resolved_id = manager.find_matching_game_id(game_id) or game_id
-    key = "startup" if source == "startup" else f"{resolved_id}:{_path_key(path)}:{distribution_id}"
+    distribution_id = int(distribution_id)
+    if wait:
+        # Older callers of the explicit download mode receive the result
+        # directly. They do not get a public import task to poll.
+        task_id = NativeTaskRegistry.create("game-import-sync")
+        _run_import(manager, task_id, source, resolved_id, path, distribution_id, after_import)
+        return NativeTaskRegistry.get(task_id)
+
+    key = ("startup" if source == "startup" else
+           f"{source}:{resolved_id}:{_path_key(path)}:{distribution_id}:{after_import is not None}")
     task_id, created = NativeTaskRegistry.create_import(
-        key, source=source, game_id=resolved_id, path=path,
-        distribution_id=int(distribution_id),
+        key, source=source, game_id=resolved_id, path=path, distribution_id=distribution_id,
     )
     if created:
         threading.Thread(
             target=_run_import,
-            args=(manager, task_id, source, resolved_id, path, int(distribution_id), after_import),
+            args=(manager, task_id, source, resolved_id, path, distribution_id, after_import),
             name=f"game-import-{task_id[:8]}", daemon=True,
         ).start()
     return NativeTaskRegistry.get(task_id)
+
+
+def _plan_download(game, path, requested_id, records, *, from_fever):
+    from channelHandler.channelUtils import cmp_game_id
+    from gamemgr import GameInstallation
+
+    if not path.lower().endswith(".exe"):
+        return None
+    distributions = list(dict.fromkeys(game.get_distributions()))
+    file_info = {}
+
+    def target(dist_id, known_content=None):
+        if dist_id not in distributions:
+            return None
+        if dist_id not in file_info:
+            file_info[dist_id] = game.get_file_distribution_info(dist_id) or {}
+        info = file_info[dist_id]
+        content_id = info.get("app_content_id")
+        if not content_id or not info.get("version_code"):
+            return None
+        if known_content not in (None, "") and str(known_content) != str(content_id):
+            return None
+        return info
+
+    same_path = [r for r in records if cmp_game_id(r.get("game_id"), game.game_id)
+                 and _path_key(r.get("path")) == _path_key(path)]
+    official = {}
+    for record in same_path:
+        dist = record.get("distribution_id", -1)
+        if target(dist, record.get("content_id")):
+            root = record.get("install_root")
+            if root:
+                try:
+                    startup = PureWindowsPath(os.path.relpath(path, root))
+                except ValueError:
+                    continue
+                if not startup.parts or ".." in startup.parts:
+                    continue
+                record = {**record, "startup_path": str(startup)}
+            official[dist] = record
+
+    # A unique authoritative record at this very path takes precedence over
+    # the distribution initially selected on the game page.
+    selected = next(iter(official.values())) if len(official) == 1 else official.get(requested_id)
+    if from_fever and selected is None:
+        return None
+
+    dist_id = selected["distribution_id"] if selected else requested_id
+    marker = None
+    if selected is None:
+        marker = GameInstallation.read_marker(path)
+        if (marker and cmp_game_id(str(marker.get("game_id") or ""), game.game_id)
+                and str(marker.get("installed_version") or marker.get("version") or "").strip()
+                and marker.get("content_id")):
+            marked_dist = game._coerce_distribution_id(marker.get("distribution_id"))
+            if target(marked_dist, marker["content_id"]):
+                dist_id = marked_dist
+            else:
+                marker = None
+        else:
+            marker = None
+        if dist_id == -1 and len(distributions) == 1:
+            dist_id = distributions[0]
+
+    info = target(dist_id)
+    if not info:
+        return None
+    launcher = game.get_launcher_data_for_distribution(dist_id) or {}
+    candidate = str(
+        (selected or {}).get("startup_path") or launcher.get("startup_path")
+        or (marker or {}).get("startup_path") or os.path.basename(path)
+    )
+    parts = PureWindowsPath(candidate)
+    root = game._root_from_executable(path, candidate)
+    if (not parts.parts or parts.drive or parts.root or ".." in parts.parts
+            or _path_key(os.path.join(root, *parts.parts)) != _path_key(path)):
+        candidate = os.path.basename(path)
+        root = os.path.dirname(path)
+    origin = ""
+    if from_fever:
+        origin = game.read_fever_version(root, info["app_content_id"]) or str(
+            selected.get("version_code") or ""
+        ).strip()
+    return {
+        "distribution_id": dist_id, "content_id": info["app_content_id"],
+        "startup_path": candidate,
+        "startup_args": str((selected or {}).get("startup_args") or launcher.get("startup_params") or ""),
+        "origin_version": origin, "target_version": str(info["version_code"]),
+    }
 
 
 def _run_import(manager, task_id, source, game_id, path, distribution_id, after_import=None):
@@ -59,7 +159,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
             acquired = _IMPORT_LOCK.acquire(timeout=0.1)
         check_cancel()
         records = []
-        if source == "fever":
+        if source == "fever" or (source == "manual" and after_import):
             with _FEVER_GAMES_CACHE_LOCK:
                 genv.set(_FEVER_GAMES_CACHE_KEY, None, cached=False)
                 records = manager.list_fever_games()
@@ -83,34 +183,69 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
         staged._save_games = lambda: None
         staged.list_fever_games = lambda: [dict(record) for record in records]
         NativeTaskRegistry.update(task_id, phase="checking")
+        plan = None
         if source == "manual":
+            options = {"read_marker": False} if after_import else {}
             if not staged.set_game_path(
                 game_id, path, preserve_missing=True, identify=after_import is None,
-                progress_callback=progress, cancel_check=check_cancel,
+                progress_callback=progress, cancel_check=check_cancel, **options,
             ):
                 raise ValueError("导入游戏路径失败")
+            if after_import:
+                game = staged.get_existing_game(game_id)
+                plan = _plan_download(game, path, distribution_id, records, from_fever=False)
         elif source == "fever":
             from channelHandler.channelUtils import cmp_game_id
-            selected = next((record for record in records
-                             if cmp_game_id(record.get("game_id"), game_id)
-                             and (distribution_id == -1 or record.get("distribution_id") == distribution_id)
-                             and (not path or _path_key(record.get("path")) == _path_key(path))), None)
+            matching = [record for record in records
+                        if cmp_game_id(record.get("game_id"), game_id)
+                        and (not path or _path_key(record.get("path")) == _path_key(path))]
+            eligible = [record for record in matching if
+                        distribution_id == -1 or record.get("distribution_id") == distribution_id]
+            selected = next(iter(eligible), None)
+            if not selected and after_import and path and matching:
+                selected = matching[0]
             if not selected:
                 raise ValueError("未找到可导入的 Fever 游戏记录")
+            if after_import and not path and len(eligible) != 1:
+                raise ValueError("存在多个 Fever 安装，请选择要导入的路径")
             path = str(selected.get("path") or "")
-            distribution_id = int(selected.get("distribution_id", -1))
+            if after_import:
+                game = staged.get_game_or_temp(game_id)
+                plan = _plan_download(game, path, distribution_id, matching, from_fever=True)
+            if after_import and plan is None:
+                if not staged.set_game_path(game_id, path, identify=False, preserve_missing=True, read_marker=False):
+                    raise ValueError("导入游戏路径失败")
+                distribution_id = -1
+            else:
+                distribution_id = plan["distribution_id"] if plan else int(selected.get("distribution_id", -1))
+                game_id = staged.import_fever_game(
+                    game_id, distribution_id, path, create_shortcut=False,
+                    notify=False, refresh_registry=False,
+                )
+                if not game_id:
+                    raise ValueError("未找到可导入的 Fever 游戏记录")
             NativeTaskRegistry.update(task_id, path=path, distribution_id=distribution_id)
-            game_id = staged.import_fever_game(
-                game_id, distribution_id, path, create_shortcut=False,
-                notify=False, refresh_registry=False,
-            )
-            if not game_id:
-                raise ValueError("未找到可导入的 Fever 游戏记录")
         else:
             staged.import_missing_fever_games(write_markers=False, cancel_check=check_cancel)
             staged.initialize_downloadable_installation_versions(
                 write_markers=False, progress_callback=progress, cancel_check=check_cancel,
             )
+        if after_import and source != "startup":
+            game = staged.get_existing_game(game_id)
+            installation = next(
+                item for item in game.installations.values() if _path_key(item.path) == _path_key(path)
+            )
+            # Never persist an unverified manual version, including a marker's
+            # apparent target version, before the repair has checked the files.
+            installation.installed_version = plan["origin_version"] if plan else ""
+            installation.content_id = plan["content_id"] if plan else None
+            distribution = plan["distribution_id"] if plan else -1
+            if plan:
+                installation.startup_path = plan["startup_path"]
+                if source == "fever" or installation.distribution_id != distribution or not installation.startup_args:
+                    installation.startup_args = plan["startup_args"]
+            game._claim_distribution(installation, distribution)
+            installation.updated_at = int(time.time())
         check_cancel()
         changes = {}
         results = []
@@ -157,7 +292,7 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
                         installation.write_marker(game.game_id)
                 except Exception:
                     manager.logger.warning("游戏已导入，但未能写入安装标记")
-        elif source == "fever":
+        elif source == "fever" and (plan or not after_import):
             com = None
             try:
                 if sys.platform == "win32":
@@ -177,7 +312,13 @@ def _run_import(manager, task_id, source, game_id, path, distribution_id, after_
         if source != "startup" and results:
             selected = requested_result if requested_result is not None else results[-1]
             if after_import and _path_key(selected["path"]) == requested_path_key:
-                selected.update(after_import(game_id, selected["installation_id"], path, distribution_id))
+                if plan is None:
+                    selected.update(download_status="skipped",
+                                    download_error="无法确定该安装的可下载分发，只登记了路径")
+                elif plan["origin_version"] == plan["target_version"]:
+                    selected.update(download_status="up_to_date", download_operation="update")
+                else:
+                    selected.update(after_import(game_id, selected["installation_id"], path, plan))
             values.update(selected)
             values.pop("success", None)
         if source == "startup" and not results:
@@ -291,7 +432,7 @@ def import_state(manager):
     for record in manager.list_fever_games():
         if not os.path.isfile(str(record.get("path") or "")):
             continue
-        candidates.append({**record, "source": "fever"})
+        candidates.append({**{k: v for k, v in record.items() if k != "install_root"}, "source": "fever"})
     return {
         "success": True, "candidates": candidates,
         "active_tasks": [task for task in recent if not task.get("acknowledged")],

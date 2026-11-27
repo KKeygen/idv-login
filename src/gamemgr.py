@@ -1368,42 +1368,6 @@ class Game:
             return local
         return installation.installed_version
 
-    def prepare_fever_import(self, installation: GameInstallation, requested_id=-1) -> str:
-        # A saved or selected distribution narrows the search. With no hint, the
-        # selected executable and its own state can identify the correct content.
-        bound = installation.distribution_id
-        if requested_id != -1 and bound not in (-1, requested_id):
-            return ""
-        options = [bound] if bound != -1 else [requested_id] if requested_id != -1 else self.get_distributions()
-        matches = []
-        executable = Path(installation.path)
-        for dist_id in dict.fromkeys(options):
-            launcher = self.get_launcher_data_for_distribution(dist_id) or {}
-            startup_path = launcher.get("startup_path") or (installation.startup_path if bound != -1 else "")
-            startup = PureWindowsPath(startup_path or "")
-            if not startup.parts or startup.drive or startup.root or ".." in startup.parts:
-                continue
-            root = executable
-            for _ in startup.parts:
-                root = root.parent
-            if os.path.normcase(root.joinpath(*startup.parts)) != os.path.normcase(executable):
-                continue
-            info = self.get_file_distribution_info(dist_id) or {}
-            content_id = info.get("app_content_id")
-            if content_id and info.get("version_code"):
-                matches.append((dist_id, launcher, info, self.read_fever_version(str(root), content_id)))
-        identified = [match for match in matches if match[-1]]
-        matches = identified or matches
-        if len(matches) != 1:
-            return ""
-        dist_id, launcher, info, version = matches[0]
-        self._claim_distribution(installation, dist_id)
-        installation.startup_path = launcher.get("startup_path") or installation.startup_path
-        installation.startup_args = installation.startup_args or launcher.get("startup_params", "")
-        installation.content_id = info["app_content_id"]
-        installation.installed_version = version
-        return info["version_code"]
-
     def get_distributions(self) -> List[int]:
         """获取游戏可用的分发ID列表"""
         cloud_res = CloudRes()
@@ -2119,7 +2083,7 @@ class GameManager:
     @_installation_change_locked
     def set_game_path(
         self, game_id: str, path: str, *, identify=True, preserve_missing=False,
-        progress_callback=None, cancel_check=None,
+        progress_callback=None, cancel_check=None, read_marker=True,
     ) -> bool:
         if not game_id:
             return False
@@ -2127,7 +2091,7 @@ class GameManager:
         if game is None:
             return False
         normalized = GameInstallation._normalize_path(path)
-        marker = GameInstallation.read_marker(normalized)
+        marker = GameInstallation.read_marker(normalized) if read_marker else None
         installation = None
         if marker and cmp_game_id(marker.get("game_id", ""), game_id):
             installation = game.add_installation(
@@ -2457,7 +2421,6 @@ class GameManager:
                                 install_path,
                                 running_process_name,
                                 startup_path,
-                                version_code,
                             ]):
                                 index += 1
                                 continue
@@ -2488,8 +2451,9 @@ class GameManager:
                                 "game_id": game_id,
                                 "display_name": display_name,
                                 "path": executable_path,
+                                "install_root": str(install_path),
                                 "distribution_id": int(subkey_name),
-                                "version_code": str(version_code),
+                                "version_code": str(version_code or ""),
                                 "content_id": content_id,
                                 "startup_path": startup_path,
                                 "startup_args": str(

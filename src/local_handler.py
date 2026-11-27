@@ -1035,7 +1035,7 @@ class LocalRequestHandler:
                         ),
                     },
                     "installation": installation,
-                    "fever": fever_match or {},
+                    "fever": {k: v for k, v in (fever_match or {}).items() if k != "install_root"},
                     "can_import_fever": distribution_can_import,
                     "can_update": bool(installation and os.path.isdir(
                         game.get_root_path(installation.get("installation_id", ""))
@@ -1080,24 +1080,12 @@ class LocalRequestHandler:
                     "success": False, "error": "请选择 .exe 或 .lnk 游戏启动程序"
                 })
 
-            if payload.get("async_import") in (True, "true", "1"):
-                if method != "POST":
-                    return self._json_response(405, {"success": False, "error": "导入请求必须使用 POST"})
-                from game_import import start_import
-                try:
-                    task = start_import(
-                        self.game_helper, source="manual", game_id=gid, path=executable_path,
-                        distribution_id=int(payload.get("distribution_id", -1)) if after_import else -1,
-                        after_import=after_import,
-                    )
-                except ValueError as exc:
-                    return self._json_response(400, {"success": False, "error": str(exc)})
-                return self._json_response(202, {
-                    "success": True, "status": "pending", "task_id": task["task_id"],
-                })
+            if payload.get("async_import") in (True, "true", "1") or after_import:
+                return self._explicit_import_response(
+                    payload, method, source="manual", path=executable_path, after_import=after_import,
+                )
 
-            options = {"identify": False} if after_import else {}
-            if not self.game_helper.set_game_path(gid, executable_path, **options):
+            if not self.game_helper.set_game_path(gid, executable_path):
                 return self._json_response(500, {
                     "success": False, "error": "保存游戏路径失败"
                 })
@@ -1126,15 +1114,11 @@ class LocalRequestHandler:
                         launcher_data.get("startup_params") or ""
                     )
                 self.game_helper._save_games()
-            download = after_import(
-                gid, installation.installation_id, executable_path, int(payload.get("distribution_id", -1)),
-            ) if after_import and installation else {}
             return self._json_response(200, {
                 "success": True,
                 "game_id": gid,
                 "installation_id": installation.installation_id if installation else "",
                 "path": executable_path,
-                **download,
             })
         except Exception as e:
             safe_exception(self.logger, "定位游戏失败")
@@ -1427,28 +1411,51 @@ class LocalRequestHandler:
             return self._update_imported_game
         return None
 
-    def _update_imported_game(self, gid, installation_id, path, requested_id):
+    def _explicit_import_response(self, payload, method, *, source, path, after_import):
+        asynchronous = payload.get("async_import") in (True, "true", "1")
+        if method != "POST":
+            return self._json_response(405, {"success": False, "error": "导入请求必须使用 POST"})
+        from game_import import start_import
+
+        try:
+            task = start_import(
+                self.game_helper, source=source, game_id=str(payload.get("game_id") or ""),
+                path=path,
+                distribution_id=(int(payload.get("distribution_id", -1))
+                                 if source == "fever" or after_import else -1),
+                after_import=after_import, wait=not asynchronous,
+            )
+        except (ValueError, TypeError) as exc:
+            return self._json_response(400, {"success": False, "error": str(exc)})
+        if asynchronous:
+            return self._json_response(202, {
+                "success": True, "status": "pending", "task_id": task["task_id"],
+            })
+        if not task.get("success"):
+            error = task.get("error", "未能登记游戏路径")
+            status = 404 if source == "fever" and error == "未找到可导入的 Fever 游戏记录" else 500
+            return self._json_response(status, {"success": False, "error": error})
+        fields = ("game_id", "installation_id", "path", "distribution_id", "version", "installed_version",
+                  "download_status", "download_error", "download_operation", "download_task_id")
+        return self._json_response(200, {
+            "success": True, **{key: task[key] for key in fields if key in task},
+        })
+
+    def _update_imported_game(self, gid, installation_id, path, plan):
         try:
             game = self.game_helper.get_existing_game(gid)
             installation = game.get_installation(installation_id) if game else None
-            if (not installation or not os.path.isfile(installation.path)
+            if (not installation or installation.distribution_id != plan["distribution_id"]
+                    or not os.path.isfile(installation.path)
                     or os.path.normcase(os.path.normpath(installation.path))
                     != os.path.normcase(os.path.normpath(path))):
-                return {}
-            target = game.prepare_fever_import(installation, requested_id)
-            if not target:
-                return {}
-            self.game_helper._save_games()
-            version = installation.installed_version
-            distribution_id = installation.distribution_id
-            result = {"distribution_id": distribution_id, "installed_version": version, "version": version}
-            if version == target:
-                return {**result, "download_operation": "update", "download_status": "up_to_date"}
+                return {"download_status": "failed", "download_error": "安装记录已变更，未启动更新或修复"}
+            version = plan["origin_version"]
             task_id = self._start_launcher_update(
-                game, installation, distribution_id, 4, repair=not version, origin_version=version,
+                game, installation, plan["distribution_id"], 4, repair=not version, origin_version=version,
             )
-            return {**result, "download_task_id": task_id,
-                    "download_operation": "update" if version else "repair", "download_status": "queued"}
+            return {"download_task_id": task_id, "download_operation": "update" if version else "repair",
+                    "download_status": "queued"}
         except Exception:
             safe_exception(self.logger, "导入完成后启动更新或修复失败")
             return {"download_status": "failed", "download_error": "游戏已导入，但未能启动更新或修复"}
@@ -1557,35 +1564,17 @@ class LocalRequestHandler:
         try:
             payload = {**args, **(body or {})}
             after_import = self._import_download_callback(payload, method)
-            if payload.get("async_import") in (True, "true", "1"):
-                if method != "POST":
-                    return self._json_response(405, {"success": False, "error": "导入请求必须使用 POST"})
-                from game_import import start_import
-                try:
-                    task = start_import(
-                        self.game_helper, source="fever", game_id=str(payload.get("game_id") or ""),
-                        path=str(payload.get("path") or ""),
-                        distribution_id=int(payload.get("distribution_id", -1)),
-                        after_import=after_import,
-                    )
-                except (ValueError, TypeError) as exc:
-                    return self._json_response(400, {"success": False, "error": str(exc)})
-                return self._json_response(202, {
-                    "success": True, "status": "pending", "task_id": task["task_id"],
-                })
+            if payload.get("async_import") in (True, "true", "1") or after_import:
+                return self._explicit_import_response(
+                    payload, method, source="fever", path=str(payload.get("path") or ""),
+                    after_import=after_import,
+                )
             distribution_id = int(payload.get("distribution_id", -1))
-            options = {"return_installation": True} if after_import else {}
             imported = self.game_helper.import_fever_game(
-                payload["game_id"], distribution_id, payload.get("path", ""), **options,
+                payload["game_id"], distribution_id, payload.get("path", ""),
             )
             if not imported:
                 return self._json_response(404, {"success": False, "error": "未找到可导入的Fever游戏记录"})
-            if after_import:
-                gid, installation = imported
-                return self._json_response(200, {
-                    "success": True, "game_id": gid, "installation_id": installation.installation_id,
-                    **after_import(gid, installation.installation_id, installation.path, distribution_id),
-                })
             game = self.game_helper.get_existing_game(imported)
             installation = None
             if game and distribution_id != -1:
