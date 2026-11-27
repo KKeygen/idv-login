@@ -1159,6 +1159,16 @@ def setup_network_proxy(proxy_port):
         m_proxy = proxy_mgr
         app_state.proxy_mgr = proxy_mgr
 
+    shortcut_start = uri_action == "start" and uri_game_id
+    if shortcut_start:
+        shortcut_game = game_helper.get_game(uri_game_id)
+        launch_plan = [(shortcut_game, uri_installation_id)] if shortcut_game else []
+    else:
+        launch_plan = []
+        for game in auto_games:
+            installation = game.get_auto_start_installation()
+            launch_plan.append((game, installation.installation_id if installation else ""))
+
     if sys.platform == "win32":
         from pathlib import Path
         from mpay_db_sync import MpayDBSync
@@ -1171,7 +1181,13 @@ def setup_network_proxy(proxy_port):
             app_state.channels_helper.db_sync = db_sync
             # DNS overrides must exist before any automatic game launch.
             try:
-                db_sync.refresh_startup()
+                # Each valid planned launch already syncs through Game.start.
+                launch_games = []
+                for game, installation_id in launch_plan:
+                    installation = game.get_installation(installation_id)
+                    if installation and installation.path and os.path.exists(installation.path):
+                        launch_games.append(game.game_id)
+                db_sync.refresh_startup(exclude_games=launch_games)
             except Exception as error:
                 from mpay_db_sync import log_failure
                 log_failure(logger, "游戏内账号列表启动更新未完成；保留退出清理和原登录功能", error)
@@ -1248,9 +1264,8 @@ def setup_network_proxy(proxy_port):
                 logger.info(f"同时启动自启游戏: {names}")
             else:
                 logger.info(f"进程代理模式，启动自启游戏: {names}")
-            for game in auto_games:
-                installation = game.get_auto_start_installation()
-                game.start(installation.installation_id if installation else "")
+            for game, installation_id in launch_plan:
+                game.start(installation_id)
         elif proxy_mode == "global":
             user_notice("如果出现其他程序无法联网问题，可在管理页面切换为进程代理模式。")
         elif proxy_mode != "compat":

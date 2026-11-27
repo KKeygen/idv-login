@@ -350,15 +350,16 @@ class MpayDBSync:
             log_failure(self.logger, '[mpay-db] 原生账号数量暂不可用', error)
             return None
 
-    def refresh_startup(self):
+    def refresh_startup(self, *, exclude_games=()):
         from account_list_policy import AccountListPolicy
-        failed_games = self.reconcile_game_changes()
+        deferred = {getShortGameId(game) for game in exclude_games}
+        deferred.update(self.reconcile_game_changes())
         selected = AccountListPolicy(self.manager).select()
         for game in self.game_ids():
-            if game not in selected and game not in failed_games:
+            if game not in selected and game not in deferred:
                 self._clear_projection(game)
         for game, records in selected.items():
-            if game in failed_games:
+            if game in deferred:
                 continue
             try:
                 self._prepare_selected({game: records})
